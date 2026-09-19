@@ -1,0 +1,591 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:agent-orch:foundation:1.0",
+  "title": "Agent orchestration foundation protocol 1.0",
+  "description": "Canonical wire models for SPEC-0001 and the compatible SPEC-0003-A lifecycle and SPEC-0003-A2 execution isolation extensions. Envelope and payload types use camelCase on the wire in both SDKs.",
+  "$defs": {
+    "RuntimeSpec": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["provider", "model"],
+      "properties": {
+        "provider": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "model": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        }
+      }
+    },
+    "TaskSpec": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["goal", "runtime", "acceptance"],
+      "properties": {
+        "goal": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 65536
+        },
+        "runtime": {
+          "$ref": "#/$defs/RuntimeSpec"
+        },
+        "acceptance": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["mode", "criteria"],
+          "properties": {
+            "mode": {
+              "const": "human"
+            },
+            "criteria": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 100,
+              "items": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 65536
+              }
+            }
+          }
+        }
+      }
+    },
+    "TaskStatus": {
+      "enum": [
+        "queued",
+        "running",
+        "waiting_approval",
+        "paused",
+        "blocked",
+        "completed",
+        "failed",
+        "cancelled"
+      ]
+    },
+    "SessionStatus": {
+      "enum": ["idle", "running", "pausing", "paused", "closed", "outcome_unknown"]
+    },
+    "SessionSnapshot": {
+      "type": "object",
+      "required": [
+        "id",
+        "taskId",
+        "provider",
+        "model",
+        "providerSessionId",
+        "generation",
+        "revision",
+        "status",
+        "activeDispatchId"
+      ],
+      "properties": {
+        "id": { "type": "string" },
+        "taskId": { "type": "string" },
+        "provider": { "type": "string" },
+        "model": { "type": "string" },
+        "providerSessionId": { "type": ["string", "null"] },
+        "generation": { "type": "integer", "minimum": 1 },
+        "revision": { "type": "integer", "minimum": 1 },
+        "status": { "$ref": "#/$defs/SessionStatus" },
+        "activeDispatchId": { "type": ["string", "null"] },
+        "execution": { "$ref": "#/$defs/SessionExecution" }
+      }
+    },
+    "OperationStatus": {
+      "enum": ["persisted", "completed", "noop", "rejected", "failed", "outcome_unknown"]
+    },
+    "EngineLimits": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Owner-configured limits. maxQuarantinedDispatches must be at least the effective maxActiveSessions, which defaults to 2.",
+      "properties": {
+        "maxActiveSessions": { "type": "integer", "minimum": 1, "maximum": 2, "default": 2 },
+        "maxQuarantinedDispatches": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1024,
+          "default": 32
+        },
+        "maxTurnsPerTask": { "type": "integer", "minimum": 1, "maximum": 1000, "default": 20 }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "maxActiveSessions": { "const": 2 } } },
+          "then": { "properties": { "maxQuarantinedDispatches": { "minimum": 2 } } }
+        }
+      ]
+    },
+    "LifecycleTimeouts": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Owner-configured lifecycle deadlines, independent of SDK wait timeouts.",
+      "properties": {
+        "acceptanceMs": { "type": "integer", "minimum": 1, "maximum": 86400000, "default": 30000 },
+        "turnMs": { "type": "integer", "minimum": 1, "maximum": 86400000, "default": 1800000 },
+        "drainMs": { "type": "integer", "minimum": 1, "maximum": 86400000, "default": 300000 },
+        "interruptMs": { "type": "integer", "minimum": 1, "maximum": 86400000, "default": 30000 },
+        "reconcileMs": { "type": "integer", "minimum": 1, "maximum": 86400000, "default": 60000 }
+      }
+    },
+    "LifecycleCapability": {
+      "type": "object",
+      "required": ["version", "reconcile", "durableDeadlines"],
+      "properties": {
+        "version": { "const": 1 },
+        "reconcile": { "const": "owner-attestation" },
+        "durableDeadlines": { "const": true }
+      }
+    },
+    "ExecutionIsolationCapability": {
+      "type": "object",
+      "required": [
+        "version",
+        "resourceRelease",
+        "schedulerStatus",
+        "ownerConflictResolution",
+        "budgetVersion"
+      ],
+      "properties": {
+        "version": { "const": 1 },
+        "resourceRelease": { "const": true },
+        "schedulerStatus": { "const": true },
+        "ownerConflictResolution": { "const": true },
+        "budgetVersion": { "const": 2 }
+      }
+    },
+    "ExecutionLease": {
+      "type": "object",
+      "required": ["version", "status", "acquiredAt"],
+      "properties": {
+        "version": { "const": 1 },
+        "status": { "enum": ["held", "released"] },
+        "acquiredAt": { "type": "string", "format": "date-time" },
+        "releasedAt": { "type": "string", "format": "date-time" },
+        "releaseReason": { "type": "string" },
+        "releaseEvidenceRef": { "type": "string" }
+      }
+    },
+    "DispatchBudget": {
+      "type": "object",
+      "description": "Serializable execution budget diagnostics. Monotonic remaining-time callbacks are internal and are not part of this wire model.",
+      "required": [
+        "policyVersion",
+        "enteredAt",
+        "acceptanceDeadlineAt",
+        "deadlineAt",
+        "effectiveAcceptanceMs",
+        "effectiveTurnMs",
+        "acceptanceSource",
+        "turnSource"
+      ],
+      "properties": {
+        "policyVersion": { "const": 2 },
+        "enteredAt": { "type": "string", "format": "date-time" },
+        "acceptanceDeadlineAt": { "type": "string", "format": "date-time" },
+        "deadlineAt": { "type": "string", "format": "date-time" },
+        "effectiveAcceptanceMs": { "type": "integer", "minimum": 1, "maximum": 86400000 },
+        "effectiveTurnMs": { "type": "integer", "minimum": 1, "maximum": 86400000 },
+        "acceptanceSource": { "type": "string" },
+        "turnSource": { "type": "string" }
+      }
+    },
+    "SessionExecution": {
+      "type": "object",
+      "required": ["dispatchId", "lease", "quarantined", "lastEvidence"],
+      "properties": {
+        "dispatchId": { "type": "string" },
+        "lease": { "$ref": "#/$defs/ExecutionLease" },
+        "quarantined": { "type": "boolean" },
+        "lastEvidence": { "type": "string" },
+        "budget": { "$ref": "#/$defs/DispatchBudget" }
+      }
+    },
+    "SchedulerSnapshot": {
+      "type": "object",
+      "required": [
+        "maxActiveSessions",
+        "maxQuarantinedDispatches",
+        "executionOccupied",
+        "quarantined",
+        "quarantineReserved",
+        "canDispatch",
+        "reasons",
+        "occupants",
+        "truncated",
+        "openConflicts",
+        "conflicts",
+        "conflictsTruncated"
+      ],
+      "properties": {
+        "maxActiveSessions": { "type": "integer", "minimum": 1, "maximum": 2 },
+        "maxQuarantinedDispatches": { "type": "integer", "minimum": 1, "maximum": 1024 },
+        "executionOccupied": { "type": "integer", "minimum": 0 },
+        "quarantined": { "type": "integer", "minimum": 0 },
+        "quarantineReserved": { "type": "integer", "minimum": 0 },
+        "canDispatch": { "type": "boolean" },
+        "reasons": { "type": "array", "items": { "type": "string" } },
+        "occupants": {
+          "type": "array",
+          "maxItems": 16,
+          "items": {
+            "type": "object",
+            "required": [
+              "taskId",
+              "sessionId",
+              "dispatchId",
+              "leaseStatus",
+              "quarantined",
+              "lastEvidence",
+              "enteredAt"
+            ],
+            "properties": {
+              "taskId": { "type": "string" },
+              "sessionId": { "type": "string" },
+              "dispatchId": { "type": "string" },
+              "leaseStatus": { "enum": ["held", "released"] },
+              "quarantined": { "type": "boolean" },
+              "lastEvidence": { "type": "string" },
+              "enteredAt": { "type": "string", "format": "date-time" }
+            }
+          }
+        },
+        "truncated": { "type": "boolean" },
+        "openConflicts": { "type": "integer", "minimum": 0 },
+        "conflicts": {
+          "type": "array",
+          "maxItems": 16,
+          "items": {
+            "type": "object",
+            "required": ["conflictId", "revision", "dispatchId"],
+            "properties": {
+              "conflictId": { "type": "string" },
+              "revision": { "type": "integer", "minimum": 1 },
+              "dispatchId": { "type": "string" }
+            }
+          }
+        },
+        "conflictsTruncated": { "type": "boolean" }
+      }
+    },
+    "ExecutionConflict": {
+      "type": "object",
+      "required": [
+        "id",
+        "revision",
+        "dispatchId",
+        "sessionId",
+        "taskId",
+        "generation",
+        "status",
+        "releaseEvidenceRef",
+        "conflictingEvidenceRef",
+        "createdAt"
+      ],
+      "properties": {
+        "id": { "type": "string" },
+        "revision": { "type": "integer", "minimum": 1 },
+        "dispatchId": { "type": "string" },
+        "sessionId": { "type": "string" },
+        "taskId": { "type": "string" },
+        "generation": { "type": "integer", "minimum": 1 },
+        "status": { "enum": ["open", "resolved"] },
+        "releaseEvidenceRef": { "type": ["string", "null"] },
+        "conflictingEvidenceRef": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "resolution": {
+          "type": "object",
+          "required": ["operationId", "evidenceRef", "occurredAt"],
+          "properties": {
+            "operationId": { "type": "string" },
+            "evidenceRef": { "type": "string" },
+            "occurredAt": { "type": "string", "format": "date-time" }
+          }
+        }
+      }
+    },
+    "SchedulerGetParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {}
+    },
+    "SchedulerGetConflictParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["conflictId"],
+      "properties": {
+        "conflictId": { "type": "string", "minLength": 1 }
+      }
+    },
+    "SchedulerResolveConflictParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Owner-only resource conflict resolution. A successful request returns OperationSnapshot and does not resolve business outcome quarantine.",
+      "required": ["conflictId", "expectedRevision", "evidence", "idempotencyKey"],
+      "properties": {
+        "conflictId": { "type": "string", "minLength": 1 },
+        "expectedRevision": { "type": "integer", "minimum": 1 },
+        "evidence": {
+          "allOf": [
+            { "$ref": "#/$defs/ReconcileEvidence" },
+            {
+              "properties": {
+                "localResources": { "const": "stopped" },
+                "remoteExecution": { "const": "stopped" }
+              }
+            }
+          ]
+        },
+        "idempotencyKey": { "type": "string", "minLength": 1, "maxLength": 256 }
+      }
+    },
+    "OperationLifecycle": {
+      "type": "object",
+      "required": [
+        "enteredAt",
+        "deadlineAt",
+        "policyVersion",
+        "kind",
+        "expectedGeneration",
+        "expectedDispatchId",
+        "mayHaveBeenSent",
+        "lastEvidence"
+      ],
+      "properties": {
+        "enteredAt": { "type": "string", "format": "date-time" },
+        "deadlineAt": { "type": "string", "format": "date-time" },
+        "policyVersion": { "const": 1 },
+        "kind": { "enum": ["drain", "interrupt", "reconcile", "shutdown"] },
+        "expectedGeneration": { "type": ["integer", "null"], "minimum": 1 },
+        "expectedDispatchId": { "type": ["string", "null"] },
+        "mayHaveBeenSent": { "type": "boolean" },
+        "lastEvidence": { "type": "string" },
+        "expiredAt": { "type": "string", "format": "date-time" }
+      }
+    },
+    "OperationSnapshot": {
+      "type": "object",
+      "required": [
+        "id",
+        "method",
+        "scope",
+        "idempotencyKey",
+        "status",
+        "targetId",
+        "result",
+        "error"
+      ],
+      "properties": {
+        "id": { "type": "string" },
+        "method": { "type": "string" },
+        "scope": { "type": "string" },
+        "idempotencyKey": { "type": "string" },
+        "status": { "$ref": "#/$defs/OperationStatus" },
+        "targetId": { "type": "string" },
+        "result": {},
+        "error": {
+          "oneOf": [
+            { "type": "null" },
+            {
+              "type": "object",
+              "required": ["code", "message"],
+              "properties": { "code": { "type": "string" }, "message": { "type": "string" } }
+            }
+          ]
+        },
+        "lifecycle": { "$ref": "#/$defs/OperationLifecycle" },
+        "resolution": {
+          "type": "object",
+          "required": ["operationId", "outcome", "occurredAt"],
+          "properties": {
+            "operationId": { "type": "string" },
+            "outcome": { "type": "string" },
+            "occurredAt": { "type": "string", "format": "date-time" }
+          }
+        }
+      }
+    },
+    "ReconcileEvidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Named owner attestation, not independently observed adapter evidence. Unknown values retain business quarantine. Execution resources may be released independently when both localResources and remoteExecution are stopped and the engine confirms no active handles or evidence conflict.",
+      "required": [
+        "source",
+        "summary",
+        "localResources",
+        "remoteExecution",
+        "sideEffects",
+        "outcome"
+      ],
+      "properties": {
+        "source": { "const": "owner_attestation" },
+        "summary": { "type": "string", "minLength": 1, "maxLength": 65536 },
+        "localResources": { "enum": ["stopped", "unknown"] },
+        "remoteExecution": { "enum": ["stopped", "unknown"] },
+        "sideEffects": { "enum": ["resolved", "unknown"] },
+        "outcome": { "enum": ["not_executed", "completed", "failed", "interrupted", "unknown"] },
+        "result": { "type": "string", "maxLength": 524288 }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "outcome": { "const": "completed" } }, "required": ["outcome"] },
+          "then": { "required": ["result"] },
+          "else": { "not": { "required": ["result"] } }
+        }
+      ]
+    },
+    "ReconcileParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["target", "evidence", "idempotencyKey"],
+      "properties": {
+        "target": { "$ref": "#/$defs/ControlTarget" },
+        "evidence": { "$ref": "#/$defs/ReconcileEvidence" },
+        "idempotencyKey": { "type": "string", "minLength": 1, "maxLength": 256 }
+      }
+    },
+    "ControlTarget": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "sessionId",
+        "expectedGeneration",
+        "expectedRevision",
+        "expectedDispatchId",
+        "expectedState"
+      ],
+      "properties": {
+        "sessionId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "expectedGeneration": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "expectedRevision": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "expectedDispatchId": {
+          "type": ["string", "null"]
+        },
+        "expectedState": {
+          "$ref": "#/$defs/SessionStatus"
+        }
+      }
+    },
+    "MessageSpec": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["taskId", "toSessionId", "expectedGeneration", "kind", "summary"],
+      "properties": {
+        "taskId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "toSessionId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "expectedGeneration": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "kind": {
+          "enum": ["assignment", "finding", "result", "question"]
+        },
+        "summary": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 65536
+        },
+        "artifactRefs": {
+          "type": "array",
+          "maxItems": 100,
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      }
+    },
+    "Request": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["jsonrpc", "id", "method", "params"],
+      "properties": {
+        "jsonrpc": {
+          "const": "2.0"
+        },
+        "id": {
+          "type": ["string", "integer"]
+        },
+        "method": {
+          "type": "string",
+          "minLength": 1
+        },
+        "params": {
+          "type": "object"
+        }
+      }
+    },
+    "EventEnvelope": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "eventId",
+        "cursor",
+        "storeId",
+        "schemaVersion",
+        "type",
+        "taskId",
+        "sessionId",
+        "operationId",
+        "occurredAt",
+        "data"
+      ],
+      "properties": {
+        "eventId": {
+          "type": "string"
+        },
+        "cursor": {
+          "type": "string",
+          "pattern": "^[0-9]+$"
+        },
+        "storeId": {
+          "type": "string"
+        },
+        "schemaVersion": {
+          "const": 1
+        },
+        "type": {
+          "type": "string"
+        },
+        "taskId": {
+          "type": ["string", "null"]
+        },
+        "sessionId": {
+          "type": ["string", "null"]
+        },
+        "operationId": {
+          "type": ["string", "null"]
+        },
+        "occurredAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "data": {
+          "type": "object"
+        }
+      }
+    }
+  }
+}

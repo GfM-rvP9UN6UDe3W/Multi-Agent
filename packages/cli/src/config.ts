@@ -1,0 +1,271 @@
+import { readFile, realpath, stat } from 'node:fs/promises';
+import { isAbsolute, relative, sep } from 'node:path';
+import type { EngineConfig, RuntimeAdapter } from '../../engine/src/types.ts';
+
+export interface HostConfig {
+  configVersion?: 1;
+  workspace: string;
+  stateDir: string;
+  transport?: { mode: 'unix' | 'stdio'; socketPath?: string };
+  providers: Record<
+    string,
+    Record<string, unknown> & {
+      model?: string;
+      permissionProfile?: 'read-only' | 'workspace-write';
+    }
+  >;
+  limits?: EngineConfig['limits'];
+  timeouts?: EngineConfig['timeouts'];
+  approvalTtlMs?: number;
+  shutdown?: { mode?: 'drain' | 'interrupt'; timeoutMs?: number };
+  verificationRules?: unknown[];
+}
+function invalid(message: string): never {
+  throw Object.assign(new Error(message), { code: 'INVALID_CONFIG' });
+}
+function object(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === 'object' && !Array.isArray(value);
+}
+function fields(value: Record<string, unknown>, allowed: string[], location: string) {
+  const unknown = Object.keys(value).filter((key) => !allowed.includes(key));
+  if (unknown.length) invalid(`Unknown ${location} field: ${unknown.join(', ')}`);
+}
+export async function loadConfig(configPath: string): Promise<HostConfig> {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(await readFile(configPath, 'utf8'));
+  } catch (error) {
+    invalid(`Cannot read JSON config: ${(error as Error).message}`);
+  }
+  if (!object(parsed)) invalid('Config must be an object');
+  fields(
+    parsed,
+    [
+      'configVersion',
+      'workspace',
+      'stateDir',
+      'transport',
+      'providers',
+      'limits',
+      'timeouts',
+      'approvalTtlMs',
+      'shutdown',
+      'verificationRules',
+    ],
+    'config',
+  );
+  if (parsed.configVersion !== undefined && parsed.configVersion !== 1)
+    invalid('Only configVersion 1 is supported');
+  for (const key of ['workspace', 'stateDir']) {
+    if (typeof parsed[key] !== 'string' || !isAbsolute(parsed[key]))
+      invalid(`${key} must be an absolute existing directory`);
+    const path = parsed[key] as string;
+    if (!(await stat(path)).isDirectory() || (await realpath(path)) !== path)
+      invalid(`${key} must be a real directory path without symlinks`);
+  }
+  const rel = relative(parsed.workspace as string, parsed.stateDir as string);
+  if (rel === '' || (rel !== '..' && !rel.startsWith('..' + sep) && !isAbsolute(rel)))
+    invalid('stateDir must be outside workspace');
+  if (!object(parsed.providers) || !Object.keys(parsed.providers).length)
+    invalid('Configure at least one provider explicitly; fake is never enabled by default');
+  for (const [provider, settings] of Object.entries(parsed.providers)) {
+    if (!['fake', 'claude', 'codex'].includes(provider))
+      invalid(`Provider is not in the installed adapter allowlist: ${provider}`);
+    if (!object(settings)) invalid(`providers.${provider} must be an object`);
+    if (
+      settings.adapter !== undefined &&
+      settings.adapter !== `@agent-orch/adapter-${provider}` &&
+      !(provider === 'fake' && settings.adapter === '@agent-orch/engine/fake')
+    )
+      invalid(`Adapter module is not allowed for ${provider}`);
+    if (typeof settings.model !== 'string' || !settings.model.trim())
+      invalid(`providers.${provider}.model must name an explicit model`);
+    if (
+      settings.permissionProfile !== undefined &&
+      !['read-only', 'workspace-write'].includes(settings.permissionProfile as string)
+    )
+      invalid(`Unknown permissionProfile for ${provider}`);
+    if (provider === 'fake') {
+      fields(
+        settings,
+        ['adapter', 'model', 'permissionProfile', 'delayMs', 'result'],
+        'fake provider',
+      );
+      if (
+        settings.delayMs !== undefined &&
+        (typeof settings.delayMs !== 'number' ||
+          !Number.isFinite(settings.delayMs) ||
+          settings.delayMs < 0)
+      )
+        invalid('fake.delayMs must be a non-negative finite number');
+      if (settings.result !== undefined && typeof settings.result !== 'string')
+        invalid('fake.result must be a string');
+    } else if (provider === 'claude') {
+      fields(
+        settings,
+        [
+          'adapter',
+          'model',
+          'permissionProfile',
+          'requestTimeoutMs',
+          'turnTimeoutMs',
+          'cleanupTimeoutMs',
+        ],
+        'claude provider',
+      );
+      if (settings.permissionProfile === 'workspace-write')
+        invalid('Claude foundation adapter only supports read-only');
+    } else if (provider === 'codex') {
+      fields(
+        settings,
+        [
+          'adapter',
+          'model',
+          'permissionProfile',
+          'command',
+          'args',
+          'env',
+          'requestTimeoutMs',
+          'turnTimeoutMs',
+          'closeTimeoutMs',
+        ],
+        'codex provider',
+      );
+      if (settings.permissionProfile === 'workspace-write')
+        invalid('Codex foundation adapter only supports read-only');
+      if (
+        settings.command !== undefined &&
+        (typeof settings.command !== 'string' || !settings.command.trim())
+      )
+        invalid('codex.command must be a non-empty string');
+      if (
+        settings.args !== undefined &&
+        (!Array.isArray(settings.args) || settings.args.some((value) => typeof value !== 'string'))
+      )
+        invalid('codex.args must be an array of strings');
+      if (
+        settings.env !== undefined &&
+        (!object(settings.env) ||
+          Object.values(settings.env).some((value) => typeof value !== 'string'))
+      )
+        invalid('codex.env must map names to string values');
+    }
+    if (provider === 'claude' || provider === 'codex') {
+      const cleanupKey = provider === 'claude' ? 'cleanupTimeoutMs' : 'closeTimeoutMs';
+      for (const key of ['requestTimeoutMs', 'turnTimeoutMs', cleanupKey]) {
+        if (
+          settings[key] !== undefined &&
+          (!Number.isSafeInteger(settings[key]) ||
+            (settings[key] as number) < 1 ||
+            (settings[key] as number) > 3600000)
+        )
+          invalid(`${provider}.${key} must be an integer from 1 through 3600000`);
+      }
+    }
+  }
+  if (parsed.transport !== undefined) {
+    if (!object(parsed.transport)) invalid('transport must be an object');
+    fields(parsed.transport, ['mode', 'socketPath'], 'transport');
+    if (!['stdio', 'unix'].includes(parsed.transport.mode as string))
+      invalid('transport.mode must be stdio or unix');
+    if (
+      parsed.transport.socketPath !== undefined &&
+      (typeof parsed.transport.socketPath !== 'string' || !isAbsolute(parsed.transport.socketPath))
+    )
+      invalid('transport.socketPath must be absolute');
+  }
+  if (
+    parsed.verificationRules !== undefined &&
+    (!Array.isArray(parsed.verificationRules) || parsed.verificationRules.length)
+  )
+    invalid('Automated verificationRules are not implemented in foundation 1.0');
+  if (parsed.limits !== undefined) {
+    if (!object(parsed.limits)) invalid('limits must be an object');
+    fields(
+      parsed.limits,
+      ['maxActiveSessions', 'maxTurnsPerTask', 'maxQuarantinedDispatches'],
+      'limits',
+    );
+    const bounds: Record<string, number> = {
+      maxActiveSessions: 2,
+      maxTurnsPerTask: 1000,
+      maxQuarantinedDispatches: 1024,
+    };
+    for (const [key, value] of Object.entries(parsed.limits))
+      if (!Number.isSafeInteger(value) || (value as number) < 1 || (value as number) > bounds[key])
+        invalid(`limits.${key} must be an integer from 1 through ${bounds[key]}`);
+    if (
+      ((parsed.limits.maxQuarantinedDispatches ?? 32) as number) <
+      ((parsed.limits.maxActiveSessions ?? 2) as number)
+    )
+      invalid('limits.maxQuarantinedDispatches must be at least maxActiveSessions');
+  }
+  if (
+    parsed.approvalTtlMs !== undefined &&
+    (!Number.isSafeInteger(parsed.approvalTtlMs) ||
+      (parsed.approvalTtlMs as number) < 1 ||
+      (parsed.approvalTtlMs as number) > 604800000)
+  )
+    invalid('approvalTtlMs must be an integer from 1 through 604800000');
+  if (parsed.timeouts !== undefined) {
+    if (!object(parsed.timeouts)) invalid('timeouts must be an object');
+    fields(
+      parsed.timeouts,
+      ['acceptanceMs', 'turnMs', 'drainMs', 'interruptMs', 'reconcileMs'],
+      'timeouts',
+    );
+    for (const [key, value] of Object.entries(parsed.timeouts)) {
+      if (!Number.isSafeInteger(value) || (value as number) < 1 || (value as number) > 86400000)
+        invalid(`timeouts.${key} must be an integer from 1 through 86400000`);
+    }
+  }
+  if (parsed.shutdown !== undefined) {
+    if (!object(parsed.shutdown)) invalid('shutdown must be an object');
+    fields(parsed.shutdown, ['mode', 'timeoutMs'], 'shutdown');
+    if (
+      parsed.shutdown.mode !== undefined &&
+      !['drain', 'interrupt'].includes(parsed.shutdown.mode as string)
+    )
+      invalid('Invalid shutdown.mode');
+    if (
+      parsed.shutdown.timeoutMs !== undefined &&
+      (!Number.isSafeInteger(parsed.shutdown.timeoutMs) ||
+        (parsed.shutdown.timeoutMs as number) < 0 ||
+        (parsed.shutdown.timeoutMs as number) > 3600000)
+    )
+      invalid('shutdown.timeoutMs must be an integer from 0 through 3600000');
+  }
+  return parsed as unknown as HostConfig;
+}
+
+export async function engineConfig(config: HostConfig): Promise<EngineConfig> {
+  const adapters: RuntimeAdapter[] = [];
+  for (const [provider, settings] of Object.entries(config.providers)) {
+    if (provider === 'fake') {
+      const { createFakeAdapter } = await import('../../engine/src/fake.ts');
+      adapters.push(
+        createFakeAdapter({
+          delayMs: settings.delayMs as number | undefined,
+          result: settings.result as string | undefined,
+        }),
+      );
+    } else if (provider === 'claude') {
+      const modulePath = '../../adapter-claude/src/index.ts';
+      const { createClaudeAdapter } = await import(modulePath);
+      adapters.push(await createClaudeAdapter(settings));
+    } else if (provider === 'codex') {
+      const modulePath = '../../adapter-codex/src/index.ts';
+      const { createCodexAdapter } = await import(modulePath);
+      adapters.push(await createCodexAdapter(settings));
+    } else invalid(`Provider is not allowed: ${provider}`);
+  }
+  return {
+    workspace: config.workspace,
+    stateDir: config.stateDir,
+    providers: config.providers,
+    adapters,
+    limits: config.limits,
+    timeouts: config.timeouts,
+    approvalTtlMs: config.approvalTtlMs,
+  };
+}

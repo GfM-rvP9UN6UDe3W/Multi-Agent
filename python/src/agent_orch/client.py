@@ -1,0 +1,454 @@
+"""Standard-library asyncio SDK for the single local orchestration engine."""
+import asyncio
+from collections import deque
+from collections.abc import AsyncIterator, Mapping, Sequence
+import math
+from pathlib import Path
+from typing import Any
+from uuid import uuid4
+
+from .errors import OrchestrationError, ShutdownIncomplete, unsupported
+from .transport import RpcTransport
+from .types import ReconcileEvidence, Snapshot, TaskSpec, snapshot, to_wire
+
+
+SDK_VERSION = "0.1.0"
+PROTOCOL_VERSION = "1.0"
+_TASK_TERMINAL = {"completed", "failed", "cancelled"}
+_OPERATION_TERMINAL = {"completed", "noop", "rejected", "failed", "outcome_unknown"}
+
+
+def _duration(value: float, name: str, *, zero: bool = False) -> float:
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
+        raise OrchestrationError("VALIDATION_ERROR", f"{name} must be a finite number")
+    if value < 0 or (value == 0 and not zero):
+        raise OrchestrationError("VALIDATION_ERROR", f"{name} must be {'nonnegative' if zero else 'positive'}")
+    return float(value)
+
+
+class TaskHandle(Snapshot):
+    __slots__ = ("_client",)
+    def __init__(self, client: "Orchestrator", value: Snapshot):
+        super().__init__(value)
+        self._client = client
+
+    async def wait(self, *, timeout: float | None = None) -> Snapshot:
+        return await self._client._wait(lambda: self._client.tasks.get(self.id), _TASK_TERMINAL, timeout)
+
+
+class OperationHandle(Snapshot):
+    __slots__ = ("_client",)
+    def __init__(self, client: "Orchestrator", value: Snapshot):
+        super().__init__(value)
+        self._client = client
+
+    async def wait(self, *, timeout: float | None = None) -> Snapshot:
+        return await self._client._wait(lambda: self._client.operations.get(self.id), _OPERATION_TERMINAL, timeout)
+
+
+class _Tasks:
+    def __init__(self, client: "Orchestrator"):
+        self._client = client
+
+    async def create(self, spec: TaskSpec | Mapping[str, Any], *, idempotency_key: str | None = None) -> TaskHandle:
+        wire = to_wire(spec)
+        if isinstance(wire, dict) and isinstance(wire.get("acceptance"), dict):
+            if wire["acceptance"].get("mode") != "human":
+                raise unsupported("automatic verification")
+        return TaskHandle(self._client, await self._client._mutate("tasks.create", {"spec": wire}, idempotency_key))
+
+    async def get(self, task_id: str) -> Snapshot:
+        return await self._client._call("tasks.get", {"taskId": task_id})
+
+    async def resume(self, task_id: str, *, idempotency_key: str | None = None) -> OperationHandle:
+        return OperationHandle(self._client, await self._client._mutate("tasks.resume", {"taskId": task_id}, idempotency_key))
+
+    async def cancel(self, task_id: str, *, idempotency_key: str | None = None) -> OperationHandle:
+        return OperationHandle(self._client, await self._client._mutate("tasks.cancel", {"taskId": task_id}, idempotency_key))
+
+
+class _Sessions:
+    def __init__(self, client: "Orchestrator"):
+        self._client = client
+
+    async def get(self, session_id: str) -> Snapshot:
+        return await self._client._call("sessions.get", {"sessionId": session_id})
+
+    async def control(self, target: Mapping[str, Any], command: Mapping[str, Any], *,
+                      idempotency_key: str | None = None) -> OperationHandle:
+        if command.get("action") not in {"pause", "resume"}:
+            raise unsupported(str(command.get("action", "session control")))
+        return OperationHandle(self._client, await self._client._mutate(
+            "sessions.control", {"target": to_wire(target), "command": to_wire(command)}, idempotency_key))
+
+    async def reconcile(self, target: Mapping[str, Any], evidence: ReconcileEvidence | Mapping[str, Any], *,
+                        idempotency_key: str | None = None) -> OperationHandle:
+        """Submit explicit owner evidence; the host authorizes and validates it."""
+        await self._client.start()
+        assert self._client.info is not None
+        capabilities = self._client.info.get("capabilities")
+        lifecycle = capabilities.get("lifecycle") if isinstance(capabilities, Mapping) else None
+        if (not isinstance(lifecycle, Mapping) or type(lifecycle.get("version")) is not int or
+            lifecycle.get("version") != 1 or lifecycle.get("reconcile") != "owner-attestation" or
+            lifecycle.get("durable_deadlines") is not True):
+            raise OrchestrationError("UNSUPPORTED_CAPABILITY", "Host has not negotiated lifecycle version 1 reconciliation")
+        return OperationHandle(self._client, await self._client._mutate(
+            "sessions.reconcile", {"target": to_wire(target), "evidence": to_wire(evidence)}, idempotency_key))
+
+    async def open(self, *args: Any, **kwargs: Any) -> OperationHandle:
+        raise unsupported("sessions.open")
+
+    async def fork(self, *args: Any, **kwargs: Any) -> OperationHandle:
+        raise unsupported("sessions.fork")
+
+
+class _Scheduler:
+    def __init__(self, client: "Orchestrator"):
+        self._client = client
+
+    async def _require_capability(self) -> None:
+        await self._client.start()
+        assert self._client.info is not None
+        capabilities = self._client.info.get("capabilities")
+        isolation = capabilities.get("execution_isolation") if isinstance(capabilities, Mapping) else None
+        if (not isinstance(isolation, Mapping) or type(isolation.get("version")) is not int or
+            isolation.get("version") != 1 or isolation.get("resource_release") is not True or
+            isolation.get("scheduler_status") is not True or isolation.get("owner_conflict_resolution") is not True or
+            type(isolation.get("budget_version")) is not int or isolation.get("budget_version") != 2):
+            raise OrchestrationError("UNSUPPORTED_CAPABILITY",
+                "Host has not negotiated execution isolation version 1 with budget policy version 2")
+
+    async def get(self) -> Snapshot:
+        await self._require_capability()
+        return await self._client._call("scheduler.get", {})
+
+    async def get_conflict(self, conflict_id: str) -> Snapshot:
+        await self._require_capability()
+        return await self._client._call("scheduler.getConflict", {"conflictId": conflict_id})
+
+    async def resolve_conflict(self, conflict_id: str, evidence: ReconcileEvidence | Mapping[str, Any], *,
+                               expected_revision: int, idempotency_key: str | None = None) -> OperationHandle:
+        """Submit owner evidence for the current conflict revision; the host authorizes it."""
+        await self._require_capability()
+        return OperationHandle(self._client, await self._client._mutate("scheduler.resolveConflict", {
+            "conflictId": conflict_id, "expectedRevision": expected_revision, "evidence": to_wire(evidence)},
+            idempotency_key))
+
+
+class _Messages:
+    def __init__(self, client: "Orchestrator"):
+        self._client = client
+
+    async def send(self, spec: Mapping[str, Any], *, idempotency_key: str | None = None) -> Snapshot:
+        return await self._client._mutate("messages.send", {"spec": to_wire(spec)}, idempotency_key)
+
+    async def get(self, message_id: str) -> Snapshot:
+        return await self._client._call("messages.get", {"messageId": message_id})
+
+
+class _Operations:
+    def __init__(self, client: "Orchestrator"):
+        self._client = client
+
+    async def get(self, operation_id: str) -> Snapshot:
+        return await self._client._call("operations.get", {"operationId": operation_id})
+
+    async def lookup(self, key_spec: Mapping[str, Any] | None = None, *, method: str | None = None,
+                     scope: str = "local", idempotency_key: str | None = None) -> Snapshot:
+        params = to_wire(key_spec) if key_spec is not None else {
+            "method": method, "scope": scope, "idempotencyKey": idempotency_key}
+        return await self._client._call("operations.lookup", params)
+
+
+class _Approvals:
+    def __init__(self, client: "Orchestrator"):
+        self._client = client
+
+    async def get(self, approval_id: str) -> Snapshot:
+        return await self._client._call("approvals.get", {"approvalId": approval_id})
+
+    async def decide(self, approval_id: str, decision: Mapping[str, Any], *,
+                     idempotency_key: str | None = None) -> OperationHandle:
+        return OperationHandle(self._client, await self._client._mutate(
+            "approvals.decide", {"approvalId": approval_id, "decision": to_wire(decision)}, idempotency_key))
+
+
+class _Usage:
+    def __init__(self, client: "Orchestrator"):
+        self._client = client
+
+    async def get(self, task_id: str) -> Snapshot:
+        return await self._client._call("usage.get", {"taskId": task_id})
+
+
+class Orchestrator:
+    def __init__(self, *, engine_command: Sequence[str] | None = None, socket_path: str | None = None,
+                 close_timeout: float = 30.0, request_timeout: float = 30.0,
+                 poll_interval: float = 0.05, env: Mapping[str, str] | None = None):
+        self._command = list(engine_command) if engine_command is not None else None
+        self._socket = socket_path
+        self._env = env
+        self._owner = engine_command is not None
+        self._close_timeout = _duration(close_timeout, "close_timeout", zero=True)
+        self._request_timeout = _duration(request_timeout, "request_timeout")
+        self._poll_interval = _duration(poll_interval, "poll_interval")
+        self._transport: RpcTransport | None = None
+        self._lifecycle_lock = asyncio.Lock()
+        self._closed = False
+        self._shutdown_operation_id: str | None = None
+        self.info: Snapshot | None = None
+        self.tasks = _Tasks(self)
+        self.sessions = _Sessions(self)
+        self.scheduler = _Scheduler(self)
+        self.messages = _Messages(self)
+        self.operations = _Operations(self)
+        self.approvals = _Approvals(self)
+        self.usage = _Usage(self)
+
+    @classmethod
+    def local(cls, *, engine_command: Sequence[str], **options: Any) -> "Orchestrator":
+        if (isinstance(engine_command, (str, bytes)) or not engine_command or
+            any(not isinstance(arg, str) or not arg or "\x00" in arg for arg in engine_command)):
+            raise OrchestrationError("VALIDATION_ERROR", "engine_command must be a nonempty argument array")
+        return cls(engine_command=engine_command, **options)
+
+    @classmethod
+    def connect(cls, *, socket_path: str, **options: Any) -> "Orchestrator":
+        if not isinstance(socket_path, str) or not Path(socket_path).is_absolute():
+            raise OrchestrationError("VALIDATION_ERROR", "socket_path must be an absolute local path")
+        return cls(socket_path=socket_path, **options)
+
+    def __await__(self):
+        return self.start().__await__()
+
+    async def __aenter__(self) -> "Orchestrator":
+        return await self.start()
+
+    async def __aexit__(self, exc_type: Any, exc: BaseException | None, traceback: Any) -> bool:
+        cleanup = asyncio.create_task(self.close(), name="agent-orch-context-close")
+        cancelled: asyncio.CancelledError | None = None
+        while True:
+            try:
+                await asyncio.shield(cleanup)
+                break
+            except asyncio.CancelledError as error:
+                if cleanup.cancelled():
+                    raise
+                cancelled = error
+            except BaseException as error:
+                if exc is not None:
+                    raise error from exc
+                if cancelled is not None:
+                    raise error from cancelled
+                raise
+        if cancelled is not None:
+            raise cancelled
+        return False
+
+    @property
+    def closed(self) -> bool:
+        return self._closed
+
+    @property
+    def stderr_tail(self) -> str:
+        return self._transport.stderr_tail if self._transport is not None else ""
+
+    async def start(self) -> "Orchestrator":
+        async with self._lifecycle_lock:
+            if self._closed:
+                raise OrchestrationError("CONNECTION_CLOSED", "This client has already closed")
+            if self.info is not None:
+                return self
+            if self._command is not None:
+                factory = RpcTransport.stdio(self._command, env=self._env,
+                                             request_timeout=self._request_timeout)
+            elif self._socket is not None:
+                factory = RpcTransport.unix(self._socket, request_timeout=self._request_timeout)
+            else:
+                raise OrchestrationError("VALIDATION_ERROR", "Use Orchestrator.local or Orchestrator.connect")
+            # A subprocess may already exist before its async factory returns. Do not
+            # cancel that factory and lose ownership of resources it has created.
+            opening = asyncio.create_task(factory, name="agent-orch-open-transport")
+            try:
+                self._transport = await asyncio.shield(opening)
+                result = await self._transport.request("initialize", {
+                    "protocolVersion": PROTOCOL_VERSION, "sdkVersion": SDK_VERSION})
+                if not isinstance(result, dict) or result.get("protocolVersion") != PROTOCOL_VERSION:
+                    raise OrchestrationError("PROTOCOL_MISMATCH", "Engine protocol must be 1.0")
+                if not all(isinstance(result.get(key), str) and result[key] for key in ("instanceId", "storeId")):
+                    raise OrchestrationError("PROTOCOL_ERROR", "Handshake is missing instance/store identity")
+                self.info = snapshot(result)
+            except BaseException as startup_error:
+                cleanup = asyncio.create_task(self._cleanup_failed_start(opening),
+                                              name="agent-orch-start-cleanup")
+                while True:
+                    try:
+                        await asyncio.shield(cleanup)
+                        break
+                    except asyncio.CancelledError:
+                        if cleanup.cancelled():
+                            raise startup_error
+                        # Keep ownership until cleanup finishes, even if the caller
+                        # cancels startup again while its first cancellation is handled.
+                    except BaseException as cleanup_error:
+                        raise startup_error from cleanup_error
+                self._closed = True
+                raise
+            return self
+
+    async def _cleanup_failed_start(self, opening: asyncio.Task[RpcTransport]) -> None:
+        if self._transport is None:
+            try:
+                self._transport = await opening
+            except BaseException:
+                return  # The factory failed before returning an owned transport.
+        # This deliberately bypasses close()/disconnect() on the client: start still
+        # owns the lifecycle lock, and no business requests have been accepted.
+        await self._transport.disconnect(terminate_owned=True)
+
+    async def _call(self, method: str, params: dict[str, Any], *, timeout: float | None = None) -> Snapshot:
+        await self.start()
+        return await self._call_transport(method, params, timeout=timeout)
+
+    async def _call_transport(self, method: str, params: dict[str, Any], *,
+                              timeout: float | None = None) -> Snapshot:
+        assert self._transport is not None
+        result = await self._transport.request(method, params, timeout=timeout)
+        if not isinstance(result, dict):
+            raise OrchestrationError("PROTOCOL_ERROR", f"{method} returned a non-object result")
+        return snapshot(result)
+
+    async def _mutate(self, method: str, params: dict[str, Any], key: str | None) -> Snapshot:
+        if key is not None and (not isinstance(key, str) or not key):
+            raise OrchestrationError("VALIDATION_ERROR", "idempotency_key must be a nonempty string")
+        key = key or str(uuid4())
+        scope = "local"
+        if method in {"tasks.resume", "tasks.cancel"}:
+            scope = params.get("taskId")
+        elif method in {"sessions.control", "sessions.reconcile"}:
+            target = params.get("target")
+            scope = target.get("sessionId") if isinstance(target, Mapping) else None
+        elif method == "messages.send":
+            spec = params.get("spec")
+            scope = spec.get("toSessionId") if isinstance(spec, Mapping) else None
+        elif method == "approvals.decide":
+            scope = params.get("approvalId")
+        elif method == "scheduler.resolveConflict":
+            scope = params.get("conflictId")
+        try:
+            result = await self._call(method, {**params, "idempotencyKey": key})
+            # Task snapshots do not carry the key on the wire; keep it on the receipt.
+            return Snapshot({"method": method, "scope": scope, **result, "idempotency_key": key})
+        except OrchestrationError as error:
+            error.idempotency_key = key
+            error.method = method
+            error.scope = scope
+            raise
+        except asyncio.CancelledError as error:
+            # Preserve cancellation semantics while retaining recovery information.
+            error.idempotency_key = key
+            error.method = method
+            error.scope = scope
+            raise
+
+    async def _wait(self, get_snapshot: Any, terminal: set[str], timeout: float | None) -> Snapshot:
+        if timeout is not None:
+            _duration(timeout, "timeout", zero=True)
+        try:
+            async with asyncio.timeout(timeout):
+                while True:
+                    current = await get_snapshot()
+                    if current.status in terminal:
+                        return current
+                    await asyncio.sleep(self._poll_interval)
+        except TimeoutError:
+            raise OrchestrationError("TIMEOUT", "Local wait timed out; remote task was not cancelled") from None
+
+    async def capabilities(self, *, provider: str | None = None) -> Snapshot:
+        return await self._call("capabilities.get", {"provider": provider} if provider is not None else {})
+
+    async def events(self, *, task_id: str | None = None, after_cursor: str | None = None,
+                     store_id: str | None = None, limit: int = 128) -> AsyncIterator[Snapshot]:
+        cursor = "0" if after_cursor is None else after_cursor
+        if (not isinstance(cursor, str) or not cursor.isascii() or not cursor.isdecimal() or
+            (cursor != "0" and store_id is None)):
+            raise OrchestrationError("VALIDATION_ERROR", "A nonzero decimal cursor requires its store_id")
+        if type(limit) is not int or not 1 <= limit <= 256:
+            raise OrchestrationError("VALIDATION_ERROR", "Event page limit must be between 1 and 256")
+        await self.start()
+        assert self.info is not None
+        expected_store = store_id or self.info.store_id
+        seen: set[str] = set()
+        order: deque[str] = deque()
+        while True:
+            params: dict[str, Any] = {"afterCursor": cursor, "storeId": expected_store, "limit": limit}
+            if task_id is not None:
+                params["taskId"] = task_id
+            page = await self._call("events.read", params)
+            if page.store_id != expected_store:
+                raise OrchestrationError("PROTOCOL_ERROR", "Event page changed store identity")
+            if (not isinstance(page.cursor, str) or not page.cursor.isascii() or
+                not page.cursor.isdecimal() or int(page.cursor) < int(cursor)):
+                raise OrchestrationError("PROTOCOL_ERROR", "Event cursor moved backwards or is malformed")
+            if not isinstance(page.events, list) or len(page.events) > limit:
+                raise OrchestrationError("PROTOCOL_ERROR", "Event page exceeded the requested bound")
+            for event in page.events:
+                if event.event_id in seen:
+                    continue
+                seen.add(event.event_id)
+                order.append(event.event_id)
+                if len(order) > 2048:
+                    seen.remove(order.popleft())
+                yield event
+            cursor = page.cursor
+            if not page.events:
+                await asyncio.sleep(self._poll_interval)
+
+    async def close(self, *, mode: str | None = None, timeout: float | None = None,
+                    operation_id: str | None = None) -> Snapshot | None:
+        async with self._lifecycle_lock:
+            if self._closed:
+                return None
+            if not self._owner:
+                if mode is not None or operation_id is not None:
+                    raise OrchestrationError("UNAUTHORIZED", "A connected client cannot shut down the shared host")
+                await self._disconnect_locked()
+                return None
+            if self._transport is None:
+                self._closed = True
+                return None
+            mode = mode or "drain"
+            if mode not in {"drain", "interrupt"}:
+                raise OrchestrationError("VALIDATION_ERROR", "close mode must be drain or interrupt")
+            duration = self._close_timeout if timeout is None else _duration(timeout, "timeout", zero=True)
+            operation_id = operation_id or self._shutdown_operation_id
+            params: dict[str, Any] = {"mode": mode, "timeoutMs": math.ceil(duration * 1000)}
+            method = "host.shutdown"
+            if operation_id is not None:
+                method = "host.shutdown.continue"
+                params["operationId"] = operation_id
+            try:
+                result = await self._call_transport(method, params,
+                                                    timeout=max(self._request_timeout, duration + 1.0))
+            except ShutdownIncomplete as error:
+                error.client = self
+                self._shutdown_operation_id = error.operation_id
+                raise
+            if result.status != "closed":
+                raise OrchestrationError("PROTOCOL_ERROR", "Host did not confirm completed shutdown")
+            await self._disconnect_locked(terminate_owned=True)
+            return result
+
+    async def disconnect(self) -> None:
+        """Drop this transport, e.g. after a framing failure; does not claim task completion.
+
+        Local owners should normally use close(). Dropping their pipe invokes the
+        host's EOF recovery policy and cannot undo already executed side effects.
+        """
+        async with self._lifecycle_lock:
+            await self._disconnect_locked()
+
+    async def _disconnect_locked(self, *, terminate_owned: bool = False) -> None:
+        if self._transport is not None:
+            await self._transport.disconnect(terminate_owned=terminate_owned)
+        self._closed = True

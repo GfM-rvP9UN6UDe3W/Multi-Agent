@@ -1,0 +1,413 @@
+import assert from 'node:assert/strict';
+import { test } from 'node:test';
+import { createClaudeAdapter } from '../../packages/adapter-claude/src/index.ts';
+import { createCodexAdapter } from '../../packages/adapter-codex/src/index.ts';
+import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
+import type { RuntimeEvent, RuntimeInput } from '../../packages/engine/src/types.ts';
+
+function input(overrides: Partial<RuntimeInput> = {}): RuntimeInput {
+  return {
+    taskId: 'task-1',
+    sessionId: 'session-1',
+    dispatchId: 'dispatch-1',
+    providerSessionId: null,
+    model: 'test-model',
+    workspace: process.cwd(),
+    stateDir: '/tmp/agent-orch-adapter-test',
+    prompt: 'Read this project',
+    permissionProfile: 'read-only',
+    signal: new AbortController().signal,
+    ...overrides,
+  };
+}
+
+async function collect(stream: AsyncIterable<RuntimeEvent>): Promise<RuntimeEvent[]> {
+  const events: RuntimeEvent[] = [];
+  for await (const event of stream) events.push(event);
+  return events;
+}
+
+test('AC adapter Claude: SDK init acknowledges a real session, resume is passed through, missing usage stays null', async () => {
+  const calls: unknown[] = [];
+  const adapter = createClaudeAdapter({
+    query: (request) => {
+      calls.push(request);
+      return (async function* () {
+        yield { type: 'system', subtype: 'init', session_id: 'claude-session-1' };
+        yield {
+          type: 'result',
+          subtype: 'success',
+          session_id: 'claude-session-1',
+          result: 'done',
+        };
+      })();
+    },
+  });
+  assert.deepEqual(
+    await collect(adapter.execute(input({ providerSessionId: 'claude-session-1' }))),
+    [
+      { type: 'accepted', providerSessionId: 'claude-session-1' },
+      {
+        type: 'usage',
+        usageId: 'dispatch-1:result',
+        usage: {
+          inputTokens: null,
+          cachedInputTokens: null,
+          cacheWriteInputTokens: null,
+          outputTokens: null,
+          raw: null,
+        },
+      },
+      { type: 'result', text: 'done', providerSessionId: 'claude-session-1' },
+    ],
+  );
+  assert.equal((calls[0] as { options: { resume?: string } }).options.resume, 'claude-session-1');
+  assert.deepEqual(adapter.capabilities().permissionProfiles, ['read-only']);
+});
+
+test('AC adapter Claude: loss before or after init is outcome_unknown without invented acceptance', async () => {
+  const before = createClaudeAdapter({
+    query: () =>
+      (async function* () {
+        throw new Error('connect failed');
+      })(),
+  });
+  assert.deepEqual(await collect(before.execute(input())), [
+    { type: 'error', message: 'connect failed', outcome: 'unknown' },
+  ]);
+  const after = createClaudeAdapter({
+    query: () =>
+      (async function* () {
+        yield { type: 'system', subtype: 'init', session_id: 'claude-session-2' };
+        throw new Error('stream disconnected');
+      })(),
+  });
+  assert.deepEqual(await collect(after.execute(input())), [
+    { type: 'accepted', providerSessionId: 'claude-session-2' },
+    { type: 'error', message: 'stream disconnected', outcome: 'unknown' },
+  ]);
+});
+
+test('AC adapter Claude: signal cancellation is not reported as confirmed interruption without SDK terminal proof', async () => {
+  const controller = new AbortController();
+  const adapter = createClaudeAdapter({
+    query: () =>
+      (async function* () {
+        yield { type: 'system', subtype: 'init', session_id: 'claude-session-3' };
+        controller.abort();
+        throw new Error('aborted');
+      })(),
+  });
+  const events = await collect(adapter.execute(input({ signal: controller.signal })));
+  assert.equal(events.at(-1)?.type, 'error');
+  assert.equal((events.at(-1) as Extract<RuntimeEvent, { type: 'error' }>).outcome, 'unknown');
+});
+
+test('AC adapter Claude: construction is offline and unsupported write profile never invokes SDK', async () => {
+  let called = false;
+  const adapter = createClaudeAdapter({
+    query: () => {
+      called = true;
+      throw new Error('should not call');
+    },
+  });
+  assert.equal(adapter.capabilities().interrupt, false);
+  assert.deepEqual(
+    await collect(adapter.execute(input({ permissionProfile: 'workspace-write' }))),
+    [{ type: 'error', message: 'Claude adapter supports read-only only', outcome: 'failed' }],
+  );
+  assert.equal(called, false);
+});
+
+const fixture = String.raw`
+const readline = require('node:readline');
+const fs = require('node:fs');
+const mode = process.argv[1];
+if (process.env.FIXTURE_CAPTURE) fs.writeFileSync(process.env.FIXTURE_CAPTURE, JSON.stringify({argv:process.argv.slice(2), env:{CODEX_HOME:process.env.CODEX_HOME,CODEX_SQLITE_HOME:process.env.CODEX_SQLITE_HOME},pid:process.pid}));
+if (mode === 'ignore-term') process.on('SIGTERM', () => {});
+const send = (value) => process.stdout.write(JSON.stringify(value) + '\n');
+let threadId = 'codex-thread-1';
+let turnId = 'codex-turn-1';
+let initialized = false;
+readline.createInterface({input: process.stdin}).on('line', line => {
+  const request = JSON.parse(line);
+  if (request.method === 'initialize') {
+    if (mode === 'stall-initialize') return;
+    if (mode === 'flood') {
+      for (let n=0;n<400;n++) send({method:'unrelated',params:{n}});
+      return;
+    }
+    send({id: request.id, result: {userAgent: 'fixture'}});
+  } else if (request.method === 'initialized') {
+    initialized = true;
+  } else if (request.method === 'thread/start' || request.method === 'thread/resume') {
+    if (!initialized) throw new Error('missing handshake');
+    if (request.params.sandbox !== 'read-only' || request.params.approvalPolicy !== 'never') throw new Error('thread is not read-only');
+    if (mode === 'reject-thread') return send({id:request.id,error:{code:-32000,message:'thread rejected'}});
+    if (request.method === 'thread/resume') threadId = request.params.threadId;
+    send({id: request.id, result: {thread: {id: threadId}}});
+  } else if (request.method === 'turn/start') {
+    if (request.params.threadId !== threadId || !Array.isArray(request.params.input)) throw new Error('bad turn');
+    if (request.params.sandboxPolicy?.type !== 'readOnly' || request.params.sandboxPolicy?.networkAccess !== false || request.params.approvalPolicy !== 'never') throw new Error('turn is not read-only');
+    if (mode === 'disconnect-before-turn-ack') return process.exit(0);
+    if (mode === 'stall-turn-ack') return;
+    send({id: request.id, result: {turn: {id: turnId, status: 'inProgress'}}});
+    if (mode === 'disconnect') return process.exit(0);
+    if (mode === 'cancel' || mode === 'stall-terminal' || mode === 'ignore-term') return;
+    if (mode === 'spam-terminal') return setInterval(() => send({method:'unrelated',params:{threadId,turnId}}), 1);
+    send({method:'item/completed', params:{threadId,turnId,item:{id:'answer-1',type:'agentMessage',text:'finished',phase:'final_answer'}}});
+    if (mode !== 'no-usage') {
+      const usage = {total:{totalTokens:5,inputTokens:3,cachedInputTokens:0,cacheWriteInputTokens:0,outputTokens:2,reasoningOutputTokens:0},last:{totalTokens:5,inputTokens:3,cachedInputTokens:0,cacheWriteInputTokens:0,outputTokens:2,reasoningOutputTokens:0},modelContextWindow:null};
+      send({method:'thread/tokenUsage/updated',params:{threadId,turnId,tokenUsage:usage}});
+      send({method:'thread/tokenUsage/updated',params:{threadId,turnId,tokenUsage:usage}});
+    }
+    send({method:'turn/completed',params:{threadId,turn:{id:turnId,status:'completed'}}});
+  } else if (request.method === 'turn/interrupt') {
+    send({id: request.id, result:{}});
+    send({method:'turn/completed',params:{threadId,turn:{id:turnId,status:'interrupted'}}});
+  }
+});`;
+
+function codex(mode: string) {
+  return createCodexAdapter({ command: process.execPath, args: ['-e', fixture, mode] });
+}
+
+test('AC adapter Codex: handshake, thread and turn ack, deduplicated usage, terminal result', async () => {
+  const adapter = codex('complete');
+  const events = await collect(adapter.execute(input()));
+  assert.deepEqual(events, [
+    { type: 'accepted', providerSessionId: 'codex-thread-1' },
+    {
+      type: 'usage',
+      usageId: 'codex-turn-1:total:5:1',
+      usage: {
+        inputTokens: 3,
+        cachedInputTokens: 0,
+        cacheWriteInputTokens: 0,
+        outputTokens: 2,
+        raw: {
+          totalTokens: 5,
+          inputTokens: 3,
+          cachedInputTokens: 0,
+          cacheWriteInputTokens: 0,
+          outputTokens: 2,
+          reasoningOutputTokens: 0,
+        },
+      },
+    },
+    { type: 'result', text: 'finished', providerSessionId: 'codex-thread-1' },
+  ]);
+  assert.deepEqual(adapter.capabilities().permissionProfiles, ['read-only']);
+});
+
+test('AC adapter Codex: process loss after turn ack is outcome_unknown', async () => {
+  assert.deepEqual(
+    await collect(codex('disconnect').execute(input())).then((events) => events.slice(-1)),
+    [
+      {
+        type: 'error',
+        message: 'Codex app-server disconnected before turn completion',
+        outcome: 'unknown',
+      },
+    ],
+  );
+});
+
+test('AC adapter Codex: disconnect after sending turn/start but before ack is outcome_unknown without acceptance', async () => {
+  const events = await collect(codex('disconnect-before-turn-ack').execute(input()));
+  assert.equal(events.length, 1);
+  assert.equal(events[0]?.type, 'error');
+  assert.equal((events[0] as Extract<RuntimeEvent, { type: 'error' }>).outcome, 'unknown');
+});
+
+test('AC adapter Codex: failed thread start is not accepted and missing usage remains null', async () => {
+  assert.deepEqual(await collect(codex('reject-thread').execute(input())), [
+    { type: 'error', message: 'thread rejected', outcome: 'failed' },
+  ]);
+  assert.deepEqual(
+    await collect(codex('no-usage').execute(input({ providerSessionId: 'previous-thread' }))),
+    [
+      { type: 'accepted', providerSessionId: 'previous-thread' },
+      {
+        type: 'usage',
+        usageId: 'codex-turn-1:missing',
+        usage: {
+          inputTokens: null,
+          cachedInputTokens: null,
+          cacheWriteInputTokens: null,
+          outputTokens: null,
+          raw: null,
+        },
+      },
+      { type: 'result', text: 'finished', providerSessionId: 'previous-thread' },
+    ],
+  );
+});
+
+test('AC adapter Codex: interrupt requires observed interrupted terminal notification', async () => {
+  const controller = new AbortController();
+  const events: RuntimeEvent[] = [];
+  for await (const event of codex('cancel').execute(input({ signal: controller.signal }))) {
+    events.push(event);
+    if (event.type === 'accepted') controller.abort();
+  }
+  assert.deepEqual(events, [
+    { type: 'accepted', providerSessionId: 'codex-thread-1' },
+    { type: 'interrupted' },
+  ]);
+});
+
+test('AC adapter Codex: unsupported write profile does not spawn app-server', async () => {
+  const adapter = createCodexAdapter({ command: '/nonexistent/codex' });
+  assert.equal(adapter.capabilities().interrupt, true);
+  assert.deepEqual(
+    await collect(adapter.execute(input({ permissionProfile: 'workspace-write' }))),
+    [{ type: 'error', message: 'Codex adapter supports read-only only', outcome: 'failed' }],
+  );
+});
+
+test('AC adapter Codex: isolated managed home and defensive flags override inherited user state', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'agent-orch-codex-'));
+  const capture = join(dir, 'capture.json');
+  try {
+    const adapter = createCodexAdapter({
+      command: process.execPath,
+      args: ['-e', fixture, 'complete'],
+      env: {
+        ...process.env,
+        CODEX_HOME: '/user/codex',
+        CODEX_SQLITE_HOME: '/user/sqlite',
+        FIXTURE_CAPTURE: capture,
+      },
+    });
+    const events = await collect(adapter.execute(input({ stateDir: dir })));
+    assert.equal(events.at(-1)?.type, 'result');
+    const observed = JSON.parse(await readFile(capture, 'utf8'));
+    assert.equal(observed.env.CODEX_HOME, await realpath(join(dir, 'runtime', 'codex')));
+    assert.equal(observed.env.CODEX_SQLITE_HOME, observed.env.CODEX_HOME);
+    const managedConfig = await readFile(join(dir, 'runtime', 'codex', 'config.toml'), 'utf8');
+    assert.match(managedConfig, /mcp_servers = \{\}/);
+    assert.match(managedConfig, /enabled = false/);
+    assert.match(managedConfig, /multi_agent_v2 = false/);
+    assert.equal(observed.argv.filter((x: string) => x === '--disable').length >= 3, true);
+    assert.match(observed.argv.join(' '), /multi_agent_v2/);
+    assert.match(observed.argv.join(' '), /plugins/);
+    assert.match(observed.argv.join(' '), /projects\..*trust_level/);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('AC adapter Codex: refuses modified managed configuration before spawn', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'agent-orch-config-'));
+  try {
+    const home = join(dir, 'runtime', 'codex');
+    await mkdir(home, { recursive: true });
+    await writeFile(join(home, 'config.toml'), '[mcp_servers.writer]\ncommand="touch"\n');
+    const events = await collect(
+      createCodexAdapter({ command: '/nonexistent/codex' }).execute(input({ stateDir: dir })),
+    );
+    assert.equal(events.length, 1);
+    assert.equal((events[0] as Extract<RuntimeEvent, { type: 'error' }>).outcome, 'failed');
+    assert.match(
+      (events[0] as Extract<RuntimeEvent, { type: 'error' }>).message,
+      /managed config differs/,
+    );
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('AC adapter Codex: request and terminal waits are bounded with unknown after turn submission', async () => {
+  const options = { requestTimeoutMs: 50, turnTimeoutMs: 50, closeTimeoutMs: 50 };
+  const before = await collect(
+    createCodexAdapter({
+      command: process.execPath,
+      args: ['-e', fixture, 'stall-initialize'],
+      ...options,
+    }).execute(input()),
+  );
+  assert.equal((before.at(-1) as Extract<RuntimeEvent, { type: 'error' }>).outcome, 'failed');
+  const ack = await collect(
+    createCodexAdapter({
+      command: process.execPath,
+      args: ['-e', fixture, 'stall-turn-ack'],
+      ...options,
+    }).execute(input()),
+  );
+  assert.equal((ack.at(-1) as Extract<RuntimeEvent, { type: 'error' }>).outcome, 'unknown');
+  const terminal = await collect(
+    createCodexAdapter({
+      command: process.execPath,
+      args: ['-e', fixture, 'stall-terminal'],
+      ...options,
+    }).execute(input()),
+  );
+  assert.equal((terminal.at(-1) as Extract<RuntimeEvent, { type: 'error' }>).outcome, 'unknown');
+  const noisy = await collect(
+    createCodexAdapter({
+      command: process.execPath,
+      args: ['-e', fixture, 'spam-terminal'],
+      ...options,
+    }).execute(input()),
+  );
+  assert.equal((noisy.at(-1) as Extract<RuntimeEvent, { type: 'error' }>).outcome, 'unknown');
+});
+
+test('AC adapter Codex: excessive uncorrelated messages fail bounded queue', async () => {
+  const events = await collect(
+    createCodexAdapter({
+      command: process.execPath,
+      args: ['-e', fixture, 'flood'],
+      requestTimeoutMs: 1000,
+      closeTimeoutMs: 100,
+    }).execute(input()),
+  );
+  assert.equal(events.at(-1)?.type, 'error');
+  assert.match((events.at(-1) as Extract<RuntimeEvent, { type: 'error' }>).message, /queue limit/i);
+});
+
+test('AC adapter Codex: escalates to SIGKILL and waits for owned child exit', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'agent-orch-child-'));
+  const capture = join(dir, 'child.json');
+  try {
+    const adapter = createCodexAdapter({
+      command: process.execPath,
+      args: ['-e', fixture, 'ignore-term'],
+      env: { ...process.env, FIXTURE_CAPTURE: capture },
+      requestTimeoutMs: 1000,
+      turnTimeoutMs: 50,
+      closeTimeoutMs: 50,
+    });
+    const events = await collect(adapter.execute(input({ stateDir: dir })));
+    assert.equal((events.at(-1) as Extract<RuntimeEvent, { type: 'error' }>).outcome, 'unknown');
+    const { pid } = JSON.parse(await readFile(capture, 'utf8'));
+    assert.throws(() => process.kill(pid, 0), { code: 'ESRCH' });
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('AC adapter Claude: closes SDK iterator when next throws', async () => {
+  let returned = false;
+  const adapter = createClaudeAdapter({
+    query: () => ({
+      [Symbol.asyncIterator]() {
+        return {
+          async next() {
+            throw new Error('stream failed');
+          },
+          async return() {
+            returned = true;
+            return { done: true, value: undefined };
+          },
+        };
+      },
+    }),
+  });
+  const events = await collect(adapter.execute(input()));
+  assert.equal((events.at(-1) as Extract<RuntimeEvent, { type: 'error' }>).outcome, 'unknown');
+  assert.equal(returned, true);
+});

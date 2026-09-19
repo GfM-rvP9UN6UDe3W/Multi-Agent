@@ -1,0 +1,17 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "agent-orch"
+version = "0.1.0"
+description = "Async Python client for the local agent orchestration engine"
+requires-python = ">=3.11"
+dependencies = []
+readme = "README.md"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+agent_orch = ["py.typed"]
