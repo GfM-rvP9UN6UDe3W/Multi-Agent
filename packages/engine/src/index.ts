@@ -123,6 +123,10 @@ class LocalEngine implements Engine {
   private scheduled = false;
   private shutdownId: string | undefined;
   private closeAdaptersPromise: Promise<void> | undefined;
+  private pendingResourceCleanups = new Map<
+    string,
+    { commit: () => void; applied: boolean; settling?: boolean }
+  >();
   private clock: EngineClock;
   private timeouts: Required<LifecycleTimeouts>;
 
@@ -305,6 +309,7 @@ class LocalEngine implements Engine {
     if (quarantined.length + reserved.length >= maxQuarantinedDispatches)
       reasons.push('QUARANTINE_CAPACITY_EXCEEDED');
     if (this.closing) reasons.push('HOST_STOPPING');
+    if (this.pendingResourceCleanups.size) reasons.push('RESOURCE_CLEANUP_PENDING');
     if (conflicts.length) reasons.push('EXECUTION_EVIDENCE_CONFLICT');
     const occupants = records.filter((d) => d.executionLease?.status === 'held' || d.quarantined);
     return {
@@ -604,7 +609,10 @@ class LocalEngine implements Engine {
         fail('IDEMPOTENCY_CONFLICT', 'Key was already used with different payload');
       return existing.operation;
     }
-    this.ensureMutable();
+    // An owner must be able to attest unknown resources that prevented its shutdown.
+    // Keep normal writes and storage-degraded instances outside this exception.
+    if (method === 'sessions.reconcile' && this.shutdownId) this.ensureOpen();
+    else this.ensureMutable();
     return this.store.transaction(() => {
       const op: OperationSnapshot = {
         id: randomUUID(),
@@ -1321,6 +1329,7 @@ class LocalEngine implements Engine {
       evidence.sideEffects === 'resolved' &&
       evidence.outcome !== 'unknown';
     const started = this.clock.monotonicNow();
+    const resourceDisposition: { commit?: () => void } = {};
     const op = this.operation(
       'sessions.reconcile',
       sessionId,
@@ -1338,15 +1347,31 @@ class LocalEngine implements Engine {
           fail('STALE_TARGET', 'Reconciliation target changed');
         if (session.status !== 'outcome_unknown' || task.status !== 'blocked')
           fail('STALE_TARGET', 'Session is not awaiting reconciliation');
-        if (
-          evidence.localResources === 'stopped' &&
-          (this.flights.has(sessionId) ||
-            this.adapters.get(session.provider)?.hasActiveResources?.(sessionId))
-        )
-          fail(
-            'RUNTIME_STILL_ACTIVE',
-            'This owner still holds an active observation or cleanup handle',
-          );
+        if (evidence.localResources === 'stopped') {
+          if (this.flights.has(sessionId))
+            fail('RUNTIME_STILL_ACTIVE', 'This owner still holds an active execution observer');
+          const adapter = this.adapters.get(session.provider);
+          if (adapter?.hasActiveResources?.(sessionId)) {
+            let commit: unknown;
+            try {
+              commit = adapter.prepareUnobservedCleanup?.({
+                sessionId,
+                dispatchId: session.activeDispatchId!,
+                generation: session.generation,
+              });
+            } catch {
+              fail('INVALID_RUNTIME_CONTRACT', 'Runtime cleanup preparation threw before commit');
+            }
+            if (commit == null)
+              fail('RUNTIME_STILL_ACTIVE', 'This owner still holds an active cleanup handle');
+            if (typeof commit !== 'function')
+              fail(
+                'INVALID_RUNTIME_CONTRACT',
+                'Runtime cleanup preparation must return a function or null',
+              );
+            resourceDisposition.commit = commit as () => void;
+          }
+        }
         const dispatchId = session.activeDispatchId!;
         const dispatch = this.store.require<Record<string, unknown>>('dispatches', dispatchId);
         if (
@@ -1389,6 +1414,9 @@ class LocalEngine implements Engine {
           dispatchId,
           target,
           evidence,
+          ...(resourceDisposition.commit
+            ? { resourceReconciliation: 'owner_attested_unobserved' }
+            : {}),
         };
         const evidenceRef = this.store.artifact(JSON.stringify(audit));
         const executionReleased =
@@ -1402,7 +1430,12 @@ class LocalEngine implements Engine {
           evidenceRef,
           actor: 'host_owner',
           outcome: evidence.outcome as string,
+          unobservedResourcesReconciled: false,
+          ...(resourceDisposition.commit
+            ? { resourceCleanup: { status: 'pending', ownerInstanceId: this.instanceId } }
+            : {}),
         };
+        if (resourceDisposition.commit) op.status = 'persisted';
         this.store.put('dispatches', dispatchId, {
           ...dispatch,
           reconciliations: [...((dispatch.reconciliations as string[] | undefined) ?? []), op.id],
@@ -1478,6 +1511,12 @@ class LocalEngine implements Engine {
           },
           { taskId: task.id, sessionId, operationId: op.id },
         );
+        if (resourceDisposition.commit)
+          this.store.event(
+            'session.resource_cleanup_prepared',
+            { dispatchId, generation: session.generation, evidenceRef, actor: 'host_owner' },
+            { taskId: task.id, sessionId, operationId: op.id },
+          );
         if (this.clock.monotonicNow() - started >= this.timeouts.reconcileMs)
           fail(
             'TIMEOUT',
@@ -1485,8 +1524,89 @@ class LocalEngine implements Engine {
           );
       },
     );
+    if (resourceDisposition.commit)
+      this.pendingResourceCleanups.set(op.id, {
+        commit: resourceDisposition.commit,
+        applied: false,
+      });
+    const completed = this.finishResourceCleanup(op);
     this.kick();
-    return op;
+    return completed;
+  }
+  private finishResourceCleanup(op: OperationSnapshot): OperationSnapshot {
+    const result = op.result as Record<string, Json> | null;
+    const cleanup = result?.resourceCleanup as Record<string, Json> | undefined;
+    if (!cleanup || cleanup.status !== 'pending') return op;
+    const pending = this.pendingResourceCleanups.get(op.id);
+    const incomplete = (message: string): never =>
+      fail('RESOURCE_CLEANUP_INCOMPLETE', message, { operationId: op.id, auditCommitted: true });
+    if (!pending)
+      return incomplete(
+        'Owner attestation is committed, but its original in-memory finalizer is unavailable',
+      );
+    try {
+      if (pending.settling) throw new Error('Runtime finalizer is still settling');
+      if (!pending.applied) {
+        const work: unknown = pending.commit();
+        if (
+          work !== null &&
+          (typeof work === 'object' || typeof work === 'function') &&
+          typeof (work as { then?: unknown }).then === 'function'
+        ) {
+          // A misbehaving async finalizer cannot block the RPC or run twice concurrently.
+          // Observe both settlements, but only an explicit owner retry acknowledges completion.
+          pending.settling = true;
+          void Promise.resolve(work).then(
+            () => {
+              pending.applied = true;
+              pending.settling = false;
+            },
+            () => {
+              pending.settling = false;
+            },
+          );
+          throw new Error('Runtime finalizer must finish synchronously');
+        }
+        pending.applied = true;
+      }
+      if (this.adapters.get(this.session(op.scope).provider)?.hasActiveResources?.(op.scope)) {
+        pending.applied = false;
+        throw new Error('Runtime finalizer retained its resources');
+      }
+      return this.store.transaction(() => {
+        const completed = this.store.operation(op.id);
+        completed.status = 'completed';
+        completed.error = null;
+        completed.result = {
+          ...result,
+          unobservedResourcesReconciled: true,
+          resourceCleanup: { ...cleanup, status: 'completed' },
+        };
+        this.store.saveOperation(completed);
+        this.store.event(
+          'session.resources_reconciled',
+          {
+            dispatchId: result!.dispatchId,
+            generation: op.lifecycle!.expectedGeneration,
+            evidenceRef: result!.evidenceRef,
+            actor: 'host_owner',
+          },
+          { sessionId: op.scope, taskId: this.session(op.scope).taskId, operationId: op.id },
+        );
+        this.store.event('operation.updated', { status: 'completed' }, { operationId: op.id });
+        this.pendingResourceCleanups.delete(op.id);
+        this.admissionEvent();
+        return completed;
+      });
+    } catch {
+      // Keep the exact prepared closure; replaying the durable operation must not re-prepare
+      // against a now-paused session or a different generation. A completed disposition only
+      // retries its durable acknowledgement if that later write failed.
+      this.pendingResourceCleanups.set(op.id, pending);
+      return incomplete(
+        'Owner attestation is committed; retry the same reconciliation key to finish resource cleanup',
+      );
+    }
   }
   private resolveConflict(p: Record<string, unknown>): OperationSnapshot {
     fields(p, ['conflictId', 'expectedRevision', 'evidence', 'idempotencyKey']);
@@ -1582,12 +1702,15 @@ class LocalEngine implements Engine {
       this.scheduled = false;
       if (this.closing || this.closed) return;
       try {
-        for (const task of this.store.all<TaskSnapshot>('tasks')) {
-          if (!this.scheduler().canDispatch) break;
-          if (task.status !== 'queued' || this.flights.has(task.sessionId)) continue;
+        const queued = this.store.queuedTasks();
+        if (!queued.length) return;
+        let canDispatch = this.scheduler().canDispatch;
+        for (const task of queued) {
+          if (!canDispatch) break;
+          if (this.flights.has(task.sessionId)) continue;
           const session = this.session(task.sessionId);
           if (session.status !== 'idle') continue;
-          this.start(task, session);
+          if (this.start(task, session)) canDispatch = this.scheduler().canDispatch;
         }
       } catch (error) {
         // A scheduler/storage failure must not become an unhandled promise or silently retry a dispatch.
@@ -1613,7 +1736,7 @@ class LocalEngine implements Engine {
       if (cap[k] !== null) integer(cap[k], k, 1, 86400000);
     return cap as { version: 2; acceptanceCapMs: number | null; turnCapMs: number | null };
   }
-  private start(task: TaskSnapshot, session: SessionSnapshot): void {
+  private start(task: TaskSnapshot, session: SessionSnapshot): boolean {
     const adapter = this.adapters.get(session.provider);
     try {
       if (!adapter)
@@ -1627,18 +1750,16 @@ class LocalEngine implements Engine {
         this.saveSession(session, 'paused');
         this.taskEvent(task);
       });
-      return;
+      return false;
     }
-    const turns = this.store
-      .all<{ taskId: string }>('dispatches')
-      .filter((d) => d.taskId === task.id).length;
+    const turns = this.store.dispatchCount(task.id);
     if (turns >= (this.config.limits?.maxTurnsPerTask ?? 20)) {
       this.store.transaction(() => {
         this.saveTask(task, 'paused', 'max_turns_reached');
         this.saveSession(session, 'paused');
         this.taskEvent(task);
       });
-      return;
+      return false;
     }
     if (session.providerSessionId && !adapter.capabilities().resume) {
       this.store.transaction(() => {
@@ -1646,7 +1767,7 @@ class LocalEngine implements Engine {
         this.saveSession(session, 'paused');
         this.taskEvent(task);
       });
-      return;
+      return false;
     }
     const cap = this.adapterBudget(adapter);
     const enteredMono = this.clock.monotonicNow(),
@@ -1786,6 +1907,7 @@ class LocalEngine implements Engine {
         }
         this.kick();
       });
+    return true;
   }
   private live(flight: Flight): boolean {
     const session = this.session(flight.sessionId);

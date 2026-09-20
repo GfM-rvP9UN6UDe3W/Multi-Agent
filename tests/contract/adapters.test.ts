@@ -7,6 +7,8 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import type { RuntimeEvent, RuntimeInput } from '../../packages/engine/src/types.ts';
 
+import { withClaudeProcess } from '../fixtures/claude-process.ts';
+
 function input(overrides: Partial<RuntimeInput> = {}): RuntimeInput {
   return {
     taskId: 'task-1',
@@ -32,7 +34,7 @@ async function collect(stream: AsyncIterable<RuntimeEvent>): Promise<RuntimeEven
 test('AC adapter Claude: SDK init acknowledges a real session, resume is passed through, missing usage stays null', async () => {
   const calls: unknown[] = [];
   const adapter = createClaudeAdapter({
-    query: (request) => {
+    query: withClaudeProcess((request) => {
       calls.push(request);
       return (async function* () {
         yield { type: 'system', subtype: 'init', session_id: 'claude-session-1' };
@@ -43,7 +45,7 @@ test('AC adapter Claude: SDK init acknowledges a real session, resume is passed 
           result: 'done',
         };
       })();
-    },
+    }),
   });
   assert.deepEqual(
     await collect(adapter.execute(input({ providerSessionId: 'claude-session-1' }))),
@@ -69,20 +71,22 @@ test('AC adapter Claude: SDK init acknowledges a real session, resume is passed 
 
 test('AC adapter Claude: loss before or after init is outcome_unknown without invented acceptance', async () => {
   const before = createClaudeAdapter({
-    query: () =>
+    query: withClaudeProcess(() =>
       (async function* () {
         throw new Error('connect failed');
       })(),
+    ),
   });
   assert.deepEqual(await collect(before.execute(input())), [
     { type: 'error', message: 'connect failed', outcome: 'unknown' },
   ]);
   const after = createClaudeAdapter({
-    query: () =>
+    query: withClaudeProcess(() =>
       (async function* () {
         yield { type: 'system', subtype: 'init', session_id: 'claude-session-2' };
         throw new Error('stream disconnected');
       })(),
+    ),
   });
   assert.deepEqual(await collect(after.execute(input())), [
     { type: 'accepted', providerSessionId: 'claude-session-2' },

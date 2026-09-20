@@ -8,7 +8,11 @@ export const MAX_FRAME_BYTES = 1024 * 1024;
 export const MAX_PENDING_REQUESTS = 64;
 export const OWNER_EOF_TIMEOUT_MS = 30_000;
 type RequestId = string | number;
-type RpcConnection = { closed: Promise<void>; close: () => void };
+type RpcConnection = {
+  closed: Promise<void>;
+  close: () => void;
+  shutdown: (options?: CloseOptions) => Promise<void>;
+};
 
 function errorData(error: unknown): {
   code: string;
@@ -243,7 +247,21 @@ function connectRpc(
   input.once('close', finish);
   input.once('error', finish);
   output.once('error', finish);
-  return { closed, close: finish };
+  return {
+    closed,
+    close: finish,
+    async shutdown(options) {
+      if (!owner)
+        throw Object.assign(new Error('Only the host owner may shut down the engine'), {
+          code: 'UNAUTHORIZED',
+        });
+      // Keep the owner pipe and controls available when shutdown is incomplete.
+      await engine.close(options);
+      shutdownSucceeded = true;
+      finish();
+      await closed;
+    },
+  };
 }
 
 export function startStdioHost(

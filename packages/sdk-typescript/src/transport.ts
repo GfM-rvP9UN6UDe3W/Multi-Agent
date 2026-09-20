@@ -2,6 +2,7 @@ import { createConnection, type Socket } from 'node:net';
 
 export const MAX_FRAME_BYTES = 1024 * 1024;
 export const MAX_PENDING_REQUESTS = 64;
+export const DEFAULT_REQUEST_TIMEOUT_MS = 30_000;
 export class OrchestratorError extends Error {
   readonly code: string;
   readonly data: Record<string, unknown>;
@@ -34,6 +35,13 @@ type Pending = {
   reject: (error: unknown) => void;
   cleanup: () => void;
 };
+function validateTimeout(value: number, name: string): void {
+  if (!Number.isSafeInteger(value) || value < 1 || value > 2_147_483_647)
+    throw new OrchestratorError(
+      'INVALID_PARAMS',
+      `${name} must be an integer between 1 and 2147483647 milliseconds`,
+    );
+}
 
 export class UnixRpcClient implements Caller {
   private socket: Socket;
@@ -41,8 +49,10 @@ export class UnixRpcClient implements Caller {
   private pending = new Map<number, Pending>();
   private buffer: Buffer = Buffer.alloc(0);
   private ended = false;
-  private constructor(socket: Socket) {
+  private requestTimeoutMs: number;
+  private constructor(socket: Socket, requestTimeoutMs: number) {
     this.socket = socket;
+    this.requestTimeoutMs = requestTimeoutMs;
     socket.on('data', (chunk) => this.receive(chunk));
     socket.on('error', (error) =>
       this.fail(new OrchestratorError('CONNECTION_CLOSED', error.message)),
@@ -51,9 +61,15 @@ export class UnixRpcClient implements Caller {
       this.fail(new OrchestratorError('CONNECTION_CLOSED', 'Host connection closed')),
     );
   }
-  static async connect(socketPath: string, timeoutMs = 5000) {
+  static async connect(
+    socketPath: string,
+    timeoutMs = 5000,
+    requestTimeoutMs = DEFAULT_REQUEST_TIMEOUT_MS,
+  ) {
+    validateTimeout(timeoutMs, 'timeoutMs');
+    validateTimeout(requestTimeoutMs, 'requestTimeoutMs');
     const socket = createConnection(socketPath);
-    const client = new UnixRpcClient(socket);
+    const client = new UnixRpcClient(socket, requestTimeoutMs);
     await new Promise<void>((resolve, reject) => {
       const timer = setTimeout(() => {
         socket.destroy();
@@ -75,6 +91,12 @@ export class UnixRpcClient implements Caller {
     params: Record<string, unknown> = {},
     options: RequestOptions = {},
   ): Promise<T> {
+    const timeoutMs = options.timeoutMs === undefined ? this.requestTimeoutMs : options.timeoutMs;
+    try {
+      validateTimeout(timeoutMs, 'timeoutMs');
+    } catch (error) {
+      return Promise.reject(error);
+    }
     if (this.ended)
       return Promise.reject(new OrchestratorError('CONNECTION_CLOSED', 'Client is closed'));
     if (options.signal?.aborted)
@@ -107,17 +129,16 @@ export class UnixRpcClient implements Caller {
         options.signal?.removeEventListener('abort', abort);
       };
       options.signal?.addEventListener('abort', abort, { once: true });
-      if (options.timeoutMs !== undefined)
-        timer = setTimeout(
-          () =>
-            cancel(
-              new OrchestratorError(
-                'TIMEOUT',
-                'Request wait timed out; remote work was not cancelled',
-              ),
+      timer = setTimeout(
+        () =>
+          cancel(
+            new OrchestratorError(
+              'TIMEOUT',
+              'Request wait timed out; remote work was not cancelled',
             ),
-          options.timeoutMs,
-        );
+          ),
+        timeoutMs,
+      );
       this.pending.set(id, { resolve: resolve as (value: unknown) => void, reject, cleanup });
       this.socket.write(frame + '\n', (error) => {
         if (error) this.fail(new OrchestratorError('CONNECTION_CLOSED', error.message));

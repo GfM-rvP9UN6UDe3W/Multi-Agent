@@ -13,5 +13,6 @@
 - 新方法通过 initialize.capabilities.lifecycle={version:1,reconcile:"owner-attestation",durableDeadlines:true} 协商；wire 维持 1.0 的兼容扩展，旧 SDK 不调用新方法，新 SDK 在能力缺失时拒绝 reconcile。新增对象字段允许旧客户端忽略；schema 版本不因 JSON 对象的可选字段扩展改变，旧记录缺字段在恢复时保守 unknown，不自动迁移/重发。
 - Claude 适配器新增有限观察/清理等待。公开 API 的取消只用于资源收尾，不伪造停止证据；无法确认资源关闭时 close 返回 SHUTDOWN_INCOMPLETE。宿主 EOF 的紧急策略需有界执行并只处理自有资源。
 - `RuntimeAdapter.hasActiveResources(sessionId)` 是核对放行前的资源约束。若适配器在 `execute()` 结束后仍可能持有清理未确认的资源，就必须实现该查询；Claude 保留未确认的 Query，Codex 保留本次 spawn 的连接，直到观察到相应清理证据。Codex 只向自有子进程句柄发信号；TERM/KILL 各使用 `closeTimeoutMs` 原有阶段预算，不根据重启后的 PID 或进程名称查杀。
+- [SPEC-0004 R04 后续增量](./0004-runtime-reliability.md) 为 Claude 的“从未观察到进程”记录增加 owner-only 人工核对：`prepareUnobservedCleanup({sessionId,dispatchId,generation})` 只准备无副作用的同步 finalizer，审计事务提交后才调用；观察未结束、启动未封闭、有已观察进程或目标不匹配时必须拒绝。旧适配器不实现此接口则保持原阻挡语义。该人工处置不生成自动停止证据；主动 shutdown 未完成时仍允许此核对，新工作继续拒绝。
 
 验收包括可控单调时钟、回拨、超时前后、重启持久期限、迟到事件、权限拒绝、仅进程停止不放行、核对完成后的 resume 不重跑，以及真实 stdio/socket 接线和自有子进程清理。测试/源码变更只限本轮，RED/GREEN 证据单独记录。

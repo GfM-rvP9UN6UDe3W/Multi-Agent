@@ -781,7 +781,7 @@ Python 退出事件循环之前处理关闭异常。若调用者崩溃或管道 
 | outcome | `"not_executed"`、`"completed"`、`"failed"`、`"interrupted"` 或 `"unknown"` |
 | result | 仅 completed 必填，提供已核对的完整结果字符串；真实结果可为空，最大长度 524288，仍须人工验收 |
 
-下面两个函数接收**已经建立的所有者 SDK 实例、任务 ID、人工证据和持久业务键**；不根据超时自动生成 stopped/resolved 声明。它们重新读取精确目标、提交核对并返回最新状态，生命周期关闭仍由创建实例的应用按第 11.2 节处理。
+下面两个函数接收**已经建立的所有者 SDK 实例、任务 ID、人工证据和持久业务键**；不根据超时自动生成 stopped/resolved 声明。它们演示首次核对：读取精确目标、提交核对并返回最新状态。需要恢复能力的应用应在首次 RPC 前保存完整 target/evidence/key；失败后不要重新运行这个读取目标的函数，使用本节后面的原参数续办方式。生命周期关闭仍由创建实例的应用按第 11.2 节处理。
 
 ```ts
 import type { Orchestrator, ReconcileEvidence } from './packages/sdk-typescript/src/index.ts';
@@ -832,13 +832,35 @@ async def reconcile_reviewed_task(
     return {"operation": outcome, "task": await orch.tasks.get(task_id)}
 ```
 
-操作 completed 只表示核对记录已保存，须分别检查 `result.executionReleased` 与 `result.resolved` 及最新任务状态。两端资源均 stopped、无活动句柄或证据冲突时，业务 sideEffects/outcome 仍 unknown 也可返回 `executionReleased=true,resolved=false`：只释放 A，Q、blocked/outcome_unknown 及原 activeDispatchId 保留，不允许 resume。Python 的 operation.result 是原始 JSON，键保持 camelCase，读取 `receipt.result["executionReleased"]` 和 `receipt.result["resolved"]`，不要写成 `execution_released`。本地消费/清理资源未结束返回 RUNTIME_STILL_ACTIVE，声明与终态冲突返回 EVIDENCE_CONFLICT，目标变化返回 STALE_TARGET。遇到丢回执先用 `operations.lookup` 按 method=`sessions.reconcile`、scope=sessionId 和原 idempotencyKey 查询；保留原 target/evidence，不把重新读取后改变的目标塞入同一个键，也不换键盲目重试。
+操作 completed 表示核对记录及所需适配器记录收尾均已确认，须分别检查 `result.executionReleased` 与 `result.resolved` 及最新任务状态。两端资源均 stopped、无活动句柄或证据冲突时，业务 sideEffects/outcome 仍 unknown 也可返回 `executionReleased=true,resolved=false`：只释放 A，Q、blocked/outcome_unknown 及原 activeDispatchId 保留，不允许 resume。Python 的 operation.result 是原始 JSON，键保持 camelCase，读取 `receipt.result["executionReleased"]` 和 `receipt.result["resolved"]`，不要写成 `execution_released`。实际执行观察或已观察进程仍活跃时返回 RUNTIME_STILL_ACTIVE；R04 仅允许对已结束观察、封闭启动且从未观察到进程的精确记录进行所有者核对。声明与终态冲突返回 EVIDENCE_CONFLICT，目标变化返回 STALE_TARGET。遇到丢回执先用 `operations.lookup` 按 method=`sessions.reconcile`、scope=sessionId 和原 idempotencyKey 查询；保留原 target/evidence，不把重新读取后改变的目标塞入同一个键，也不换键盲目重试。
+
+R04 收尾增加两个 result 字段：`unobservedResourcesReconciled` 仅在未知资源记录已解除并持久确认后为 true；没有此类记录或仍 pending 时为 false。可选 `resourceCleanup={status:"pending"|"completed",ownerInstanceId}` 只在需要该收尾时存在。Python 读取 `receipt.result["unobservedResourcesReconciled"]` 和 `receipt.result.get("resourceCleanup")`，对象内部的 ownerInstanceId 同样保持 camelCase。
+
+收到 RESOURCE_CLEANUP_INCOMPLETE 表示**声明已提交，但收尾未确认**：错误携带 operationId、auditCommitted=true（Python 为 `error.operation_id` 与 `error.data["auditCommitted"]`）；此前的资源/业务决定不会回滚。本宿主以 RESOURCE_CLEANUP_PENDING 暂停新派发。先 get/lookup 查看原回执，再由所有者显式决定是否继续。`operations.get/lookup` 和 `OperationHandle.wait()` 都只读，persisted 不在终态集合内，单纯 wait 会轮询至本地超时，不会调用 finalizer。
+
+下面片段用于**同一个仍存活的所有者**显式续办；originalTarget/originalEvidence/originalKey 是首次请求前保存的完整值：
+
+```ts
+const operation = await owner.sessions.reconcile(originalTarget, originalEvidence, {
+  idempotencyKey: originalKey,
+});
+const receipt = await operation.wait({ timeoutMs: 10_000 });
+```
+
+```python
+operation = await owner.sessions.reconcile(
+    original_target, original_evidence, idempotency_key=original_key,
+)
+receipt = await operation.wait(timeout=10)
+```
+
+同键重试继续原 finalizer；记录已解除但确认落盘失败时，只补写确认。再次失败仍保存原错误和参数，不自动循环或换键。宿主重启会丢失原内存 finalizer，原回执转 outcome_unknown，同键重试仍返回 RESOURCE_CLEANUP_INCOMPLETE；重启后内存阻塞消失、或 wait 返回 unknown，都不能当作原收尾成功。
 
 业务核对完成后，completed 保存完整结果并保持任务 paused，显式 `tasks.resume` 只重新申请人工验收；not_executed 允许显式 resume 重排；failed/interrupted 将原任务置 failed。原 unknown 控制操作保留历史并追加 resolution，不会伪装为按时完成。A 的历史验证记录保留在 [原生命周期证据](./docs/tdd/0003-a-evidence.md)，本轮新增行为见 [A2 接线证据](./docs/tdd/0003-a2-wiring.md)。
 
 ### 11.5 本轮已实现：调度查询与资源冲突
 
-`limits.maxQuarantinedDispatches` 默认 32，接受 1..1024 整数且不小于有效 `maxActiveSessions`（默认 2）。`scheduler.get()` 返回一致数据库快照：A=`executionOccupied` 为 held 执行租约；Q=`quarantined` 为业务 unknown；R=`quarantineReserved` 为未隔离在途预留，包含初始化和待清理。A 与 Q 可重叠。新派发需 `A < maxActiveSessions` 且 `Q + R < maxQuarantinedDispatches`。到达隔离上限拒绝新增工作，原幂等回执、查询、取消、核对、批准、关闭及已有成果重申验收仍可处理。
+`limits.maxQuarantinedDispatches` 默认 32，接受 1..1024 整数且不小于有效 `maxActiveSessions`（默认 2）。`scheduler.get()` 在同一事务读取数据库中的 A/Q/R 和冲突数据：A=`executionOccupied` 为 held 执行租约；Q=`quarantined` 为业务 unknown；R=`quarantineReserved` 为未隔离在途预留，包含初始化和待清理。canDispatch/reasons 还结合本宿主关闭标志与内存收尾记录，整体不是纯数据库快照。A 与 Q 可重叠。新派发需 `A < maxActiveSessions` 且 `Q + R < maxQuarantinedDispatches`，同时没有关闭、收尾或冲突阻塞。到达隔离上限拒绝新增工作，原幂等回执、查询、取消、核对、批准、关闭及已有成果重申验收仍可处理。
 
 下面的 `orch` 是已经建立的 SDK 实例；查询不需要所有者权限，也不调用模型。占用/冲突示例各最多 16 条，结合 `truncated`、`conflictsTruncated` 与总数读取。
 
@@ -861,7 +883,7 @@ if status.conflicts:
     print(conflict.id, conflict.revision, conflict.dispatch_id, conflict.status)
 ```
 
-三个 scheduler 方法都要求精确的 `initialize.capabilities.executionIsolation={version:1,resourceRelease:true,schedulerStatus:true,ownerConflictResolution:true,budgetVersion:2}`；能力缺失或值不兼容时，SDK 发送前返回 UNSUPPORTED_CAPABILITY。普通 socket 可查询，解除操作仍由服务端检查所有者身份。稳定阻塞原因包括 EXECUTION_CAPACITY_EXHAUSTED、QUARANTINE_CAPACITY_EXCEEDED、HOST_STOPPING 和 EXECUTION_EVIDENCE_CONFLICT。`sessions.get` 的可选 `execution` 包含 dispatchId、lease、quarantined、lastEvidence 及 budget；budget 保存 policyVersion=2、起止时间、有效受理/总预算与来源。Python 将这些已知快照字段映射为 snake_case，内部剩余时间回调不进入 wire。
+三个 scheduler 方法都要求精确的 `initialize.capabilities.executionIsolation={version:1,resourceRelease:true,schedulerStatus:true,ownerConflictResolution:true,budgetVersion:2}`；能力缺失或值不兼容时，SDK 发送前返回 UNSUPPORTED_CAPABILITY。普通 socket 可查询，解除操作仍由服务端检查所有者身份。当前稳定阻塞原因包括 EXECUTION_CAPACITY_EXHAUSTED、QUARANTINE_CAPACITY_EXCEEDED、HOST_STOPPING、RESOURCE_CLEANUP_PENDING 和 EXECUTION_EVIDENCE_CONFLICT，客户端须容忍未来新增原因。RESOURCE_CLEANUP_PENDING 的所有者续办步骤见上一节。`sessions.get` 的可选 `execution` 包含 dispatchId、lease、quarantined、lastEvidence 及 budget；budget 保存 policyVersion=2、起止时间、有效受理/总预算与来源。Python 将这些已知快照字段映射为 snake_case，内部剩余时间回调不进入 wire。
 
 已经 released 的原执行出现匹配矛盾证据时，冲突会持久阻止新派发，重启不解除。以下函数只接受**已建立的所有者实例、指定 conflictId、已核对的停止声明和持久业务键**。evidence 使用 `ReconcileEvidence`，localResources/remoteExecution（Python 为 snake_case）都必须为 stopped，业务 sideEffects/outcome 可为 unknown；不能根据超时自行生成声明。
 

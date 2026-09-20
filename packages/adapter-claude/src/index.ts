@@ -7,6 +7,7 @@ import type {
   RuntimeTerminalEvent,
 } from '../../engine/src/types.ts';
 import { performance } from 'node:perf_hooks';
+import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 
 type RecordValue = Record<string, unknown>;
 function record(value: unknown): RecordValue | null {
@@ -21,6 +22,14 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+export interface ClaudeSpawnOptions {
+  command: string;
+  args: string[];
+  cwd?: string;
+  env: Record<string, string | undefined>;
+  signal: AbortSignal;
+}
+
 export interface ClaudeQueryRequest {
   prompt: string;
   options: {
@@ -33,9 +42,10 @@ export interface ClaudeQueryRequest {
     disallowedTools: string[];
     permissionMode: 'dontAsk';
     abortController: AbortController;
+    spawnClaudeCodeProcess: (options: ClaudeSpawnOptions) => ChildProcessWithoutNullStreams;
   };
 }
-export type ClaudeQuery = AsyncIterable<unknown> & { close?(): void };
+export type ClaudeQuery = AsyncIterable<unknown> & { close?(): void | Promise<void> };
 export type ClaudeQueryFactory = (request: ClaudeQueryRequest) => ClaudeQuery;
 export interface ClaudeAdapterConfig {
   query?: ClaudeQueryFactory;
@@ -45,11 +55,20 @@ export interface ClaudeAdapterConfig {
 }
 export interface ClaudeRuntimeAdapter extends RuntimeAdapter {
   hasActiveResources(sessionId: string): boolean;
+  close(): Promise<void>;
 }
 interface ActiveQuery {
   sessionId: string;
+  dispatchId: string;
+  generation: number;
   controller: AbortController;
-  query: ClaudeQuery;
+  query: ClaudeQuery | null;
+  processes: Set<{ child: ChildProcessWithoutNullStreams; exited: boolean }>;
+  spawnObserved: boolean;
+  cleanupRequested: boolean;
+  observationEnded: boolean;
+  stopped: Promise<void>;
+  resolveStopped: () => void;
   iterator: AsyncIterator<unknown> | null;
   cleaned: boolean;
   cleanupPromise: Promise<boolean> | null;
@@ -134,61 +153,123 @@ export function createClaudeAdapter(config: ClaudeAdapterConfig = {}): ClaudeRun
   const active = new Set<ActiveQuery>();
   let closed = false;
 
+  function confirmCleanup(handle: ActiveQuery): void {
+    if (
+      handle.cleaned ||
+      !handle.cleanupRequested ||
+      !handle.spawnObserved ||
+      [...handle.processes].some((process) => !process.exited)
+    )
+      return;
+    handle.cleaned = true;
+    active.delete(handle);
+    handle.resolveStopped();
+    handle.onCleanupConfirmed();
+  }
+
+  function spawnOwned(
+    handle: ActiveQuery,
+    options: ClaudeSpawnOptions,
+  ): ChildProcessWithoutNullStreams {
+    // Seal the factory's launch callback before cleanup; a delayed SDK spawn cannot escape ownership.
+    if (
+      closed ||
+      handle.cleanupRequested ||
+      handle.controller.signal.aborted ||
+      options.signal.aborted
+    )
+      throw new Error('Claude process spawn rejected after cancellation or cleanup');
+    handle.spawnObserved = true;
+    const child = spawn(options.command, options.args, {
+      cwd: options.cwd,
+      env: options.env,
+      signal: options.signal,
+      stdio: 'pipe',
+      windowsHide: true,
+    });
+    const state = { child, exited: false };
+    handle.processes.add(state);
+    child.once('exit', () => {
+      state.exited = true;
+      confirmCleanup(handle);
+    });
+    child.on('error', () => {
+      // ENOENT/EACCES before a PID exists means no child was created. A later error is not exit proof.
+      if (child.pid === undefined) {
+        state.exited = true;
+        confirmCleanup(handle);
+      }
+    });
+    // This adapter has no stderr consumer API; always drain the private pipe to prevent backpressure.
+    child.stderr.resume();
+    child.stdin.on('error', () => {
+      /* A closed private pipe is not process exit evidence. */
+    });
+    return child;
+  }
+
   function cleanup(handle: ActiveQuery): Promise<boolean> {
     if (handle.cleaned) return Promise.resolve(true);
     if (handle.cleanupPromise) return handle.cleanupPromise;
+    const startedAt = performance.now();
+    handle.cleanupRequested = true;
     handle.controller.abort();
     handle.cleanupPromise = (async () => {
-      const markCleaned = (): void => {
-        if (handle.cleaned) return;
-        handle.cleaned = true;
-        active.delete(handle);
-        handle.onCleanupConfirmed();
-      };
-      let closeConfirmed = false;
-      if (typeof handle.query.close === 'function') {
-        try {
-          handle.query.close();
-          // The public Query.close() contract says the subprocess and transports are terminated.
-          closeConfirmed = true;
-        } catch {
-          /* A completed iterator.return() may still confirm cleanup. */
+      let recovered = false;
+      const recoverOwned = (): void => {
+        if (recovered) return;
+        recovered = true;
+        for (const { child, exited } of handle.processes) {
+          if (exited) continue;
+          try {
+            child.stdin.end();
+          } catch {
+            /* Still attempt signalling if the private pipe cannot be closed. */
+          }
+          try {
+            child.kill('SIGTERM');
+          } catch {
+            /* Failed signalling is not exit proof; retain the original handle. */
+          }
         }
-      }
-      let returned: Promise<boolean>;
+      };
+      let closeStarted = false;
       try {
-        returned =
-          typeof handle.iterator?.return === 'function'
-            ? Promise.resolve(handle.iterator.return()).then(
-                (result) => {
-                  try {
-                    return result?.done === true;
-                  } catch {
-                    return false;
-                  }
-                },
-                () => false,
-              )
-            : Promise.resolve(false);
+        if (handle.query?.close) {
+          // Also observe a custom factory's async close without treating its resolution as exit proof.
+          void Promise.resolve(handle.query.close()).catch(recoverOwned);
+          closeStarted = true;
+        }
       } catch {
-        returned = Promise.resolve(false);
+        /* Recover only the child handles captured by this execution. */
       }
-      returned.then((ok) => {
-        if (ok) markCleaned();
-      });
-      if (closeConfirmed) {
-        markCleaned();
-        return true;
+      if (!closeStarted) recoverOwned();
+      try {
+        // Observe rejection even when the iterator stays pending beyond our bounded cleanup wait.
+        void Promise.resolve(handle.iterator?.return?.()).catch(() => {});
+      } catch {
+        /* A throwing iterator does not discard the owned process handles. */
       }
-      const withinCleanup = await new Promise<boolean>((resolve) => {
-        const timer = setTimeout(() => resolve(false), cleanupTimeoutMs);
-        returned.then((ok) => {
+      confirmCleanup(handle);
+      if (handle.cleaned) return true;
+      return new Promise<boolean>((resolve) => {
+        // Give SDK cleanup a grace period, then independently recover owned children even if
+        // close()/return() never settle or the SDK did not forward our AbortController.
+        const elapsed = performance.now() - startedAt;
+        const recoveryTimer = setTimeout(recoverOwned, Math.max(0, cleanupTimeoutMs / 2 - elapsed));
+        const timer = setTimeout(
+          () => {
+            clearTimeout(recoveryTimer);
+            resolve(false);
+          },
+          Math.max(0, cleanupTimeoutMs - elapsed),
+        );
+        handle.stopped.then(() => {
           clearTimeout(timer);
-          resolve(ok);
+          clearTimeout(recoveryTimer);
+          resolve(true);
         });
       });
-      if (withinCleanup) markCleaned();
-      return withinCleanup;
     })();
     return handle.cleanupPromise;
   }
@@ -197,6 +278,27 @@ export function createClaudeAdapter(config: ClaudeAdapterConfig = {}): ClaudeRun
     provider: 'claude',
     hasActiveResources(sessionId: string): boolean {
       return [...active].some((handle) => handle.sessionId === sessionId && !handle.cleaned);
+    },
+    prepareUnobservedCleanup(target) {
+      const handles = [...active].filter((handle) => handle.sessionId === target.sessionId);
+      if (
+        handles.length === 0 ||
+        handles.some(
+          (handle) =>
+            handle.dispatchId !== target.dispatchId ||
+            handle.generation !== target.generation ||
+            !handle.cleanupRequested ||
+            !handle.observationEnded ||
+            handle.spawnObserved ||
+            handle.processes.size !== 0,
+        )
+      )
+        return null;
+      return () => {
+        // Owner attestation retires bookkeeping only. Keep cleaned=false for late observations;
+        // neither this disposition nor hasActiveResources=false is an automatic exit certificate.
+        for (const handle of handles) active.delete(handle);
+      };
     },
     capabilities: () => ({
       provider: 'claude',
@@ -301,6 +403,10 @@ export function createClaudeAdapter(config: ClaudeAdapterConfig = {}): ClaudeRun
           disallowedTools: ['mcp__*'],
           permissionMode: 'dontAsk',
           abortController: controller,
+          spawnClaudeCodeProcess: (options) => {
+            if (!handle) throw new Error('Claude process ownership is unavailable');
+            return spawnOwned(handle, options);
+          },
         },
       };
       let submitted = false;
@@ -375,11 +481,22 @@ export function createClaudeAdapter(config: ClaudeAdapterConfig = {}): ClaudeRun
           ];
         } else {
           submitted = true;
-          const query = factory(request);
+          let resolveStopped!: () => void;
+          const stopped = new Promise<void>((resolve) => {
+            resolveStopped = resolve;
+          });
           handle = {
             sessionId: input.sessionId,
+            dispatchId: input.dispatchId,
+            generation: input.generation ?? 1,
             controller,
-            query,
+            query: null,
+            processes: new Set(),
+            spawnObserved: false,
+            cleanupRequested: false,
+            observationEnded: false,
+            stopped,
+            resolveStopped,
             iterator: null,
             cleaned: false,
             cleanupPromise: null,
@@ -392,6 +509,8 @@ export function createClaudeAdapter(config: ClaudeAdapterConfig = {}): ClaudeRun
               ),
           };
           active.add(handle);
+          const query = factory(request);
+          handle.query = query;
           const iterator = query[Symbol.asyncIterator]();
           handle.iterator = iterator;
           while (true) {
@@ -500,7 +619,10 @@ export function createClaudeAdapter(config: ClaudeAdapterConfig = {}): ClaudeRun
               ];
       } finally {
         input.signal.removeEventListener('abort', onAbort);
-        if (handle) cleanupConfirmed = await cleanup(handle);
+        if (handle) {
+          cleanupConfirmed = await cleanup(handle);
+          handle.observationEnded = true;
+        }
       }
       if (!cleanupConfirmed) {
         const reason = pending.find((event) => event.type === 'error');

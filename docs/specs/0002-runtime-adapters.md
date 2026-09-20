@@ -14,7 +14,11 @@
 
 成功的 SDK `result` 产生终态 `result`。`usage` 缺字段保留 `null`，不推导费用或零用量；本增量从终态 `usage` 取四类 token 字段，按 `dispatchId:result` 去重。`query()` 已启动但未收到终态时保留 unknown。上游 SDK 作为 peer dependency 可选，离线测试不会加载它；真实调用要求调用方安装兼容版本并提供官方支持的身份验证。
 
-0003-A 已增加单调时钟期限：`requestTimeoutMs` 默认 30 秒（执行开始至受理）、`turnTimeoutMs` 默认 300 秒（受理至终态）、`cleanupTimeoutMs` 默认 1 秒，均为有限正整数毫秒。普通流消息不延长期限。超时和取消触发自有查询清理，但提交后不能仅凭取消信号报告 interrupted。`Query.close()` 按公开契约完成，或迭代器 `return()` 返回 `done:true` 后，才确认资源清理；未确认时保持 unknown、`close()` 拒绝，并通过 `hasActiveResources(sessionId)` 保留资源占用。成功结果和用量在清理确认后才交付。此资源状态供引擎拒绝不实的“已停止”核对声明，不是上游业务结果自动 inspection。
+0003-A 引入单调时钟期限，A2 已将新轮次总预算统一为默认 1800 秒、包含受理等待；`requestTimeoutMs` 默认 30 秒，`cleanupTimeoutMs` 默认 1 秒，普通流消息不延长期限。超时和取消触发自有查询清理，但提交后不能仅凭取消信号报告 interrupted。
+
+[SPEC-0004 AC-R04](./0004-runtime-reliability.md) 修正原清理假设：`Query.close()` 返回、迭代器 `return(done:true)` 和 AbortSignal 均不证明子进程已退出。通过官方 `spawnClaudeCodeProcess` 回调记录本次自有进程，只有观察到实际 exit，或确认未产生 PID 的启动失败后，才确认该句柄结束；清理开始后拒绝迟到启动。多个句柄须全部结束。有限等待未确认时保持 unknown、adapter.close 拒绝，并通过 `hasActiveResources(sessionId)` 保留占用；迟到退出可更新资源证据。成功结果和用量在本地清理确认后才交付，但本地退出本身不是远端终态或业务成果验收。注入 query factory 必须通过该回调提供可观察进程；no-op close 不再满足测试清理契约。
+
+R04 后续增量在原 cleanupTimeoutMs 内分配半段 SDK 清理宽限、半段自有 stdin EOF/SIGTERM 兜底退出等待；无 close 或 close 失败时立即兜底，不依赖 SDK 转交 signal，也不等待永久 pending 的 close/return。无效返回仍触发兜底，拒绝退出则保持 unknown。从未观察到 spawn 的记录不自动释放；仅当观察结束、启动封闭且原目标匹配时，可由 owner reconcile 在审计事务提交后解除记录，不生成 resource_observation。真实活进程不能通过这个接口绕过。
 
 ## Codex App Server
 

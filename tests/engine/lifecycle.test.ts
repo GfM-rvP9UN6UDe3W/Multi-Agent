@@ -666,20 +666,26 @@ test('0003-A01 delayed timer delivery cannot let an overdue terminal complete a 
 
 test('0003-A05 retained adapter cleanup blocks attestation after the observation loop ends', async () => {
   const { createClaudeAdapter } = await import('../../packages/adapter-claude/src/index.ts');
+  const { stubbornClaudeProcess } = await import('../fixtures/claude-process.ts');
+  let child: ReturnType<typeof stubbornClaudeProcess>['child'] | undefined;
   const dir = await mkdtemp(join(tmpdir(), 'orch-retained-cleanup-'));
   const workspace = join(dir, 'workspace');
   await mkdir(workspace);
   let finishReturn!: (value: IteratorResult<unknown>) => void;
   const adapter = createClaudeAdapter({
-    requestTimeoutMs: 20,
-    turnTimeoutMs: 20,
+    requestTimeoutMs: 1000,
+    turnTimeoutMs: 1000,
     cleanupTimeoutMs: 5,
-    query() {
+    query(request) {
+      const held = stubbornClaudeProcess(request);
+      child = held.child;
       let first = true;
       return {
+        close() {},
         [Symbol.asyncIterator]() {
           return {
-            next() {
+            async next() {
+              await held.ready;
               if (first) {
                 first = false;
                 return Promise.resolve({
@@ -687,7 +693,7 @@ test('0003-A05 retained adapter cleanup blocks attestation after the observation
                   value: { type: 'system', session_id: 'native-cleanup' },
                 });
               }
-              return new Promise<IteratorResult<unknown>>(() => {});
+              return { done: true, value: undefined };
             },
             return() {
               return new Promise<IteratorResult<unknown>>((r) => {
@@ -727,6 +733,11 @@ test('0003-A05 retained adapter cleanup blocks attestation after the observation
   } finally {
     finishReturn?.({ done: true, value: undefined });
     await flush();
+    if (child && child.exitCode === null && child.signalCode === null) {
+      const exited = once(child, 'exit');
+      child.kill('SIGKILL');
+      await exited;
+    }
     await engine.close({ timeoutMs: 1000 });
     await rm(dir, { recursive: true, force: true });
   }

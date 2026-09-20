@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "urn:agent-orch:foundation:1.0",
   "title": "Agent orchestration foundation protocol 1.0",
-  "description": "Canonical wire models for SPEC-0001 and the compatible SPEC-0003-A lifecycle and SPEC-0003-A2 execution isolation extensions. Envelope and payload types use camelCase on the wire in both SDKs.",
+  "description": "Canonical wire models for SPEC-0001 and the compatible SPEC-0003-A lifecycle and SPEC-0003-A2 execution isolation extensions, checked against real host payloads by SPEC-0005 tests. Envelope and payload types use camelCase on the wire in both SDKs.",
   "$defs": {
     "RuntimeSpec": {
       "type": "object",
@@ -67,6 +67,102 @@
         "failed",
         "cancelled"
       ]
+    },
+    "TaskSnapshot": {
+      "type": "object",
+      "required": [
+        "id",
+        "status",
+        "revision",
+        "sessionId",
+        "spec",
+        "artifactRefs",
+        "result",
+        "reason",
+        "approvalId",
+        "createdAt",
+        "updatedAt"
+      ],
+      "properties": {
+        "id": { "type": "string" },
+        "status": { "$ref": "#/$defs/TaskStatus" },
+        "revision": { "type": "integer", "minimum": 1 },
+        "sessionId": { "type": "string" },
+        "spec": { "$ref": "#/$defs/TaskSpec" },
+        "artifactRefs": { "type": "array", "items": { "type": "string" } },
+        "result": { "type": ["string", "null"] },
+        "reason": { "type": ["string", "null"] },
+        "approvalId": { "type": ["string", "null"] },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      }
+    },
+    "ApprovalRequest": {
+      "type": "object",
+      "required": [
+        "approvalId",
+        "taskId",
+        "purpose",
+        "revision",
+        "status",
+        "target",
+        "summary",
+        "evidenceRefs",
+        "expiresAt"
+      ],
+      "properties": {
+        "approvalId": { "type": "string" },
+        "taskId": { "type": "string" },
+        "purpose": { "const": "task_acceptance" },
+        "revision": { "type": "integer", "minimum": 1 },
+        "status": { "enum": ["pending", "approved", "denied", "expired", "invalidated"] },
+        "target": {
+          "type": "object",
+          "required": ["taskId", "taskRevision", "artifactRefs"],
+          "properties": {
+            "taskId": { "type": "string" },
+            "taskRevision": { "type": "integer", "minimum": 1 },
+            "artifactRefs": { "type": "array", "items": { "type": "string" } }
+          }
+        },
+        "summary": { "type": "string" },
+        "evidenceRefs": { "type": "array", "items": { "type": "string" } },
+        "expiresAt": { "type": "string", "format": "date-time" }
+      }
+    },
+    "UsageRecord": {
+      "type": "object",
+      "description": "Reported integer token counts or null when unknown. Raw provider JSON retains its original keys and is not synthesized into zero usage or cost.",
+      "required": [
+        "id",
+        "taskId",
+        "dispatchId",
+        "provider",
+        "inputTokens",
+        "cachedInputTokens",
+        "cacheWriteInputTokens",
+        "outputTokens",
+        "raw"
+      ],
+      "properties": {
+        "id": { "type": "string" },
+        "taskId": { "type": "string" },
+        "dispatchId": { "type": "string" },
+        "provider": { "type": "string" },
+        "inputTokens": { "type": ["integer", "null"], "minimum": 0, "maximum": 9007199254740991 },
+        "cachedInputTokens": {
+          "type": ["integer", "null"],
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "cacheWriteInputTokens": {
+          "type": ["integer", "null"],
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "outputTokens": { "type": ["integer", "null"], "minimum": 0, "maximum": 9007199254740991 },
+        "raw": {}
+      }
     },
     "SessionStatus": {
       "enum": ["idle", "running", "pausing", "paused", "closed", "outcome_unknown"]
@@ -229,7 +325,11 @@
         "quarantined": { "type": "integer", "minimum": 0 },
         "quarantineReserved": { "type": "integer", "minimum": 0 },
         "canDispatch": { "type": "boolean" },
-        "reasons": { "type": "array", "items": { "type": "string" } },
+        "reasons": {
+          "type": "array",
+          "description": "Current reasons include EXECUTION_CAPACITY_EXHAUSTED, QUARANTINE_CAPACITY_EXCEEDED, HOST_STOPPING, RESOURCE_CLEANUP_PENDING and EXECUTION_EVIDENCE_CONFLICT. Clients must tolerate additional reason strings. Counts come from persisted dispatches; reasons also reflect this host's shutdown and in-memory cleanup state.",
+          "items": { "type": "string" }
+        },
         "occupants": {
           "type": "array",
           "maxItems": 16,
@@ -387,7 +487,9 @@
         "idempotencyKey": { "type": "string" },
         "status": { "$ref": "#/$defs/OperationStatus" },
         "targetId": { "type": "string" },
-        "result": {},
+        "result": {
+          "description": "Method-specific raw JSON with original camelCase keys. sessions.reconcile may report executionReleased, resolved, unobservedResourcesReconciled and resourceCleanup. A pending cleanup requires the owner to retry reconcile with the original target, evidence and key; reading or waiting on this operation does not execute cleanup."
+        },
         "error": {
           "oneOf": [
             { "type": "null" },
@@ -514,6 +616,46 @@
             "type": "string",
             "minLength": 1
           }
+        }
+      }
+    },
+    "MessageSnapshot": {
+      "type": "object",
+      "description": "Persisted message output, including server identity and status. This intentionally does not allOf the strict input MessageSpec, which rejects server-added fields. control messages remain unsupported; use sessions.control.",
+      "required": [
+        "id",
+        "fromSessionId",
+        "idempotencyKey",
+        "status",
+        "taskId",
+        "toSessionId",
+        "expectedGeneration",
+        "kind",
+        "summary"
+      ],
+      "properties": {
+        "id": { "type": "string" },
+        "fromSessionId": { "type": "string" },
+        "idempotencyKey": { "type": "string" },
+        "status": {
+          "enum": [
+            "persisted",
+            "dispatching",
+            "runtime_accepted",
+            "completed",
+            "failed",
+            "outcome_unknown"
+          ]
+        },
+        "taskId": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "toSessionId": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "expectedGeneration": { "type": "integer", "minimum": 1 },
+        "kind": { "enum": ["assignment", "finding", "result", "question"] },
+        "summary": { "type": "string", "minLength": 1, "maxLength": 65536 },
+        "artifactRefs": {
+          "type": "array",
+          "maxItems": 100,
+          "items": { "type": "string", "minLength": 1 }
         }
       }
     },

@@ -3,7 +3,7 @@ import { mkdirSync, realpathSync, chmodSync, writeFileSync, existsSync } from 'n
 import { isAbsolute, relative, join, sep, dirname, basename, resolve } from 'node:path';
 import { randomUUID, createHash } from 'node:crypto';
 import { fail } from './errors.ts';
-import type { EventEnvelope, EventPage, Json, OperationSnapshot } from './types.ts';
+import type { EventEnvelope, EventPage, Json, OperationSnapshot, TaskSnapshot } from './types.ts';
 
 const TABLES = [
   'tasks',
@@ -121,6 +121,12 @@ export class Store {
           'CREATE TABLE IF NOT EXISTS events (cursor INTEGER PRIMARY KEY AUTOINCREMENT,taskId TEXT,data TEXT NOT NULL)',
         );
         this.db.exec('CREATE INDEX IF NOT EXISTS events_task_cursor ON events(taskId,cursor)');
+        this.db.exec(
+          "CREATE INDEX IF NOT EXISTS tasks_status ON tasks(json_extract(data, '$.status'))",
+        );
+        this.db.exec(
+          "CREATE INDEX IF NOT EXISTS dispatches_task ON dispatches(json_extract(data, '$.taskId'))",
+        );
         const set = this.db.prepare('INSERT OR IGNORE INTO metadata(key,value) VALUES (?,?)');
         set.run('schemaVersion', '2');
         if (version === '1')
@@ -166,6 +172,22 @@ export class Store {
     return (
       this.db.prepare(`SELECT data FROM ${table} ORDER BY rowid`).all() as { data: string }[]
     ).map((row) => JSON.parse(row.data));
+  }
+  queuedTasks(): TaskSnapshot[] {
+    return (
+      this.db
+        .prepare(
+          "SELECT data FROM tasks WHERE json_extract(data, '$.status')='queued' ORDER BY rowid",
+        )
+        .all() as { data: string }[]
+    ).map((row) => JSON.parse(row.data));
+  }
+  dispatchCount(taskId: string): number {
+    return (
+      this.db
+        .prepare("SELECT count(*) AS count FROM dispatches WHERE json_extract(data, '$.taskId')=?")
+        .get(taskId) as { count: number }
+    ).count;
   }
   put(table: Table, id: string, value: unknown): void {
     this.db

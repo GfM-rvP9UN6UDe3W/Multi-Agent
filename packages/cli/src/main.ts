@@ -2,9 +2,10 @@
 import { readFile } from 'node:fs/promises';
 import { pathToFileURL } from 'node:url';
 import { createEngine } from '../../engine/src/index.ts';
+import type { CloseOptions } from '../../engine/src/types.ts';
 import { connectOrchestrator } from '../../sdk-typescript/src/index.ts';
 import { engineConfig, loadConfig } from './config.ts';
-import { startStdioHost, startUnixHost } from './host.ts';
+import { OWNER_EOF_TIMEOUT_MS, startStdioHost, startUnixHost } from './host.ts';
 
 function fail(code: string, message: string): never {
   throw Object.assign(new Error(message), { code });
@@ -34,6 +35,43 @@ function print(value: unknown) {
   process.stdout.write(JSON.stringify(value) + '\n');
 }
 
+async function waitForHostSignals(
+  closed: Promise<void>,
+  close: (options: CloseOptions) => Promise<void>,
+  options: CloseOptions,
+) {
+  let stopping = false;
+  let operationId: string | undefined;
+  const stop = () => {
+    if (stopping) return;
+    stopping = true;
+    close({ ...options, ...(operationId ? { operationId } : {}) })
+      .catch((error) => {
+        const pendingId =
+          error.operationId ?? error.details?.operationId ?? error.data?.operationId;
+        if (typeof pendingId === 'string') operationId = pendingId;
+        console.error(
+          JSON.stringify({
+            code: error.code ?? 'SHUTDOWN_FAILED',
+            message: error.message,
+            ...(operationId ? { operationId } : {}),
+          }),
+        );
+      })
+      .finally(() => {
+        stopping = false;
+      });
+  };
+  process.on('SIGTERM', stop);
+  process.on('SIGINT', stop);
+  try {
+    await closed;
+  } finally {
+    process.removeListener('SIGTERM', stop);
+    process.removeListener('SIGINT', stop);
+  }
+}
+
 export async function main(argv = process.argv.slice(2)): Promise<void> {
   const [command, ...args] = argv;
   if (command === '--help' || command === 'help') {
@@ -55,42 +93,18 @@ export async function main(argv = process.argv.slice(2)): Promise<void> {
     if (!stdio && !socketPath)
       fail('INVALID_ARGUMENT', 'Use --stdio, --socket PATH, or configure transport.socketPath');
     const engine = await createEngine(await engineConfig(config));
+    const shutdown = {
+      mode: config.shutdown?.mode ?? 'interrupt',
+      timeoutMs: config.shutdown?.timeoutMs ?? (stdio ? OWNER_EOF_TIMEOUT_MS : 1000),
+    } satisfies CloseOptions;
     try {
       if (stdio) {
         const connection = startStdioHost(engine);
-        const stop = () => connection.close();
-        process.once('SIGTERM', stop);
-        process.once('SIGINT', stop);
-        try {
-          await connection.closed;
-        } finally {
-          process.removeListener('SIGTERM', stop);
-          process.removeListener('SIGINT', stop);
-        }
+        await waitForHostSignals(connection.closed, connection.shutdown, shutdown);
       } else {
         const host = await startUnixHost(engine, { socketPath: socketPath! });
-        let stopping = false;
-        const stop = () => {
-          if (stopping) return;
-          stopping = true;
-          host
-            .close({ mode: 'interrupt', timeoutMs: config.shutdown?.timeoutMs ?? 1000 })
-            .catch((error) => {
-              stopping = false;
-              console.error(
-                JSON.stringify({ code: error.code ?? 'SHUTDOWN_FAILED', message: error.message }),
-              );
-            });
-        };
-        process.on('SIGTERM', stop);
-        process.on('SIGINT', stop);
         process.stderr.write(`agent-orch listening on ${socketPath}\n`);
-        try {
-          await host.closed;
-        } finally {
-          process.removeListener('SIGTERM', stop);
-          process.removeListener('SIGINT', stop);
-        }
+        await waitForHostSignals(host.closed, host.close, shutdown);
       }
     } catch (error) {
       await engine.close({ mode: 'interrupt', timeoutMs: 1000 }).catch(() => {});

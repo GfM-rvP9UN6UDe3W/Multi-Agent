@@ -1,4 +1,5 @@
 import test from 'node:test';
+import { once } from 'node:events';
 import assert from 'node:assert/strict';
 import { mkdtemp, mkdir, realpath, rm, writeFile, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -282,6 +283,8 @@ test(
       }
     }
 
+    const { claudeProcess, stubbornClaudeProcess } = await import('../fixtures/claude-process.ts');
+    let child: ReturnType<typeof claudeProcess> | undefined;
     let cleanupBegan!: () => void;
     let finishCleanup!: (value: IteratorResult<unknown>) => void;
     const started = new Promise<void>((resolve) => {
@@ -291,27 +294,33 @@ test(
       finishCleanup = resolve;
     });
     // Add an offline query seam after parsing; JSON never permits an executable query field.
-    config.providers.claude.query = () => ({
-      [Symbol.asyncIterator]() {
-        return {
-          async next() {
-            return {
-              done: false,
-              value: {
-                type: 'result',
-                subtype: 'success',
-                session_id: 'cleanup-provider',
-                result: 'done',
-              },
-            };
-          },
-          return() {
-            cleanupBegan();
-            return cleanup;
-          },
-        };
-      },
-    });
+    config.providers.claude.query = (request: Parameters<typeof claudeProcess>[0]) => {
+      const held = stubbornClaudeProcess(request);
+      child = held.child;
+      return {
+        close() {},
+        [Symbol.asyncIterator]() {
+          return {
+            async next() {
+              await held.ready;
+              return {
+                done: false,
+                value: {
+                  type: 'result',
+                  subtype: 'success',
+                  session_id: 'cleanup-provider',
+                  result: 'done',
+                },
+              };
+            },
+            return() {
+              cleanupBegan();
+              return cleanup;
+            },
+          };
+        },
+      };
+    };
     const adapter = (await engineConfig(config)).adapters[0];
     t.mock.timers.enable({ apis: ['setTimeout'] });
     let finished = false;
@@ -347,6 +356,12 @@ test(
       finishCleanup({ done: true, value: undefined });
       await collection;
       await new Promise<void>((resolve) => setImmediate(resolve));
+      assert.equal(adapter.hasActiveResources?.('cleanup-session'), true);
+      if (child && child.exitCode === null && child.signalCode === null) {
+        const exited = once(child, 'exit');
+        child.kill('SIGKILL');
+        await exited;
+      }
       await adapter.close?.();
     }
   },

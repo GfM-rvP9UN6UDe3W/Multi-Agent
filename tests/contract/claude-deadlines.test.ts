@@ -68,7 +68,7 @@ test('Claude acceptance deadline bounds a never-settling first next and aborts S
   );
   assert.equal(requestController?.signal.aborted, true);
   assert.equal(returned, true);
-  await adapter.close?.();
+  await assert.rejects(adapter.close(), /cleanup.*unconfirmed/i);
 });
 
 test('Claude terminal deadline is absolute after acceptance and never invents interruption', async () => {
@@ -164,7 +164,7 @@ test('Claude cleanup timeout stays bounded and adapter.close rejects unconfirmed
   await assert.rejects(within(adapter.close!()), /cleanup.*unconfirmed/i);
 });
 
-test('Claude late return confirmation lets a later adapter.close succeed', async () => {
+test('Claude late iterator return without process observation keeps cleanup unconfirmed', async () => {
   let finishReturn!: () => void;
   const returned = new Promise<IteratorResult<unknown>>((resolve) => {
     finishReturn = () => resolve({ done: true, value: undefined });
@@ -191,8 +191,8 @@ test('Claude late return confirmation lets a later adapter.close succeed', async
   await assert.rejects(adapter.close!(), /cleanup.*unconfirmed/i);
   finishReturn();
   await new Promise((resolve) => setTimeout(resolve, 0));
-  assert.equal(resources.hasActiveResources?.('session-deadline'), false);
-  await adapter.close!();
+  assert.equal(resources.hasActiveResources?.('session-deadline'), true);
+  await assert.rejects(adapter.close(), /cleanup.*unconfirmed/i);
 });
 
 test('Claude iterator.return done:false does not release the active resource lease', async () => {
@@ -252,7 +252,7 @@ test('Claude suppresses a successful result when local cleanup is unconfirmed', 
   await assert.rejects(adapter.close!(), /cleanup.*unconfirmed/i);
 });
 
-test('Claude Query.close can confirm cleanup even if iterator.return remains pending', async () => {
+test('Claude Query.close cannot confirm cleanup while process observation is missing', async () => {
   let closed = false;
   const adapter = createClaudeAdapter({
     requestTimeoutMs: 20,
@@ -272,7 +272,7 @@ test('Claude Query.close can confirm cleanup even if iterator.return remains pen
   const events = await within(collect(adapter.execute(input())));
   assert.equal((events.at(-1) as Extract<RuntimeEvent, { type: 'error' }>).outcome, 'unknown');
   assert.equal(closed, true);
-  await adapter.close?.();
+  await assert.rejects(adapter.close(), /cleanup.*unconfirmed/i);
 });
 
 test('Claude observes a late next rejection after timeout', async () => {
@@ -296,7 +296,7 @@ test('Claude observes a late next rejection after timeout', async () => {
   assert.equal((events.at(-1) as Extract<RuntimeEvent, { type: 'error' }>).outcome, 'unknown');
   rejectLate(new Error('late SDK rejection'));
   await new Promise((resolve) => setTimeout(resolve, 10));
-  await adapter.close?.();
+  await assert.rejects(adapter.close(), /cleanup.*unconfirmed/i);
 });
 
 test('Claude observes next rejection when cancellation wins before wait registration', async () => {
@@ -402,7 +402,7 @@ test('Claude closes Query when async iterator acquisition throws', async () => {
   const events = await collect(adapter.execute(input()));
   assert.equal((events.at(-1) as Extract<RuntimeEvent, { type: 'error' }>).outcome, 'unknown');
   assert.equal(closeCalled, true);
-  await adapter.close?.();
+  await assert.rejects(adapter.close(), /cleanup.*unconfirmed/i);
 });
 
 test('Claude consumer stop uses bounded cleanup; close rejects a hung return', async () => {

@@ -22,21 +22,21 @@ import type {
 } from '../../engine/src/types.ts';
 import { OrchestratorError, UnixRpcClient, type Caller, type RequestOptions } from './transport.ts';
 export { OrchestratorError } from './transport.ts';
+export type { RequestOptions } from './transport.ts';
 export type * from '../../engine/src/types.ts';
 
-export interface MutationOptions {
+export interface MutationOptions extends RequestOptions {
   idempotencyKey?: string;
 }
 export interface WaitOptions {
   timeoutMs?: number;
   signal?: AbortSignal;
 }
-export interface EventOptions {
+export interface EventOptions extends RequestOptions {
   afterCursor?: string;
   storeId?: string;
   taskId?: string;
   limit?: number;
-  signal?: AbortSignal;
 }
 export interface InitializeResult {
   protocolVersion: string;
@@ -105,7 +105,10 @@ function boundedRead<T>(
           stop(new OrchestratorError('TIMEOUT', 'Wait timed out; remote work was not cancelled')),
         Math.max(0, remaining),
       );
-    read({ signal: controller.signal }).then(
+    read({
+      signal: controller.signal,
+      ...(Number.isFinite(remaining) ? { timeoutMs: Math.max(1, Math.ceil(remaining)) } : {}),
+    }).then(
       (value) => {
         if (!settled) {
           settled = true;
@@ -213,7 +216,7 @@ export class Orchestrator {
   ): Promise<T> {
     const idempotencyKey = key(options);
     try {
-      return await this.call<T>(method, { ...params, idempotencyKey });
+      return await this.call<T>(method, { ...params, idempotencyKey }, options);
     } catch (error) {
       const original = error && typeof error === 'object' ? (error as Record<string, unknown>) : {};
       const data =
@@ -266,13 +269,13 @@ export class Orchestrator {
     }
   }
   readonly scheduler = {
-    get: async () => {
+    get: async (options?: RequestOptions) => {
       this.requireExecutionIsolation();
-      return this.call<SchedulerSnapshot>('scheduler.get', {});
+      return this.call<SchedulerSnapshot>('scheduler.get', {}, options);
     },
-    getConflict: async (query: { conflictId: string }) => {
+    getConflict: async (query: { conflictId: string }, options?: RequestOptions) => {
       this.requireExecutionIsolation();
-      return this.call<ExecutionConflict>('scheduler.getConflict', query);
+      return this.call<ExecutionConflict>('scheduler.getConflict', query, options);
     },
     resolveConflict: async (
       request: { conflictId: string; expectedRevision: number; evidence: ReconcileEvidence },
@@ -296,7 +299,8 @@ export class Orchestrator {
       this.operation('tasks.cancel', taskId, { taskId }, options),
   };
   readonly sessions = {
-    get: (sessionId: string) => this.call<SessionSnapshot>('sessions.get', { sessionId }),
+    get: (sessionId: string, options?: RequestOptions) =>
+      this.call<SessionSnapshot>('sessions.get', { sessionId }, options),
     control: (
       target: SessionControlTarget,
       command: { action: string; mode?: 'drain' | 'interrupt' },
@@ -357,17 +361,21 @@ export class Orchestrator {
   readonly messages = {
     send: (spec: MessageSpec, options?: MutationOptions) =>
       this.mutation<MessageSnapshot>('messages.send', spec.toSessionId, { spec }, options),
-    get: (messageId: string) => this.call<MessageSnapshot>('messages.get', { messageId }),
+    get: (messageId: string, options?: RequestOptions) =>
+      this.call<MessageSnapshot>('messages.get', { messageId }, options),
   };
   readonly ops = {
     get: (operationId: string, options?: RequestOptions) =>
       this.call<OperationSnapshot>('operations.get', { operationId }, options),
-    lookup: (query: { method: string; scope: string; idempotencyKey: string }) =>
-      this.call<OperationSnapshot>('operations.lookup', query),
+    lookup: (
+      query: { method: string; scope: string; idempotencyKey: string },
+      options?: RequestOptions,
+    ) => this.call<OperationSnapshot>('operations.lookup', query, options),
   };
   readonly operations = this.ops;
   readonly approvals = {
-    get: (approvalId: string) => this.call<ApprovalRequest>('approvals.get', { approvalId }),
+    get: (approvalId: string, options?: RequestOptions) =>
+      this.call<ApprovalRequest>('approvals.get', { approvalId }, options),
     decide: (
       approvalId: string,
       decision: { choice: 'approve' | 'deny'; expectedRevision: number },
@@ -375,20 +383,28 @@ export class Orchestrator {
     ) => this.operation('approvals.decide', approvalId, { approvalId, decision }, options),
   };
   readonly usage = {
-    get: (query: { taskId: string } | string) =>
-      this.call<UsageResult>('usage.get', typeof query === 'string' ? { taskId: query } : query),
+    get: (query: { taskId: string } | string, options?: RequestOptions) =>
+      this.call<UsageResult>(
+        'usage.get',
+        typeof query === 'string' ? { taskId: query } : query,
+        options,
+      ),
   };
   readonly capabilities = Object.assign(
-    (query: { provider?: string } = {}) =>
-      this.call<RuntimeCapabilities | Record<string, unknown>>('capabilities.get', query),
+    (query: { provider?: string } = {}, options?: RequestOptions) =>
+      this.call<RuntimeCapabilities | Record<string, unknown>>('capabilities.get', query, options),
     {
-      get: (query: { provider?: string } = {}) =>
-        this.call<RuntimeCapabilities | Record<string, unknown>>('capabilities.get', query),
+      get: (query: { provider?: string } = {}, options?: RequestOptions) =>
+        this.call<RuntimeCapabilities | Record<string, unknown>>(
+          'capabilities.get',
+          query,
+          options,
+        ),
     },
   );
   readonly events = Object.assign((options: EventOptions = {}) => this.iterateEvents(options), {
-    read: (options: Omit<EventOptions, 'signal'> = {}) =>
-      this.call<EventPage>('events.read', options),
+    read: (options: Omit<EventOptions, 'signal' | 'timeoutMs'> = {}, request?: RequestOptions) =>
+      this.call<EventPage>('events.read', options, request),
   });
   private async *iterateEvents(options: EventOptions): AsyncGenerator<EventEnvelope> {
     let cursor = options.afterCursor ?? '0';
@@ -399,7 +415,10 @@ export class Orchestrator {
       if (storeId !== undefined) params.storeId = storeId;
       if (options.taskId !== undefined) params.taskId = options.taskId;
       if (options.limit !== undefined) params.limit = options.limit;
-      const page = await this.call<EventPage>('events.read', params, { signal: options.signal });
+      const page = await this.call<EventPage>('events.read', params, {
+        signal: options.signal,
+        timeoutMs: options.timeoutMs,
+      });
       storeId = page.storeId;
       for (const event of page.events) {
         aborted(options.signal);
@@ -427,6 +446,8 @@ export class Orchestrator {
       const result = await this.call<{ status: 'closed'; operationId: string }>(
         options.operationId ? 'host.shutdown.continue' : 'host.shutdown',
         params,
+        // Allow the host its full cleanup budget plus time to return its final receipt.
+        { timeoutMs: params.timeoutMs + 1000 },
       );
       this.closeResult = result;
       this.closed = true;
@@ -491,7 +512,12 @@ export async function createOrchestrator(config: EngineConfig): Promise<Orchestr
 export async function connectOrchestrator(options: {
   socketPath: string;
   timeoutMs?: number;
+  requestTimeoutMs?: number;
 }): Promise<Orchestrator> {
-  const caller = await UnixRpcClient.connect(options.socketPath, options.timeoutMs);
+  const caller = await UnixRpcClient.connect(
+    options.socketPath,
+    options.timeoutMs,
+    options.requestTimeoutMs,
+  );
   return initialize(caller, false);
 }

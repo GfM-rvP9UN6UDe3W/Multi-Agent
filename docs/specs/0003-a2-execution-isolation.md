@@ -80,7 +80,9 @@ Q 与 A 可以重叠：仍可能执行的 unknown 同时占两者。隔离上限
 
 本增量已新增 `initialize.capabilities.executionIsolation={version:1,resourceRelease:true,schedulerStatus:true,ownerConflictResolution:true,budgetVersion:2}`，原 lifecycle v1 能力继续保留。配置、能力、公共 schema 与双语言接线已同步实现；wire 版本保持 1.0，存储 schema 独立升级到 2。
 
-新增只读 `scheduler.get`（SDK 为 `orch.scheduler.get()`），返回 maxActiveSessions、maxQuarantinedDispatches、executionOccupied=A、quarantined=Q、quarantineReserved=R、canDispatch、原因列表，以及最多 16 条占用示例（taskId/sessionId/dispatchId、租约状态、最后证据、进入时间）和 `truncated`；另返回未解决冲突数及最多 16 条 conflictId/revision/dispatch 引用。当前可信本地客户端可读取，不授予核对权限；当前任务明细从任务/会话查询获得，指定冲突可通过只读 `scheduler.getConflict({conflictId})` 查回原证据和 revision。稳定原因含 `EXECUTION_CAPACITY_EXHAUSTED`、`QUARANTINE_CAPACITY_EXCEEDED`、`HOST_STOPPING`、`EXECUTION_EVIDENCE_CONFLICT`。这是一个一致数据库快照，不通过查询执行资源探测、模型调用或变更。
+新增只读 `scheduler.get`（SDK 为 `orch.scheduler.get()`），返回 maxActiveSessions、maxQuarantinedDispatches、executionOccupied=A、quarantined=Q、quarantineReserved=R、canDispatch、原因列表，以及最多 16 条占用示例（taskId/sessionId/dispatchId、租约状态、最后证据、进入时间）和 `truncated`；另返回未解决冲突数及最多 16 条 conflictId/revision/dispatch 引用。当前可信本地客户端可读取，不授予核对权限；当前任务明细从任务/会话查询获得，指定冲突可通过只读 `scheduler.getConflict({conflictId})` 查回原证据和 revision。当前稳定原因含 `EXECUTION_CAPACITY_EXHAUSTED`、`QUARANTINE_CAPACITY_EXCEEDED`、`HOST_STOPPING`、`RESOURCE_CLEANUP_PENDING`、`EXECUTION_EVIDENCE_CONFLICT`；客户端须容忍未来新增原因。A/Q/R 和冲突数据在同一数据库事务内读取，canDispatch/reasons 还结合本宿主关闭标志与内存收尾记录，因此整体不是纯数据库快照。查询不执行资源探测、模型调用或变更。
+
+R04 的 `RESOURCE_CLEANUP_PENDING` 表示所有者声明已提交，但适配器记录的解除或其完成回执尚未确认，阻止本宿主新派发。所有者收到 `RESOURCE_CLEANUP_INCOMPLETE` 时保存 operationId 与原 target/evidence/idempotencyKey；错误的 auditCommitted=true 仅确认声明已提交。get/lookup/wait 只读，persisted 回执不会因轮询而完成：所有者须以原参数和原键显式重试 `sessions.reconcile`，继续原收尾。result 的 `unobservedResourcesReconciled` 只有收尾确认后才为 true，存在的 `resourceCleanup.status` 从 pending 变 completed；没有此类资源处置时该对象缺省，布尔值为 false。重启会丢失原 finalizer，原操作保持 outcome_unknown、同键重试仍明确报错；内存阻塞消失不证明原收尾完成。完整规则见 SPEC-0004 AC-R04.6。
 
 `sessions.get` 增加可选的当前 dispatch 租约/隔离摘要；reconcile 的 result 增加 `executionReleased`，与原 `resolved` 分别表示资源与业务结论。配置/派发诊断展示实际期限、默认/显式来源和策略版本。Python 新字段按既有规则映射 snake_case；普通 socket 只读可用，owner-only 资源/业务声明仍由引擎授权。
 

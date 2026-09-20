@@ -196,7 +196,12 @@ At the Q + R limit, new work is rejected with `QUARANTINE_CAPACITY_EXCEEDED` and
 work stops dispatching. Original idempotent requests still return their receipts.
 Queries, reconciliation, cancellation, approval and shutdown remain available; resuming
 a saved result only to request acceptance is also allowed. Other scheduler reasons are
-`EXECUTION_CAPACITY_EXHAUSTED`, `HOST_STOPPING` and `EXECUTION_EVIDENCE_CONFLICT`.
+`EXECUTION_CAPACITY_EXHAUSTED`, `HOST_STOPPING`, `RESOURCE_CLEANUP_PENDING` and
+`EXECUTION_EVIDENCE_CONFLICT`. Tolerate additional reason strings in future versions.
+A/Q/R and conflict data are read in one database transaction; `can_dispatch` and
+`reasons` also reflect this host's shutdown flag and in-memory cleanup records.
+`RESOURCE_CLEANUP_PENDING` blocks new dispatches until the owner explicitly continues
+an incomplete reconciliation cleanup, as described below. These reads do not run cleanup.
 `occupants` and `conflicts` contain at most 16 examples each; check `truncated` and
 `conflicts_truncated` alongside `open_conflicts`.
 
@@ -244,8 +249,11 @@ Unknown business evidence keeps the dispatch isolated. In A2, both resource fiel
 allow a partial reconciliation to release the execution lease while `side_effects` or
 `outcome` remains `unknown`. The task stays blocked, the session stays `outcome_unknown`,
 the active dispatch identity and Q are retained, and no acceptance or rerun is created.
-Only one stopped resource field is insufficient. A current active handle rejects a
-stop claim; a complete business attestation must also agree with recorded terminal evidence.
+Only one stopped resource field is insufficient. A live execution or observed child
+process rejects a stop claim. R04 permits a narrow exception for a sealed adapter record
+whose observation ended without ever observing a process, with an exact matching target;
+it does not turn an owner declaration into observed exit evidence. A complete business
+attestation must also agree with recorded terminal evidence.
 
 The completed reconciliation operation reports resource and business decisions separately.
 Its result is raw JSON, so read the camelCase key exactly:
@@ -256,8 +264,44 @@ print(receipt.result["executionReleased"], receipt.result["resolved"])
 ```
 
 A resource-only reconciliation returns `executionReleased=True` and `resolved=False`.
-The operation's `completed` status confirms that the declaration was recorded; it does
-not mean the task completed. `execution_released` is not a key in `receipt.result`.
+The operation's `completed` status confirms that the declaration and any required
+adapter-record cleanup were acknowledged; it does not mean the task completed.
+`execution_released` is not a key in `receipt.result`.
+
+R04 also reports `receipt.result["unobservedResourcesReconciled"]`: true only after the
+unobserved adapter records have been retired and completion acknowledged. It is false
+when no such cleanup was needed or while cleanup remains pending. Optional
+`receipt.result["resourceCleanup"]` contains `status` (`pending` or `completed`) and
+`ownerInstanceId`; the object is absent when no such cleanup was required. All of these
+keys remain camelCase inside raw `result`.
+
+If `sessions.reconcile` raises `OrchestrationError` with code
+`RESOURCE_CLEANUP_INCOMPLETE`, `error.operation_id` identifies the saved operation and
+`error.data["auditCommitted"]` is true. The declaration and its business/resource
+decisions are already committed; this error does not roll them back. Keep the original
+target, evidence and idempotency key, saved before the first request.
+
+```python
+# operation_id was saved from error.operation_id in the exception handler.
+receipt = await owner.operations.get(operation_id)
+print(receipt.status, receipt.result.get("resourceCleanup"))
+
+# Later, explicitly continue the original attempt on the same live owner.
+# original_target/evidence/key are the saved original values, not a freshly read target.
+operation = await owner.sessions.reconcile(
+    original_target, original_evidence, idempotency_key=original_key,
+)
+receipt = await operation.wait(timeout=10)
+```
+
+`operations.get` and `operations.lookup` return snapshots; `OperationHandle.wait()`
+only polls. They do not execute a finalizer, so waiting on a `persisted` cleanup receipt
+alone will reach the local timeout. An explicit same-key reconcile retries the original
+cleanup, or only acknowledges it if cleanup already ran. If it fails again, retain the
+same recovery information; do not retry in a blind loop or change the key. After owner
+restart, the original in-memory finalizer is unavailable: the saved operation becomes
+`outcome_unknown`, and retry still reports `RESOURCE_CLEANUP_INCOMPLETE`. Neither the
+absence of a scheduler blocker nor `wait()` returning that unknown status means success.
 
 For `completed`, include the reviewed full result string (an empty string is valid; maximum
 length 524288): reconciliation saves it and leaves the

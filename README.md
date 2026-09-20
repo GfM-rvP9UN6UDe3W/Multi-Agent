@@ -8,6 +8,7 @@
 - [运行时适配器 spec](docs/specs/0002-runtime-adapters.md)
 - [生命周期实现契约](docs/specs/0003-a-lifecycle.md)
 - [A2 实现契约：执行占用、结果隔离与统一期限](docs/specs/0003-a2-execution-isolation.md)
+- [可靠性修复：调度、关闭配置、请求期限与 Claude 清理](docs/specs/0004-runtime-reliability.md)
 - [归档与新命名空间切换规格（待实现）](docs/specs/0003-b-archive.md)
 - [分阶段 spec：A/A2 已实现，B/C 保留与选路待实现](docs/specs/0003-policy-retention-deadlines.md)
 - [TDD 证据](docs/tdd/0001-evidence.md)
@@ -35,7 +36,7 @@ SPEC-0003-A/A2 已提供执行/控制的持久 deadline、迟到证据保留、�
 
 A2 新轮次默认总预算为 1800 秒。执行停止与本地清理都得到证明后，unknown 可释放执行槽，业务结果继续隔离：A=`executionOccupied` 是仍持有的执行租约，Q=`quarantined` 是业务 unknown，R=`quarantineReserved` 是未隔离在途执行的预留（含待清理）。新派发要求 `A < maxActiveSessions` 且 `Q + R < maxQuarantinedDispatches`；默认分别为 2 和 32。两项仍可能执行的 unknown 仍会占满执行名额；释放 A 不减少 Q，不自动 resume、重发或批准。
 
-协议数据结构见 [JSON Schema](schemas/protocol.schema.json)。当前 TS 类型与 Python 类型通过共享 wire 契约和集成测试保持一致；尚未实现完整 schema→双语言代码生成流程。
+协议数据结构见 [JSON Schema](schemas/protocol.schema.json)。[实际 payload 契约测试](tests/contract/protocol-schema.test.ts) 通过真实 Unix 宿主读取任务、批准、消息、用量、操作及相关快照，校验字段约束及破坏后的反例，并让 Python 子进程读取同一状态比较字段映射与原始 JSON。测试辅助器仅实现当前使用的 schema 约束子集，未知校验关键字直接报错，format 保持注解语义；没有生产 schema 校验器或 schema→双语言代码生成。[范围与验收条款](docs/specs/0005-wire-contract.md)。
 
 ## 本地开发与验证
 
@@ -54,6 +55,8 @@ npm run test:python
 测试只创建并清理自己在系统临时目录中的工作区、数据库、socket 和子进程。Unix socket 测试需要本机 IPC 权限；受限沙盒若报 EPERM，应在允许本机 socket 的测试环境重跑，不能把跳过当通过。
 
 源代码现在直接由 Node 执行可擦除的 TypeScript；未制作可发布的编译包。不要从 npm/PyPI 安装文档中的暂定名称来冒充本工作区代码。
+
+调度只从 SQLite 索引读取 queued 候选，并在实际派发后更新准入判断；历史非排队任务不再逐项触发派发表全扫描。已有 schema 2 状态会在启动时补建任务状态、派发 taskId 索引，不改写业务记录。A/Q/R 仍从持久派发记录计算，历史存储与部分查询仍随数据量增长；GC/归档尚未实现。可执行 `node tests/fixtures/scheduler-benchmark.ts . 50,100,150,300` 复测离线创建延迟，结果与边界见 [本轮验证](docs/tdd/0004-runtime-reliability.md)。
 
 ## 先运行 Python 完整示例
 
@@ -139,8 +142,13 @@ node packages/cli/src/main.ts host --config /absolute/orchestrator.json
 
 ```ts
 import { connectOrchestrator } from './packages/sdk-typescript/src/index.ts';
-const orch = await connectOrchestrator({ socketPath: '/absolute/private-state/host.sock' });
+const orch = await connectOrchestrator({
+  socketPath: '/absolute/private-state/host.sock',
+  requestTimeoutMs: 30_000,
+});
 ```
+
+TypeScript Unix 连接的普通 RPC 默认等待 30 秒，与 Python 的默认请求等待一致；`requestTimeoutMs` 可调整默认值。连接参数 `timeoutMs` 只控制建立连接，initialize 单独限时 5 秒。读取与变更方法可用请求选项 `{timeoutMs, signal}` 覆盖单次等待，例如 `orch.tasks.get(taskId, {timeoutMs: 5000})`。连接、默认请求与单次请求期限均为 1..2147483647 的整数毫秒。变更超时保留 method/scope/idempotencyKey，先查询回执再决定后续操作；超时不取消远端任务，也不关闭仍可使用的连接。显式 task.wait 总期限独立；owner close 的 RPC 等待使用关闭预算加 1000ms 回执余量。
 
 ```python
 from agent_orch import Orchestrator
@@ -150,6 +158,8 @@ async with Orchestrator.connect(socket_path="/absolute/private-state/host.sock")
 ```
 
 CLI 提交、查看、批准的参数可运行 `node packages/cli/src/main.ts --help` 查看。CLI 没有自动批准，也不会默认启用 fake。SIGINT/SIGTERM 按宿主自己的关闭流程处理，只回收自有进程。
+
+当前 CLI 配置可用 `"shutdown": {"mode": "drain", "timeoutMs": 30000}` 指定 SIGINT/SIGTERM 的关闭行为，Unix 与 stdio 均生效。未配置时保留原默认值：Unix 为 interrupt / 1000ms，stdio 为 interrupt / 30000ms。关闭超时在 stderr 返回 `SHUTDOWN_INCOMPLETE` 和 `operationId`，保持控制入口，可再次发送信号按同一模式续等；stdio 所有者也可发送 `host.shutdown.continue`。drain 不自动升级为 interrupt。父进程意外断开 stdio 的 EOF 清理另按 30000ms interrupt 执行。
 
 ## 结果与异常的处理
 
@@ -165,10 +175,16 @@ CLI 提交、查看、批准的参数可运行 `node packages/cli/src/main.ts --
 
 声明必须分别记录本地资源、远端执行及副作用是否已核对。两端均 stopped 且没有活动句柄/证据冲突时，允许只释放执行租约：`result.executionReleased=true`、`result.resolved=false`；业务 outcome/sideEffects 仍 unknown 时 Q、blocked 状态和原 activeDispatchId 保留。Python 的 operation.result 是原始 JSON，使用 `["executionReleased"]`。确认 completed 后保存结果并保持 paused，显式 resume 只重新申请验收；确认 not_executed 后才允许显式重排；failed/interrupted 将原任务置 failed。原 unknown 操作保留历史并追加 resolution。[双语言核对示例](SDK_USAGE_AND_WIRING.md#114-本轮已实现所有者人工核对)提供精确目标和幂等键用法。
 
+Claude 缺少 spawn 观察时也可由所有者人工收尾：执行观察必须已经结束，启动回调已封闭，且不存在已观察进程。提交精确目标与 `localResources: "stopped"` 声明后，宿主先提交审计与收尾准备记录，再解除对应的未知记录；收尾成功后记录 `session.resources_reconciled`，回执含 `unobservedResourcesReconciled: true`。这不产生自动退出证据，远端仍 unknown 时不释放执行额度。真实活进程、过期目标、证据冲突与普通 socket 客户端仍被拒绝。宿主主动关闭返回 `SHUTDOWN_INCOMPLETE` 后，这个核对入口仍可用，随后可沿用原 operationId 续等关闭；任务创建、执行恢复和消息派发仍保持关闭。
+
+第三方适配器 prepare 返回非函数或抛错时，提交前拒绝并返回 `INVALID_RUNTIME_CONTRACT`。finalizer 在声明已提交后失败，则返回 `RESOURCE_CLEANUP_INCOMPLETE`，包含 `operationId` 与 `auditCommitted: true`；可查回执的 `result.resourceCleanup.status`，并用原目标、原声明和同一幂等键显式重试 reconcile。get/lookup/wait 只读取回执，不推进收尾；单纯等待 persisted 回执会到达本地超时。pending 时 scheduler 原因含 `RESOURCE_CLEANUP_PENDING`，本宿主停止新派发，成功后恢复，不自动重试。若内存解除已完成但确认写入失败，重试只补写完成回执；重启后丢失原 finalizer 则保留 outcome_unknown，不借用新适配器冒充原收尾成功。人工声明已落盘与资源记录已解除是两个独立状态。
+
 已释放执行出现匹配的矛盾证据时，`EXECUTION_EVIDENCE_CONFLICT` 会持久阻止后续派发，重启不自动解除。所有者通过 `scheduler.getConflict` 读取原 conflictId/revision，再以新的停止证据调用 `scheduler.resolveConflict`；它不修改业务验收历史或自动减少业务隔离 Q。普通 socket 无权解除，多个冲突须逐项处理。
 
 ## Claude/Codex 现状
 
 两者均实现只读单轮入口、显式 native session resume 和本轮有界观察/清理；未确认回收的自有资源继续阻止 reconcile 放行。完整能力与未验收项见 [SPEC-0002](docs/specs/0002-runtime-adapters.md)。Claude 官方包是可选依赖，只有 execute 时才加载；Codex 使用本地受管 App Server 子进程。支持矩阵按锁定版本与实际测试证据判断，不能用命令行版本号代替运行验收。
+
+Claude 通过 SDK 的 `spawnClaudeCodeProcess` 回调记录本次自有子进程，并以实际退出事件确认本地清理；Query.close 返回、iterator.return(done:true) 或 AbortSignal 不再代替退出证据。SDK 使用前半段 cleanupTimeoutMs 预算自行清理，随后对尚未退出的自有进程执行 stdin EOF/SIGTERM 兜底，并在剩余预算内观察退出；close 失败或不存在时立即兜底。永久 pending、无效返回或 SDK 未透传 signal 都不会跳过兜底，整个异步等待不额外延长原总预算。仍未退出的资源继续占用，迟到退出可更新证据；仅本地退出不足以证明远端终态。自定义测试 query factory 需要通过 `request.options.spawnClaudeCodeProcess({command,args,cwd,env,signal})` 启动可观察的 fixture；忽略该回调会保守保持资源未知，需满足上述条件后由所有者核对。当前验证使用真实离线 fixture 子进程，尚未完成真实厂商模型验收。
 
 完整接线设计中的 `auth`、`executable`、MCP 桥和网关示例不是当前 CLI 的完整实现接口。尚不支持的字段会拒绝；未来开发必须同步 spec、配置校验、双语言契约和文档。真实模型验收、发布包和许可证选择是后续明确的工作项。

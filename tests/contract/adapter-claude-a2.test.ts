@@ -1,7 +1,27 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { createClaudeAdapter } from '../../packages/adapter-claude/src/index.ts';
+import {
+  createClaudeAdapter as createAdapter,
+  type ClaudeAdapterConfig,
+} from '../../packages/adapter-claude/src/index.ts';
 import type { RuntimeEvent, RuntimeInput } from '../../packages/engine/src/types.ts';
+
+import { withClaudeProcess } from '../fixtures/claude-process.ts';
+
+function createClaudeAdapter(config: ClaudeAdapterConfig = {}, holdUntil?: Promise<void>) {
+  return createAdapter({
+    ...config,
+    query: config.query ? withClaudeProcess(config.query, holdUntil) : undefined,
+  });
+}
+
+async function waitForCleanup(adapter: ReturnType<typeof createAdapter>): Promise<void> {
+  const deadline = performance.now() + 1000;
+  while (adapter.hasActiveResources('session-a2')) {
+    assert.ok(performance.now() < deadline, 'fixture child did not exit');
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+}
 
 type Evidence = {
   version: number;
@@ -150,36 +170,44 @@ test('A2 Claude reports matched terminal before cleanup and then full stop', asy
   assert.equal(evidence[1]?.providerSessionId, 'provider-a2');
 });
 
-test('A2 Claude retains terminal evidence until delayed iterator cleanup confirms stop', async () => {
+test('A2 Claude retains terminal evidence until delayed process exit confirms stop', async (t) => {
   const evidence: Evidence[] = [];
   let finishReturn!: () => void;
   const returned = new Promise<IteratorResult<unknown>>((resolve) => {
     finishReturn = () => resolve({ done: true, value: undefined });
   });
-  const adapter = createClaudeAdapter({
-    cleanupTimeoutMs: 10,
-    query: () => ({
-      [Symbol.asyncIterator]() {
-        let count = 0;
-        return {
-          async next() {
-            count++;
-            return count === 1
-              ? {
-                  done: false,
-                  value: {
-                    type: 'result',
-                    subtype: 'success',
-                    session_id: 'provider-a2',
-                    result: 'done',
-                  },
-                }
-              : { done: true, value: undefined };
-          },
-          return: () => returned,
-        };
-      },
-    }),
+  const adapter = createClaudeAdapter(
+    {
+      cleanupTimeoutMs: 10,
+      query: () => ({
+        [Symbol.asyncIterator]() {
+          let count = 0;
+          return {
+            async next() {
+              count++;
+              return count === 1
+                ? {
+                    done: false,
+                    value: {
+                      type: 'result',
+                      subtype: 'success',
+                      session_id: 'provider-a2',
+                      result: 'done',
+                    },
+                  }
+                : { done: true, value: undefined };
+            },
+            return: () => returned,
+          };
+        },
+      }),
+    },
+    returned.then(() => {}),
+  );
+  t.after(async () => {
+    finishReturn();
+    await waitForCleanup(adapter);
+    await adapter.close();
   });
   const events = await collect(
     adapter.execute(input({ reportExecutionEvidence: (item: Evidence) => evidence.push(item) })),
@@ -190,7 +218,7 @@ test('A2 Claude retains terminal evidence until delayed iterator cleanup confirm
     ['unknown'],
   );
   finishReturn();
-  await new Promise((resolve) => setTimeout(resolve, 0));
+  await waitForCleanup(adapter);
   assert.deepEqual(
     evidence.map((item) => item.localResources),
     ['unknown', 'stopped'],
@@ -275,8 +303,9 @@ test('A2 Claude does not submit after the host budget is already exhausted', asy
   );
 });
 
-test('A2 Claude keeps a late matching terminal as resource evidence without reviving the business result', async () => {
+test('A2 Claude keeps a late matching terminal as resource evidence without reviving the business result', async (t) => {
   const evidence: Evidence[] = [];
+  let remaining = 1000;
   let finishNext!: () => void;
   let finishReturn!: () => void;
   const late = new Promise<IteratorResult<unknown>>((resolve) => {
@@ -289,29 +318,55 @@ test('A2 Claude keeps a late matching terminal as resource evidence without revi
   const returned = new Promise<IteratorResult<unknown>>((resolve) => {
     finishReturn = () => resolve({ done: true, value: undefined });
   });
-  const adapter = createClaudeAdapter({
-    turnTimeoutMs: 20,
-    cleanupTimeoutMs: 10,
-    query: () => ({
-      [Symbol.asyncIterator]() {
-        let count = 0;
-        return {
-          next() {
-            count++;
-            return count === 1
-              ? Promise.resolve({
-                  done: false,
-                  value: { type: 'system', subtype: 'init', session_id: 'provider-a2' },
-                })
-              : late;
-          },
-          return: () => returned,
-        };
-      },
-    }),
+  const adapter = createClaudeAdapter(
+    {
+      turnTimeoutMs: 20,
+      cleanupTimeoutMs: 10,
+      query: () => ({
+        [Symbol.asyncIterator]() {
+          let count = 0;
+          return {
+            next() {
+              count++;
+              if (count > 1) remaining = 0;
+              return count === 1
+                ? Promise.resolve({
+                    done: false,
+                    value: { type: 'system', subtype: 'init', session_id: 'provider-a2' },
+                  })
+                : late;
+            },
+            return: () => returned,
+          };
+        },
+      }),
+    },
+    returned.then(() => {}),
+  );
+  t.after(async () => {
+    finishNext();
+    finishReturn();
+    await waitForCleanup(adapter);
+    await adapter.close();
   });
   const events = await collect(
-    adapter.execute(input({ reportExecutionEvidence: (item: Evidence) => evidence.push(item) })),
+    adapter.execute(
+      input({
+        reportExecutionEvidence: (item: Evidence) => evidence.push(item),
+        executionBudget: {
+          policyVersion: 2,
+          enteredAt: new Date().toISOString(),
+          acceptanceDeadlineAt: new Date().toISOString(),
+          deadlineAt: new Date().toISOString(),
+          effectiveAcceptanceMs: 1000,
+          effectiveTurnMs: 1000,
+          acceptanceSource: 'fixture',
+          turnSource: 'fixture',
+          remainingAcceptanceMs: () => 1000,
+          remainingTurnMs: () => remaining,
+        },
+      }),
+    ),
   );
   assert.equal((events.at(-1) as Extract<RuntimeEvent, { type: 'error' }>).outcome, 'unknown');
   assert.equal(
@@ -329,7 +384,7 @@ test('A2 Claude keeps a late matching terminal as resource evidence without revi
     false,
   );
   finishReturn();
-  await new Promise((resolve) => setTimeout(resolve, 0));
+  await waitForCleanup(adapter);
   assert.equal(evidence.at(-1)?.localResources, 'stopped');
   assert.equal(evidence.at(-1)?.remoteExecution, 'stopped');
   assert.equal(evidence.at(-1)?.sequence, 2);

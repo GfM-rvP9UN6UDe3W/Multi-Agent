@@ -270,6 +270,11 @@ export type RuntimeEvent =
     }
   | { type: 'interrupted' }
   | { type: 'error'; message: string; outcome: 'failed' | 'unknown' };
+export interface RuntimeResourceTarget {
+  sessionId: string;
+  dispatchId: string;
+  generation: number;
+}
 export interface RuntimeAdapter {
   provider: string;
   capabilities(): RuntimeCapabilities;
@@ -277,6 +282,16 @@ export interface RuntimeAdapter {
   close?(): Promise<void>;
   /** Required when execute can finish while local cleanup is still unconfirmed. */
   hasActiveResources?(sessionId: string): boolean;
+  /**
+   * Optional owner-attestation path for sealed records with no process observation at all.
+   * Return null if any retained record is still executing, has an observed process, or belongs
+   * to another dispatch/generation. Preparing must not mutate resources or report stop evidence.
+   * The host invokes the synchronous, non-throwing, idempotent finalizer only after committing
+   * its audit transaction. It retires only these records, without claiming an observed exit.
+   * Contract failures leave a durable pending receipt; an explicit same-key owner retry resumes
+   * the original finalizer. Abnormal Promise returns are observed without an unbounded wait.
+   */
+  prepareUnobservedCleanup?(target: RuntimeResourceTarget): (() => void) | null;
 }
 export interface EngineConfig {
   workspace: string;
