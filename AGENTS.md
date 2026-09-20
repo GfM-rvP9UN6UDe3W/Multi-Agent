@@ -37,7 +37,7 @@ Test observable behavior and relevant failure paths. Wire or lifecycle changes r
 
 ## Commit & Pull Request Guidelines
 
-Remote: `git@github.com:GfM-rvP9UN6UDe3W/Multi-Agent.git`. No commit history was available when this guide was created. Use concise, imperative, scoped messages, such as `engine: preserve dispatch deadlines`. Keep changes focused. PRs should describe behavior, link relevant specs/issues, report validation commands/results, and identify unverified boundaries.
+Remote: `git@github.com:masonlee39/Multi-Agent.git`. No commit history was available when this guide was created. Use concise, imperative, scoped messages, such as `engine: preserve dispatch deadlines`. Keep changes focused. PRs should describe behavior, link relevant specs/issues, report validation commands/results, and identify unverified boundaries.
 
 ## Security & Configuration
 

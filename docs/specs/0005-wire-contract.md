@@ -1,20 +1,20 @@
-# SPEC-0005：客户端恢复说明与 wire 快照契约
+# SPEC-0005: Client recovery guidance and wire-snapshot contracts
 
-日期：2026-09-20。保持 wire 1.0、存储 schema 2 和既有运行行为。本增量修复 R04 收尾回执的客户端文档遗漏，并让公共 JSON Schema 接受真实宿主产出的快照、拒绝破坏契约的 payload。
+Date: 2026-09-20. Preserve wire 1.0, storage schema 2, and existing runtime behavior. This increment fills client-documentation gaps for R04 cleanup receipts and makes the public JSON Schema accept actual host snapshots while rejecting contract-breaking payloads.
 
-## 范围与非目标
+## Scope and non-goals
 
-补齐 TaskSnapshot、ApprovalRequest、MessageSnapshot、UsageRecord，保留 OperationSnapshot 的通用原始 JSON result/error 语义。校验工具只用于离线测试，不进入生产请求路径、不增加第三方依赖，不声称实现完整 JSON Schema 验证器或代码生成。不重构引擎，不实现 0003-B，不顺带改用量去重、配置迁移或其他 P2。
+Add TaskSnapshot, ApprovalRequest, MessageSnapshot, and UsageRecord while preserving OperationSnapshot's generic raw JSON result/error semantics. Validation is test-only, outside production request paths, without third-party dependencies. It is not a complete JSON Schema implementation or code generator. Do not refactor the engine, implement 0003-B, or change usage deduplication, configuration migration, or other P2 items.
 
-## 编号验收条款
+## Numbered acceptance criteria
 
-- **AC-W01 客户端恢复说明**：A2 权威 spec、双语言用法和 Python README 均列出 RESOURCE_CLEANUP_PENDING。A/Q/R 来自一致数据库读取；canDispatch/reasons 同时包含本宿主关闭与内存收尾状态。写明 RESOURCE_CLEANUP_INCOMPLETE 的 operationId/auditCommitted、原始 camelCase result 中的 unobservedResourcesReconciled/resourceCleanup，以及保留原 target/evidence/key 显式重试 reconcile 的步骤。get/lookup/wait 只读，不执行 finalizer；重启后的 outcome_unknown 不等于收尾成功。
-- **AC-W02 完整快照**：上述四个缺失类型按现有 TypeScript 类型、SPEC-0001 和宿主输出声明必填、可空、数组元素、枚举及数值约束。OperationSnapshot 保留可空 error、可选 lifecycle/resolution 与开放 result。输出快照允许未来扩展字段；严格输入 MessageSpec 不能因复用而拒绝 MessageSnapshot 的服务端字段，也不能意外允许 control 消息。
-- **AC-W03 真实 payload**：从真实引擎及 Unix RPC 取得五种快照，至少覆盖待验收/批准后的任务与批准、持久消息、已报告及 null 用量、操作回执；相关 SessionSnapshot、SchedulerSnapshot、EventEnvelope 一并校验。测试不能只判断定义名存在、或用测试手工构造的成功快照冒充真实输出。
-- **AC-W04 反例与验证器边界**：删去必填字段、破坏嵌套类型/数组元素、状态枚举、整数或可空边界时必须拒绝。测试辅助器覆盖该 schema 使用的结构约束；遇到不支持的校验关键字或未解析的本地引用必须报错，不静默忽略。format 保持 draft 2020-12 默认的注解语义，不声称校验所有日期格式。
-- **AC-W05 双语言接线**：真实 Python 子进程连接同一宿主，查询同一组快照；验证 Python 已知字段的 snake_case 访问、原始 result/raw 的原键保留，并与 TypeScript 的同一稳定状态比较。通过 schema 校验不取代这条实际跨语言回归，也不代表覆盖所有未来字段/方法。
-- **AC-W06 additionalProperties 值形态**：测试辅助器初始化时，显式出现的 additionalProperties 只能是布尔值或对象子 schema；字符串（包括 "false"）、null、数字、数组和显式 undefined 必须报错，不能静默放宽约束。检查覆盖根节点、未使用的 $defs、properties 和 additionalProperties 内的子 schema。省略该关键字、true、false、空对象和带约束的对象子 schema 保持原有额外属性语义，对象子 schema 仍须递归审计。本条只收紧测试辅助器，不修改生产运行时或公共 wire schema，也不扩展为完整元模式验证器。
+- **AC-W01 Client recovery guidance:** The authoritative A2 specification, cross-language usage guide, and Python README all list RESOURCE_CLEANUP_PENDING. A/Q/R use consistent database reads; canDispatch/reasons also reflect host shutdown and in-memory cleanup. Explain RESOURCE_CLEANUP_INCOMPLETE operationId/auditCommitted, unobservedResourcesReconciled/resourceCleanup in raw camelCase result, and explicit reconcile continuation with the saved original target/evidence/key. get/lookup/wait are read-only and do not run finalizers. outcome_unknown after restart is not successful cleanup.
+- **AC-W02 Complete snapshots:** Define required, nullable, array-element, enum, and numeric constraints for the four missing types against existing TypeScript types, SPEC-0001, and host output. Preserve nullable error, optional lifecycle/resolution, and open result on OperationSnapshot. Output snapshots allow future extension fields. Reusing strict input MessageSpec must neither reject MessageSnapshot server fields nor accidentally permit control messages.
+- **AC-W03 Actual payloads:** Read the five snapshot categories from the real engine and Unix RPC. Cover waiting/approved tasks and approvals, durable messages, reported/null usage, and operation receipts; also validate SessionSnapshot, SchedulerSnapshot, and EventEnvelope. Merely checking definition names or constructing successful test snapshots does not count as real output validation.
+- **AC-W04 Negative cases and validator boundaries:** Reject deleted required fields and broken nested types, array elements, status enums, integers, and nullable boundaries. The helper covers structural constraints used by the schema. Unsupported assertion keywords and unresolved local references must throw rather than be ignored. format retains draft 2020-12 default annotation semantics, without claiming to validate every date format.
+- **AC-W05 Cross-language integration:** A real Python subprocess connects to the same host and reads the same snapshots. Verify snake_case access for known Python fields, original keys in raw result/raw, and equality with TypeScript's same stable state. Schema validation does not replace this actual cross-language regression or prove coverage of every future field/method.
+- **AC-W06 additionalProperties value shapes:** During helper initialization, an explicitly present additionalProperties must be a boolean or object subschema. Reject strings (including "false"), null, numbers, arrays, and explicit undefined rather than silently weakening constraints. Cover the root, unused $defs, properties, and additionalProperties subschemas. Preserve extra-property semantics for omission, true, false, empty objects, and constrained object subschemas; recursively audit object subschemas. Tighten only the test helper, without changing production runtime/public wire schema or claiming complete metaschema validation.
 
-## 验证
+## Verification
 
-先写测试并记录缺失定义导致的实际 RED，再补 schema 与文档。执行定向契约测试、typecheck、format:check、两套完整测试与 diff 检查。结果记录在 docs/tdd/0005-wire-contract.md。
+Write tests and record actual RED from missing definitions before adding schema/documentation. Run targeted contract tests, typecheck, format:check, both full suites, and diff checks. Record results in docs/tdd/0005-wire-contract.md.

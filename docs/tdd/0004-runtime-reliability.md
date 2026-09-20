@@ -1,88 +1,86 @@
-# SPEC-0004：运行时可靠性修复验证
+# SPEC-0004: Runtime reliability verification
 
-日期：2026-09-20。修复前基线：`bba83e5`；对应 [验收规格](../specs/0004-runtime-reliability.md)。本次只处理 R01–R04，不实现其他 P2 项、GC、归档或真实模型验收。
+Date: 2026-09-20. Pre-fix baseline: `dbad085`, originally `bba83e5` before author correction with the same file tree. See the [acceptance specification](../specs/0004-runtime-reliability.md). Scope is R01–R04 only, excluding other P2 items, GC, archival, and real-model acceptance. Counts below record successive increments, not one combined test run.
 
-## 1. AC-R01：历史任务下的调度开销
+## 1. AC-R01: Scheduling work with historical tasks
 
-新增 `tests/engine/scheduler-history.test.ts`，先执行：
+Add tests/engine/scheduler-history.test.ts and first run:
 
 ```sh
 node --test tests/engine/scheduler-history.test.ts
 ```
 
-真实 RED：30、60 条 waiting_approval 历史分别导致一次创建解码 1051、3901 条 dispatch 记录，同时解码 30、60 条非排队历史任务，超过线性扫描预算；FIFO/容量回归原本通过。实现后分别为 152、302 条 dispatch，非排队任务解码数均为 0。
+Actual RED: with 30/60 waiting_approval records, one creation decoded 1051/3901 dispatch records and 30/60 nonqueued historical tasks, exceeding the linear scan budget. FIFO/capacity regressions already passed. After implementation, dispatch decodes were 152/302 and nonqueued task decodes were zero for both sizes.
 
-修复通过 SQLite 状态索引读取 queued 候选，只在实际派发后重算外层准入；派发事务内继续校验 A/Q/R 与冲突。轮数按 taskId 索引计数，不再为每个候选解码整张派发表。新增索引在已有 schema 2 上重建，不更改业务 schema。
+The fix reads queued candidates through a SQLite state index and recomputes outer admission only after an actual dispatch. The dispatch transaction still checks A/Q/R and conflicts. Turn counts use a taskId index rather than decoding the dispatch table for each candidate. Rebuild new indexes on existing schema 2 stores without changing business schema.
 
-最终该文件 6/6 通过，覆盖失去适配器能力的首个候选、FIFO、并发额度、每任务轮数的精确边界与后续候选、填充过的 schema 2 索引重建与历史保持。后补测试属于回归，不伪造额外 RED。
+The final file passed 6/6, covering a first candidate that lost adapter capability, FIFO, concurrency limits, exact per-task turn boundaries and later candidates, and index reconstruction/history preservation in populated schema 2. Later coverage was regression testing, without fabricated RED.
 
-## 2. AC-R02：信号关闭配置
+## 2. AC-R02: Signal shutdown configuration
 
-新增 `tests/contract/cli-shutdown.test.ts`。修复前运行 14 项，5 pass / 9 fail：Unix/stdio 忽略显式 drain，stdio 忽略自定义预算，关闭不完整时缺少 operationId，或 stdio 提前退出。省略配置与意外 EOF 的原行为测试已经通过。
+Add tests/contract/cli-shutdown.test.ts. Before the fix, 14 tests yielded 5 pass / 9 fail: Unix/stdio ignored explicit drain, stdio ignored a custom budget, incomplete shutdown lacked operationId, or stdio exited prematurely. Existing defaults and unexpected EOF behavior already passed.
 
-修复后以下定向命令 28/28 通过：
+After the fix, this targeted command passed 28/28:
 
 ```sh
 node --test tests/contract/cli-shutdown.test.ts tests/contract/host-cli.test.ts tests/contract/host.test.ts tests/contract/lifecycle-wire.test.ts
 ```
 
-测试启动真实 Node 宿主和 fake 轮次，发送 SIGINT/SIGTERM 并读取持久结果。显式配置在两种传输均生效；不完整 drain 保留控制与 operationId，允许续等而不自动升级 interrupt。未配置时保留 Unix 1000ms / stdio 30000ms 的 interrupt 默认值；意外 owner EOF 独立使用原 30000ms interrupt 策略。
+Tests launch real Node hosts with fake turns, send SIGINT/SIGTERM, and read persisted outcomes. Explicit configuration works for both transports. Incomplete drain retains control and operationId for continuation without automatic interrupt escalation. Defaults remain interrupt with 1000ms for Unix and 30000ms for stdio; unexpected owner EOF separately retains the original 30000ms interrupt policy.
 
-## 3. AC-R03：TypeScript RPC 期限
+## 3. AC-R03: TypeScript RPC deadlines
 
-新增 `tests/contract/request-timeouts.test.ts`。真实 RED 为 8 项中 3 pass / 5 fail：普通请求不超时、默认配置不生效、变更请求覆盖不生效、非法期限未拒绝、CLI status 在截止后继续等待。原 initialize、显式 wait 与 owner close 预算测试已经通过。
+Add tests/contract/request-timeouts.test.ts. Actual RED was 3 pass / 5 fail out of eight: ordinary requests did not time out, default/per-mutation overrides were ineffective, invalid limits were accepted, and CLI status kept waiting past the deadline. initialize, explicit wait, and owner-close budget tests already passed.
 
-实现后新增 8/8 通过；与 sdk、lifecycle-wire、execution-isolation-wire 合计 20/20 通过。真实 Unix fixture 验证 pending 回收、迟到回执忽略与后续连接可用；真实 SQLite 验证超时变更的幂等查询和重试保持同一任务；真实 CLI 子进程返回 TIMEOUT、退出码 1。30 秒边界通过虚拟时钟验证，不真实等待 30 秒。
+After implementation, all eight passed; together with SDK, lifecycle-wire, and execution-isolation-wire coverage, 20/20 passed. Actual Unix fixtures verify pending cleanup, ignored late receipts, and continued connection usability. Actual SQLite verifies that lookup and idempotent retry of a timed-out mutation retain the same task. An actual CLI child returns TIMEOUT and exit code 1. Virtual time covers the 30-second boundary without a real 30-second wait.
 
-普通请求默认 30000ms；连接的 requestTimeoutMs 与单次 timeoutMs 可覆盖，合法范围为整数 1..2147483647。连接时限与 initialize 的 5000ms 独立。显式 wait 使用剩余总预算，owner close 请求保留关闭预算并增加 1000ms 回执余量。超时不等于远端取消。
+Ordinary requests default to 30000ms. Connection requestTimeoutMs and per-request timeoutMs accept integers 1..2147483647. Connection establishment and initialize's 5000ms remain independent. Explicit wait uses its remaining total budget; owner close retains the shutdown budget plus 1000ms for a receipt. Timeout does not imply remote cancellation.
 
-一次中间回归因测试自身的 fake runtime 定时器被虚拟时间冻结而挂在清理；改用无定时器的离线 unknown fixture 后完成。该挂起不计入产品 RED 或通过结果。
+One intermediate regression hung in cleanup because virtual time froze the test fake-runtime timers. It completed after switching to a timer-free offline unknown fixture. This test hang was neither product RED nor a passing result.
 
-## 4. AC-R04：Claude 进程退出证据
+## 4. AC-R04: Claude process-exit evidence
 
-只读检查声明支持的 SDK [0.3.241 源码](https://unpkg.com/@anthropic-ai/claude-agent-sdk@0.3.241/sdk.mjs)：Query.close 调用 cleanup 后立即返回，而 cleanup 包含异步清理与有界 waitForExit；返回不是退出确认。公开 [类型声明](https://unpkg.com/@anthropic-ai/claude-agent-sdk@0.3.241/sdk.d.ts) 提供 spawnClaudeCodeProcess 回调。
+Read-only inspection of the declared minimum [SDK 0.3.241 source](https://unpkg.com/@anthropic-ai/claude-agent-sdk@0.3.241/sdk.mjs) found that Query.close calls cleanup and returns immediately, while cleanup includes asynchronous work and bounded waitForExit. Return is not exit confirmation. The public [type declarations](https://unpkg.com/@anthropic-ai/claude-agent-sdk@0.3.241/sdk.d.ts) expose spawnClaudeCodeProcess.
 
-新增 `tests/contract/claude-cleanup.test.ts` 的初始 3 项实际运行结果为 1 pass / 2 fail：仍有活子进程，以及没有进程观察的 query，都错误交付 result，预期为 error。实现后扩展为 9 项，连同已有 Claude/生命周期测试 65/65 通过。
+The initial three tests in tests/contract/claude-cleanup.test.ts produced 1 pass / 2 fail: a live child and a query without process observation incorrectly delivered result instead of error. After implementation, the file grew to nine tests; combined Claude/lifecycle coverage passed 65/65.
 
-现在通过公开 spawn 回调记录实际 ChildProcess；仅真实 exit 或确认未产生 PID 的启动失败认定本地结束。清理开始即封闭迟到 spawn，多个句柄须全部结束。close/return/abort 不作为退出证明。真实引擎回归验证活句柄阻止 owner reconcile 与下一任务；迟到退出释放 A，但保留 Q/blocked，且不重放任务。只有退出而没有匹配终态时仍不自动释放。
+The public spawn callback now records actual ChildProcess handles. Only actual exit or failed spawn without a PID establishes local completion. Cleanup seals late spawning and requires all handles to end. close/return/abort are not exit evidence. Actual-engine regression verifies live handles block owner reconcile and later work; late exit releases A while retaining Q/blocked without replay. Exit without matching terminal evidence still cannot automatically release.
 
-全量整合还发现 `execution-isolation-wiring.test.ts` 的旧动态 SDK fixture 使用 return(done:true) 表示清理。已替换为真实子进程并保留其 17ms 清理预算断言；该文件 6/6 通过。未放宽生产退出证据来兼容旧替身。
+Full integration also found an old dynamic SDK fixture in execution-isolation-wiring.test.ts that used return(done:true) as cleanup proof. It was replaced with an actual child while preserving the 17ms cleanup-budget assertion; that file passed 6/6. Production evidence was not weakened to accommodate the old fixture.
 
-## 5. 性能样本与最终验证
+## 5. Performance samples and initial final verification
 
-同机、同一 `tests/fixtures/scheduler-benchmark.ts` 工作负载：每个 fake 任务达到 waiting_approval 后再创建下一个。旧版从 `git archive bba83e5` 解压至独立临时目录，测试后清理。以下是最后 5 次创建的均值，不包含等待 fake 轮次完成的时间：
+Both versions used the same machine and tests/fixtures/scheduler-benchmark.ts workload: create the next fake task only after the previous one reaches waiting_approval. The old version was extracted with git archive into an isolated temporary directory and cleaned afterward. The historical command used bba83e5; the equivalent current baseline is dbad085. Values are means of the last five creation calls, excluding time waiting for fake turns:
 
-| 累计任务数 | 修复前均值 | 修复后均值 |
-| ---------- | ---------- | ---------- |
-| 50         | 8.59ms     | 1.25ms     |
-| 100        | 36.30ms    | 2.05ms     |
-| 150        | 74.61ms    | 2.89ms     |
-| 300        | 未测       | 5.52ms     |
-| 1000       | 未测       | 21.02ms    |
+| Historical task count | Before fix | After fix |
+| --- | --- | --- |
+| 50 | 8.59ms | 1.25ms |
+| 100 | 36.30ms | 2.05ms |
+| 150 | 74.61ms | 2.89ms |
+| 300 | Not measured | 5.52ms |
+| 1000 | Not measured | 21.02ms |
 
-复测当前工作区：
+Reproduce against the current checkout:
 
 ```sh
 node tests/fixtures/scheduler-benchmark.ts . 50,100,150,300,1000
 ```
 
-该样本支持消除历史 tasks × dispatches 的重复扫描，不是延迟 SLA。准入快照、审批扫描和其他历史查询仍有线性成本，持久数据不会自动 GC，长期容量验收仍未完成。
+These samples support eliminating repeated historical tasks × dispatches scans, not a latency SLA. Admission snapshots, approval scans, and other historical queries still have linear costs. Durable data is not automatically collected; long-term capacity acceptance remains unverified.
 
-最终验证：
+| Command | Actual result at this increment |
+| --- | --- |
+| npm run typecheck | Passed |
+| npm run format:check | Passed |
+| npm test | 194/194; 0 failed, cancelled, or skipped; about 2.69 seconds |
+| npm run test:python | 40/40; about 4.18 seconds |
+| git diff --check | Passed |
 
-| 命令                   | 结果                                                     |
-| ---------------------- | -------------------------------------------------------- |
-| `npm run typecheck`    | 通过                                                     |
-| `npm run format:check` | 通过                                                     |
-| `npm test`             | 194/194 通过；0 fail、0 cancelled、0 skipped，约 2.69 秒 |
-| `npm run test:python`  | 40/40 通过，约 4.18 秒                                   |
-| `git diff --check`     | 通过                                                     |
+Tests used temporary directories, offline fixtures, local IPC, and owned children only. No login credentials, installed real SDK, or paid-model requests. Sandbox EPERM was excluded from behavior acceptance; IPC tests ran where local sockets were permitted. Schema 2 indexes/database behavior were verified only in temporary databases, without touching existing user runtime state.
 
-测试只使用临时目录、离线 fixture、本机 IPC 和自有子进程；未读取登录凭据、安装真实 SDK 或请求付费模型。沙盒 EPERM 结果不计入行为验收，IPC 测试在允许本机 socket 的环境运行。新增 schema 2 索引及相关数据库行为只在临时数据库验证，未接触用户既有运行状态。
+## 6. R04 follow-up: Owner reconciliation and stalled shutdown
 
-## 6. R04 后续增量：人工核对与挂起关闭
-
-日期：2026-09-20。接续以上 194/40 基线，先补 AC-R04.1–R04.4；实际 Python 宿主测试发现关闭后的人工收尾入口被阻挡后，追加 AC-R04.5。实现范围仅为 R04，不开始 0003-B，不清理其他 P2。
+Date: 2026-09-20. Continue from the 194/40 baseline. Add AC-R04.1–R04.4 first, then AC-R04.5 after a real Python-host test found that owner reconciliation was blocked during shutdown. Scope remains R04, excluding 0003-B and other P2 items.
 
 ### RED
 
@@ -90,85 +88,81 @@ node tests/fixtures/scheduler-benchmark.ts . 50,100,150,300,1000
 node --test tests/contract/claude-cleanup-recovery.test.ts
 ```
 
-首批 7 项运行结果为 **0 pass / 7 fail**，类型检查在测试的 JSON 结果类型收窄后通过，才保留这份行为 RED：
+The initial seven tests yielded **0 pass / 7 fail**. Typecheck passed after narrowing the test JSON-result types; the retained RED was behavioral:
 
-- 永久 pending、no-op close、没有匹配终态三种清理路径都没有回收使用独立 AbortSignal 的实际子进程，资源仍 active。
-- 多进程场景中本可退出的子进程也没有收到兜底关闭；忽略 EOF/SIGTERM 的另一进程仍存活。
-- 两条未知记录占满 A 后，所有者核对被 RUNTIME_STILL_ACTIVE 阻止；冲突声明和注入的 SQLite 提交失败尚未走到相应检查。
+- Pending close, no-op close, and cleanup without matching terminal evidence failed to reap actual children using an independent AbortSignal; resources remained active.
+- In the multiple-process case, an otherwise cooperative child received no fallback cleanup, while the other child ignoring EOF/SIGTERM remained alive.
+- Two unknown records occupied A and owner reconciliation was rejected with RUNTIME_STILL_ACTIVE, so conflicting declarations and injected SQLite commit failures had not yet reached their intended checks.
 
-实现窄接口后再追加观察状态回归：在执行观察暂停、cleanup 已开始时，prepare 错误返回可解除记录的函数，预期为 null。定向运行 `node --test --test-name-pattern='cleanup preparation' tests/contract/claude-cleanup-recovery.test.ts` 为 **0 pass / 1 fail**；增加 observationEnded 条件后通过。目标身份、幂等 finalizer 与同会话后续派发追加为回归，不伪造 RED。
+After implementing the narrow interface, add an observation-state regression: while execution observation was suspended and cleanup had begun, prepare incorrectly returned a retirement function rather than null. `node --test --test-name-pattern='cleanup preparation' tests/contract/claude-cleanup-recovery.test.ts` produced **0 pass / 1 fail**. It passed after requiring observationEnded. Target identity, idempotent finalizers, and later dispatches in the same session were added as regression coverage without invented RED.
 
 ```sh
 PYTHONPATH=python/src python3 -m unittest discover -s python/tests -p test_claude_cleanup_reconcile.py -v
 ```
 
-真实 Python→Node stdio 的首次结果为 **1 pass / 1 error**：普通 owner 核对、调度恢复和重启已通过；主动 shutdown 返回 SHUTDOWN_INCOMPLETE 后，owner reconcile 被 HOST_STOPPING 拒绝。先补 AC-R04.5 和“新建/恢复/消息继续拒绝”的断言再复跑，保留同一失败；随后只允许已进入 owner shutdown 的 `sessions.reconcile` 通过停止写入门禁，权限、目标、进程和证据检查仍执行。
+The first actual Python-to-Node stdio run produced **1 pass / 1 error**. Ordinary owner attestation, scheduling recovery, and restart passed; after active shutdown returned SHUTDOWN_INCOMPLETE, reconcile was rejected with HOST_STOPPING. Add AC-R04.5 plus continued refusal of creation/resume/messages and reproduce the same failure. Then permit only sessions.reconcile after entry into owner shutdown through the stopping write gate, retaining authorization, target, process, and evidence checks.
 
-### 实现与可观察结果
+### Implementation and observed behavior
 
-- `RuntimeAdapter.prepareUnobservedCleanup({sessionId,dispatchId,generation})` 是可选内部适配器接口，不增加 wire 参数。Claude 只为已结束观察、已封闭启动、从未观察到进程且全体记录目标匹配的情况返回无副作用的准备结果；旧适配器或真实活进程保持阻挡。
-- 引擎先写 owner 声明、处置类型 `owner_attested_unobserved` 和 `session.resources_reconciled` 事件，在事务成功提交后才解除内存记录；SQLite trigger 令最终 operation 写入失败、期限超限、终态冲突与持久资源冲突均保持原记录和租约。相同键重试不重复写事件或解除其他记录。
-- 实际引擎中两条未知记录占满 A，核对其中一条后另一条仍 held，排队任务得以派发；原任务的 Q/blocked 保留。仅声明本地 stopped、远端仍 unknown 时不释放 A。明确 completed 仍先进入 paused，不自动批准或重跑。
-- 所有者人工声明不调用自动 resource_observation。真实 Python 重启后检查 SQLite，原 dispatch 的 `executionState.localResources` 仍为 unknown，租约释放原因是 owner_attestation；原核对回执和唯一审计事件持久保留。
-- cleanup 用前半段原预算等待 SDK，然后独立对自有句柄 EOF/SIGTERM，剩余预算观察真实退出；close 不存在或失败时立即兜底。永久 pending、无效返回和独立 signal 都不跳过回收。SIGTERM/EOF 均被忽略时仍有界返回 unknown；真实迟到退出才确认清理。旁观进程保持存活。
-- TS 嵌入 SDK 可提交人工核对并关闭；实际 Unix SDK 客户端仍 UNAUTHORIZED。Python 在 SHUTDOWN_INCOMPLETE 后核对并沿用原 shutdown operationId 续等，确认实际 Node 宿主退出；新建、恢复和消息仍 HOST_STOPPING。
+- RuntimeAdapter.prepareUnobservedCleanup({sessionId,dispatchId,generation}) is an optional internal adapter interface without new wire parameters. Claude returns a preparation result without side effects only when observation ended, spawning is sealed, no process was ever observed, and every record matches the target. Old adapters and actual live processes retain the guard.
+- At this increment, the engine saved the owner declaration, owner_attested_unobserved disposition, and session.resources_reconciled event before retiring memory records after transaction commit. A SQLite trigger rejecting the final operation write, exceeded deadlines, terminal conflicts, and persistent resource conflicts all retained the original records/leases. Same-key retries neither duplicated events nor retired other records. Section 7 subsequently separates cleanup preparation from its completion event.
+- With two unknown records occupying A, reconciling one retained the other's held lease and admitted queued work. Original Q/blocked remained. Local stopped with remote unknown did not release A. Confirmed completed first entered paused, without automatic approval or replay.
+- Owner declarations did not emit automatic resource_observation. After an actual Python-driven restart, SQLite still recorded executionState.localResources=unknown on the original dispatch; lease release used owner_attestation. The receipt and unique audit event persisted.
+- Cleanup first lets the SDK use half the original budget, then independently applies owned EOF/SIGTERM and observes exit for the remainder. Missing/failed close triggers immediate fallback. Pending/invalid returns and independent signals do not skip cleanup. Ignored SIGTERM/EOF remains bounded unknown until actual late exit. An unrelated observer process stays alive.
+- Embedded TypeScript can attest and close; actual Unix SDK clients remain UNAUTHORIZED. Python reconciles after SHUTDOWN_INCOMPLETE, continues with the original shutdown operationId, and observes actual Node-host exit. Creation, resume, and messages remain HOST_STOPPING.
 
-### 整合回归与最终 GREEN
+### Integration regression and final GREEN
 
-兜底回收使旧的“等待 stdin” fixture 正常退出，不能继续用它模拟拒绝清理的资源。相应测试改用实际忽略 EOF/SIGTERM 的子进程，并等待 ready 后才进入受测路径。断言仍要求真正存活的进程阻挡人工核对。
+Fallback makes the old "wait for stdin" fixture exit normally, so it no longer represents refusal to clean up. Replace it with an actual child that ignores EOF/SIGTERM, waiting for readiness before the tested path. Keep the assertion that genuinely live processes block reconciliation.
 
-中间一次全量为 205 pass / 2 fail：一个旧生命周期 fixture 尚未替换；另一个晚到终态测试的 20ms 期限在并行负载下早于子进程启动完成，第二次 next 尚未开始。后者还暴露了断言失败后未释放 fixture 的问题；仅终止确认属于本次运行的该子进程，保存失败报告。测试改用就绪握手及注入的剩余预算，增加失败时的清理钩子；没有延长生产期限或放宽退出证据。
+An intermediate full run produced 205 pass / 2 fail: one old lifecycle fixture was not yet replaced; another late-terminal test's 20ms limit expired under parallel load before child startup and before its second next call. The latter also exposed missing fixture cleanup after assertion failure. Terminate only the child confirmed to belong to that run and preserve the failure report. Use readiness handshake/injected remaining budget plus failure cleanup hooks; do not extend production deadlines or weaken exit evidence.
 
-最终结果：
-
-| 命令 | 结果 |
+| Command | Actual result |
 | --- | --- |
-| `node --test tests/contract/claude-cleanup-recovery.test.ts` | 13/13；含实际 Unix socket、SQLite 回滚与真实子进程 |
-| Python 上述新增测试命令 | 2/2；真实 owner stdio、重启、关闭续等 |
-| `npm test` | **207/207**；0 fail、0 cancelled、0 skipped；约 2.68 秒 |
-| `npm run test:python` | **42/42**；约 4.48 秒 |
-| `npm run typecheck` | 通过 |
-| `npm run format:check` | 通过 |
-| `git diff --check` | 通过 |
+| node --test tests/contract/claude-cleanup-recovery.test.ts | 13/13, including real Unix sockets, SQLite rollback, and children |
+| Python targeted command above | 2/2, actual owner stdio, restart, and shutdown continuation |
+| npm test | **207/207**; 0 failed, cancelled, or skipped; about 2.68 seconds |
+| npm run test:python | **42/42**; about 4.48 seconds |
+| npm run typecheck | Passed |
+| npm run format:check | Passed |
+| git diff --check | Passed |
 
-本轮未调用真实 SDK/付费模型、未提交或推送。异步清理预算不能抢占阻塞 JS 线程的同步代码；人工声明仍要求所有者独立核对真实环境，离线 fixture 不证明上游版本或真实业务结果。
+No real SDK/paid model, commit, or push was used during this increment. Async cleanup budgets cannot preempt synchronous JS blocking. Owners still independently verify the real environment; offline fixtures establish neither upstream-version acceptance nor real business outcomes.
 
-## 7. AC-R04.6：finalizer 违约与提交后的收尾回执
+## 7. AC-R04.6: Invalid finalizers and post-commit cleanup receipts
 
-本增量针对第三方适配器在 prepare/finalizer 边界违反运行时契约的实际可复现行为。保留 resolveConflict 原门禁，不为当前不可达路径增加放行接口；0003-B 与其他 P2 继续不在范围内。
+This increment addresses reproducible third-party adapter violations at prepare/finalizer boundaries. Preserve resolveConflict's existing guard without adding a bypass for its currently unreachable path. 0003-B and other P2 items remain excluded.
 
-先补 AC-R04.6 与 `tests/engine/reconcile-finalizer.test.ts`，执行：
+Add AC-R04.6 and tests/engine/reconcile-finalizer.test.ts first, then run:
 
 ```sh
 node --test tests/engine/reconcile-finalizer.test.ts
 ```
 
-首次 **0 pass / 7 fail**：三种真值非函数返回在提交后才抛 TypeError；prepare/finalizer 的异常未转为可核对错误；原实现没有 pending 收尾回执，不能通过同键重试处理 finalizer 或完成回执写入失败；重启后也无法区分已提交声明与未完成收尾。类型检查在违约测试使用显式 unknown 转换后通过，保留的 RED 为实际运行行为。
+Initial **0 pass / 7 fail**: three truthy non-function results threw TypeError only after commit; prepare/finalizer exceptions lacked recoverable errors; no pending cleanup receipt supported same-key retry after finalizer/completion-persistence failure; restart could not distinguish committed attestation from unfinished cleanup. Typecheck passed after explicit unknown casts in contract-violation tests; the retained RED was actual runtime behavior.
 
-首批实现后追加三项 Promise/无效返回边界，实际 **7 pass / 3 fail**：finalizer 返回 Promise.reject、未完成 Promise 或 no-op 时，原初稿仍错误报告收尾完成。修正为观察 Promise 两种结局而不无界等待、不并行重复调用，并在完成回执前检查资源查询；最终该文件 **10/10**。这些是注入适配器违约的契约测试，不声称内置 Claude 产生过上述故障。
+After the initial implementation, three added Promise/invalid-return cases produced **7 pass / 3 fail**: Promise.reject, pending Promise, and no-op finalizers still incorrectly reported completion. Observe both Promise outcomes without unbounded waits or concurrent reinvocation, and check resource state before acknowledgement. The final file passed **10/10**. These inject adapter contract violations and do not claim the built-in Claude adapter produced them.
 
-实现结果：
+Observed implementation:
 
-- 非函数返回与 prepare 抛错在初始事务内拒绝为 INVALID_RUNTIME_CONTRACT，租约和记录保留，无成功核对回执。
-- 初始事务只确认 owner 声明和业务处理，记录 `session.resource_cleanup_prepared`；对应操作先是 persisted，`resourceCleanup.status=pending`、`unobservedResourcesReconciled=false`。原执行租约若已依据 owner 声明释放，不把后续收尾异常伪装成事务回滚。
-- 宿主保留原 finalizer。异常返回 RESOURCE_CLEANUP_INCOMPLETE，携带 operationId/auditCommitted；pending 期间 scheduler 原因包含 RESOURCE_CLEANUP_PENDING，停止新派发。普通客户端和不同 payload 的同键请求不能触发重试。
-- 原 owner 同键重试只继续这次收尾；成功后第二个事务将回执改为 completed/true，写唯一的 `session.resources_reconciled` 和 operation.updated，再恢复调度。重复成功请求不会再次执行 prepare/finalizer、改变业务状态或重写核对事件。
-- 用 SQLite UPDATE trigger 注入完成回执写入失败：内存解除已完成后，只重试持久确认，finalizer 调用次数仍为 1。这里补测的是真实 SQLite 第二事务失败，区别于上一增量的初始声明事务失败。
-- 违约 Promise 的 pending 状态不阻塞 RPC；同键重试不会并发调用。Promise 成功/失败仅更新内存进展，仍需 owner 显式重试完成回执。finalizer 返回后仍 active 则继续 pending，不声称已解除记录。
-- 真实 Node owner 重启后，未完成操作按现有规则进入 outcome_unknown；原 finalizer 已不可恢复时明确返回原 operationId 和 RESOURCE_CLEANUP_INCOMPLETE，不重新调用新适配器、不利用空内存伪造原收尾成功。
+- Non-function prepare results and thrown prepare errors are rejected in the initial transaction with INVALID_RUNTIME_CONTRACT. Retain leases/records without successful reconciliation receipts.
+- The first transaction commits the owner declaration/business decisions and session.resource_cleanup_prepared. The operation is persisted, resourceCleanup.status=pending, and unobservedResourcesReconciled=false. If owner attestation already released the lease, later cleanup failure does not pretend the transaction rolled back.
+- Retain the original finalizer. RESOURCE_CLEANUP_INCOMPLETE carries operationId/auditCommitted. Pending cleanup adds RESOURCE_CLEANUP_PENDING and blocks new dispatches. Ordinary clients and same-key requests with different payloads cannot retry it.
+- The same owner's explicit same-key retry continues only this cleanup. On success, a second transaction changes the receipt to completed/true, writes the unique session.resources_reconciled and operation.updated events, and resumes scheduling. Repeated successful requests do not rerun prepare/finalizer, change business state, or duplicate events.
+- A real SQLite UPDATE trigger injects failure in completion-receipt persistence. After memory retirement succeeds, retry only acknowledgement; finalizer invocation remains one. This second-transaction failure differs from the previous increment's initial-attestation rollback.
+- A contract-violating pending Promise does not block RPC or permit concurrent same-key invocation. Fulfillment/rejection updates memory progress only; the owner still explicitly retries to complete the receipt. A returned finalizer with resources still active remains pending.
+- After an actual Node-owner restart, unfinished operations enter outcome_unknown under existing recovery rules. If the original finalizer is unrecoverable, report its operationId and RESOURCE_CLEANUP_INCOMPLETE. Do not call a new adapter or interpret empty memory as successful original cleanup.
 
-Python 新增两项真实 stdio 回归，验证错误字段、回执 lookup、同键续等，以及断开原宿主再启动后的未知回执。既有 SQLite 只读断言改用显式 closing 关闭连接，消除扩展测试触发 GC 时发现的测试资源警告。
+Two additional real Python stdio regressions verify error fields, receipt lookup, same-key continuation, and unknown receipts after stopping/restarting the original host. Existing SQLite read-only assertions now use explicit closing to close connections, eliminating test-resource warnings found when expanded coverage triggered GC.
 
-最终验证：
-
-| 命令 | 结果 |
+| Command | Actual result |
 | --- | --- |
-| 新增 finalizer 测试 + 原 claude-cleanup-recovery 测试 | 23/23 |
-| `PYTHONPATH=python/src python3 -m unittest discover -s python/tests -p test_claude_cleanup_reconcile.py -v` | 4/4 |
-| `npm test` | **217/217**；0 fail、0 cancelled、0 skipped；约 2.74 秒 |
-| `npm run test:python` | **44/44**；约 4.83 秒 |
-| `npm run typecheck` | 通过 |
-| `npm run format:check` | 通过 |
-| `git diff --check` | 通过 |
+| New finalizer and existing claude-cleanup-recovery tests | 23/23 |
+| PYTHONPATH=python/src python3 -m unittest discover -s python/tests -p test_claude_cleanup_reconcile.py -v | 4/4 |
+| npm test | **217/217**; 0 failed, cancelled, or skipped; about 2.74 seconds |
+| npm run test:python | **44/44**; about 4.83 seconds |
+| npm run typecheck | Passed |
+| npm run format:check | Passed |
+| git diff --check | Passed |
 
-全部使用临时状态与离线 fixture，没有调用付费模型、提交、推送或合并。新增收尾回执区分“声明已提交”与“记录已解除”，不是通用 force、自动重试或真实厂商验收。
+All runs used temporary state and offline fixtures, without paid models, commits, pushes, or merges during this increment. Cleanup receipts distinguish committed declarations from retired records; they are not a general force flag, automatic retry, or real-provider acceptance.
