@@ -338,7 +338,19 @@ test('AC06 explicit cancellation waits for observed interruption', async () => {
 });
 
 test('AC07 drain timeout retains owner and can continue to closure', async () => {
-  const f = await fixture({ adapters: [createFakeAdapter({ delayMs: 100 })] });
+  let release!: () => void;
+  const terminalGate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const fake = createFakeAdapter();
+  const execute = fake.execute.bind(fake);
+  fake.execute = async function* (input) {
+    for await (const event of execute(input)) {
+      yield event;
+      if (event.type === 'accepted') await terminalGate;
+    }
+  };
+  const f = await fixture({ adapters: [fake] });
   try {
     const t = await create(f.engine);
     await until(
@@ -354,11 +366,13 @@ test('AC07 drain timeout retains owner and can continue to closure', async () =>
     });
     assert.ok(operationId);
     assert.equal((await task(f.engine, t.id)).status, 'running');
+    release();
     assert.equal(
       (await f.engine.close({ mode: 'drain', timeoutMs: 1000, operationId })).status,
       'closed',
     );
   } finally {
+    release();
     await f.cleanup();
   }
 });

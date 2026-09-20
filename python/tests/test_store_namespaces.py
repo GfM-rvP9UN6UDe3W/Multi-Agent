@@ -15,7 +15,7 @@ CLI = ROOT / 'packages/cli/src/main.ts'
 
 class StoreNamespaceTests(unittest.IsolatedAsyncioTestCase):
     async def test_original_receipts_survive_rollover_and_cross_host_retry(self):
-        with tempfile.TemporaryDirectory(prefix='orch-py-stores-', dir='/private/tmp') as temp:
+        with tempfile.TemporaryDirectory(prefix='orch-py-stores-', dir=str(Path('/tmp').resolve())) as temp:
             root = Path(temp).resolve()
             for name in ['work', 'state', 'second', 'control', 'stores', 'archives']:
                 (root / name).mkdir(mode=0o700)

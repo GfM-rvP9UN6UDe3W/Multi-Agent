@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createCodexAdapter } from '../../packages/adapter-codex/src/index.ts';
 import type { RuntimeEvent } from '../../packages/engine/src/types.ts';
+import { controlledExecutionBudget } from '../fixtures/execution-budget.ts';
 
 const fixtureSource = String.raw`
 const fs = require('node:fs');
@@ -22,6 +23,7 @@ readline.createInterface({input:process.stdin}).on('line', line => {
   if(request.method === 'initialize') {
     if(mode === 'initialize' || mode === 'ignore-term') return;
     if(mode === 'request-rollback') return noise();
+    if(mode === 'terminal-rollback') return setTimeout(() => send({id:request.id,result:{userAgent:'fixture'}}), 300);
     send({id:request.id,result:{userAgent:'fixture'}});
   } else if(request.method === 'thread/start') {
     send({id:request.id,result:{thread:{id:'owned-thread'}}});
@@ -53,6 +55,11 @@ async function bounded<T>(promise: Promise<T>, timeoutMs = 3000): Promise<T> {
 async function setup(t: TestContext, mode: string, closeTimeoutMs = 300) {
   const dir = await mkdtemp(join(tmpdir(), 'codex-owned-'));
   const capturePath = join(dir, 'child.json');
+  const rollback = mode.endsWith('-rollback');
+  const controlled = controlledExecutionBudget(180);
+  let deadlineStarted: number | undefined;
+  const remaining = () =>
+    180 - (deadlineStarted === undefined ? 0 : performance.now() - deadlineStarted);
   const adapter = createCodexAdapter({
     command: process.execPath,
     args: ['-e', fixtureSource, mode],
@@ -75,6 +82,15 @@ async function setup(t: TestContext, mode: string, closeTimeoutMs = 300) {
       prompt: 'Offline fixture',
       permissionProfile: 'read-only',
       signal: new AbortController().signal,
+      ...(rollback
+        ? {
+            executionBudget: {
+              ...controlled.budget,
+              remainingAcceptanceMs: remaining,
+              remainingTurnMs: remaining,
+            },
+          }
+        : {}),
     }))
       events.push(event);
     return events;
@@ -108,7 +124,16 @@ async function setup(t: TestContext, mode: string, closeTimeoutMs = 300) {
     }
     throw new Error(`Owned fixture did not reach ${stage}`);
   };
-  return { adapter, sessionId, events, finished, reached };
+  return {
+    adapter,
+    sessionId,
+    events,
+    finished,
+    reached,
+    startDeadline: () => {
+      deadlineStarted = performance.now();
+    },
+  };
 }
 
 for (const mode of ['initialize', 'turn-start']) {
@@ -194,6 +219,7 @@ for (const mode of ['request-rollback', 'terminal-rollback']) {
       const previous = Date.now();
       t.mock.method(Date, 'now', () => previous - 60000);
       const started = performance.now();
+      f.startDeadline();
       const events = await bounded(f.finished, 700);
       assert.ok(performance.now() - started < 600);
       assert.equal(

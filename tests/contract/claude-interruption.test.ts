@@ -62,7 +62,9 @@ function setup(
   const adapter = createClaudeAdapter({
     requestTimeoutMs: 1000,
     turnTimeoutMs: 2000,
-    cleanupTimeoutMs: 40,
+    // Classification tests use the normal cleanup allowance. Only the held-child case
+    // intentionally exercises incomplete cleanup with a short budget.
+    cleanupTimeoutMs: settings.holdChild ? 40 : 1000,
     interruptTimeoutMs: settings.interruptTimeoutMs ?? 250,
     options: settings.options,
     observeExecutionStop: settings.observeExecutionStop,

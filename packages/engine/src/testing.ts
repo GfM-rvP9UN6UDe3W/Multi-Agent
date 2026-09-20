@@ -112,6 +112,7 @@ async function harness(
     stateDir: join(dir, 'state'),
     adapters: [host.adapter],
     limits: { maxActiveSessions: 1 },
+    storage: { emergencyBytes: 4096 },
     timeouts,
   });
   engine = active;

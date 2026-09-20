@@ -19,7 +19,7 @@ NODE = shutil.which("node")
 @unittest.skipUnless(NODE and CLI.is_file(), "requires Node.js 22.18+ and the local host source")
 class NodeReconcileTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
-        self.temp = tempfile.TemporaryDirectory(prefix="orch-py-reconcile-", dir="/private/tmp")
+        self.temp = tempfile.TemporaryDirectory(prefix="orch-py-reconcile-", dir=str(Path("/tmp").resolve()))
         self.addCleanup(self.temp.cleanup)
         self.directory = Path(self.temp.name).resolve()
         workspace = self.directory / "workspace"

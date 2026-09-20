@@ -73,7 +73,7 @@ function rpc(input: Readable, output: Writable, diagnostics: () => string) {
         pending.set(id, { resolve: (value) => resolve(value as T), reject });
         timer = setTimeout(
           () => reject(new Error(`Fixture RPC timed out: ${method}; ${diagnostics()}`)),
-          method === 'initialize' ? 10000 : 2000,
+          method === 'initialize' || method.startsWith('host.shutdown') ? 10000 : 2000,
         );
         output.write(JSON.stringify({ jsonrpc: '2.0', id, method, params }) + '\n');
       });
