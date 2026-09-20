@@ -6,7 +6,48 @@ Licensed under the [MIT License](LICENSE). Commercial use, modification and redi
 
 **The five npm packages are ESM-only; direct `require()` is not exported.** Host-side single-file CJS and ESM bundles are supported through the [bundled-host integration contract](docs/acceptance/bundled-host.md). A Claude consumer installs **`@agent-orch/sdk` + `@agent-orch/engine` + `@agent-orch/adapter-claude`**. The SDK alone does not install a provider. The other packages are `@agent-orch/adapter-codex` and `@agent-orch/cli`. Local RC tarballs and their SHA-256 manifest can be installed without public npm publication.
 
-**Unpublished development version: SPEC-0001–0010, including the B/C storage, routing, accounting and bundled-host implementation, are present.** The latest offline regression passes **435 Node tests and 48 Python tests**, with no skipped tests. See the [completion matrix](docs/specs/0009-complete-design.md#completion-matrix), [original implementation evidence](docs/tdd/0009-complete-design.md), and [RC/bundle verification evidence](docs/tdd/0010-bundled-host-delivery.md). Locally installable npm and Python artifacts are available through the build commands below. Real-model acceptance, actual OS sandbox enforcement, external application integration, economic benefit and publication remain separate unverified boundaries. Ordinary tests use explicit fake runtimes or owned protocol fixtures without login credentials or model requests.
+**Development packages; not published to npm or PyPI.** SPEC-0001–0010 cover storage, routing, accounting and bundled-host delivery. The recorded local regression on 2026-09-21 passed **435 Node tests and 48 Python tests**, with no skipped tests; nine package-installation/bundle modes also passed. See the [completion matrix](docs/specs/0009-complete-design.md#completion-matrix), [original implementation evidence](docs/tdd/0009-complete-design.md), and [RC/bundle verification evidence](docs/tdd/0010-bundled-host-delivery.md). Real-model acceptance, actual OS sandbox enforcement, external application integration, economic benefit and registry publication remain unverified boundaries. Ordinary tests use explicit fake runtimes or owned protocol fixtures without login credentials or model requests.
+
+## Install and integrate
+
+Choose packages for the process that will own or connect to the engine:
+
+| Package | Role | When needed |
+| --- | --- | --- |
+| `@agent-orch/sdk` | TypeScript application API | TypeScript consumers |
+| `@agent-orch/engine` | Shared scheduler, storage and runtime contracts | Engine owners; also an SDK dependency |
+| `@agent-orch/adapter-claude` | Claude runtime adapter | Claude execution |
+| `@agent-orch/adapter-codex` | Codex App Server adapter | Codex execution |
+| `@agent-orch/cli` | Standalone/managed Node host and commands | CLI or Python-owned host operation |
+
+Use local tarballs from one candidate version. To build a new MIT-licensed npm candidate from this checkout:
+
+```sh
+npm ci --ignore-scripts
+npm run build:packages -- dist/release/0.1.0-rc.2 --version 0.1.0-rc.2
+```
+
+`0.1.0-rc.2` is an example of the next candidate version, not an already published release. The build writes five tarballs and `npm-manifest.json`; verify their SHA-256 values before installation. In the consuming project, install the three Claude packages together, substituting the absolute artifact directory:
+
+```sh
+npm install /absolute/rc/agent-orch-sdk-0.1.0-rc.2.tgz \
+  /absolute/rc/agent-orch-engine-0.1.0-rc.2.tgz \
+  /absolute/rc/agent-orch-adapter-claude-0.1.0-rc.2.tgz
+```
+
+Keep the generated npm lockfile. Install the Codex adapter instead for Codex execution; add the CLI when running a separate Node host. Python installs its wheel separately and connects to that Node host; the Python package does not bundle or download an engine.
+
+The delivered `0.1.0-rc.1` artifacts predate the MIT decision and retain their original `UNLICENSED` metadata. Current source and future builds use MIT. Existing candidate files are immutable; use a new version for a new delivery.
+
+### Claude in a bundled application
+
+The host owns its pinned Claude SDK and native executable. When supplying `config.query`, also supply a matching `createMcpServer` callback if orchestration tools are enabled, and `inspectSession` if native history inspection is required. Missing MCP binding fails before submission; missing inspection binding reports `unavailable`. The adapter does not silently resolve another SDK for an injected host.
+
+Public helpers `createClaudeMcpServer(tools, { sdk, zod })` and `inspectClaudeSession(input, sdk)` bind those operations to the host's dependencies. Default Node loading requires the optional native SDK and Zod 4 peers. See the [complete host-injection example](docs/acceptance/bundled-host.md#host-owned-claude-sdk).
+
+Package exports are ESM-only. The package smoke verifies CJS and ESM single-file hosts after removing node_modules and moving each executable into a separate deployment directory. Its CJS configuration adapts `import.meta.url` only in the third-party Claude SDK; see the [exact bundle configuration](scripts/package-bundles-smoke.mjs). Actual Axion Vite/Electron 43.2.0 / Node 24.18 acceptance remains pending.
+
+## Documentation
 
 - [Foundation specification and acceptance criteria](docs/specs/0001-foundation.md)
 - [Runtime adapter specification](docs/specs/0002-runtime-adapters.md)
@@ -19,6 +60,7 @@ Licensed under the [MIT License](LICENSE). Commercial use, modification and redi
 - [Archive and namespace-transition contract](docs/specs/0003-b-archive.md)
 - [Lifecycle, storage and routing contracts](docs/specs/0003-policy-retention-deadlines.md)
 - [Design completion specification](docs/specs/0009-complete-design.md)
+- [Bundled-host delivery specification](docs/specs/0010-bundled-host-delivery.md)
 - [TDD evidence](docs/tdd/0001-evidence.md)
 - [Contribution guidelines](CONTRIBUTING.md)
 - [Full product design](AGENT_ORCHESTRATION_DESIGN.md) and [integration guide](SDK_USAGE_AND_WIRING.md)
@@ -48,7 +90,7 @@ See the [JSON Schema](schemas/protocol.schema.json), generated TypeScript `WireT
 
 ## Local development and verification
 
-Declared minimums are Node.js 22.18+ and Python 3.11+. Recorded verification used Node.js 24.14.0 and Python 3.14.6. Node's built-in SQLite currently prints an experimental warning to stderr. The [CI matrix](.github/workflows/offline.yml) configures exact macOS/Linux and minimum/current runtime jobs; those remote jobs have not been executed in this task.
+Declared minimums are Node.js 22.18+ and Python 3.11+. Recorded local verification used Node.js 24.14.0 and Python 3.14.6. Node's built-in SQLite prints an experimental warning on that verified runtime. The [CI matrix](.github/workflows/offline.yml) configures macOS/Linux and minimum/current runtime jobs. Check [GitHub Actions](https://github.com/masonlee39/Multi-Agent/actions/workflows/offline.yml) for the result of a specific commit; local test counts above do not imply remote CI success.
 
 Run from the repository root:
 
@@ -67,7 +109,7 @@ Node executes erasable TypeScript source directly. Distribution builds emit Java
 
 ```sh
 npm run build:packages
-# Use an isolated Python build environment with setuptools, wheel and build installed.
+# Use an isolated Python build environment with setuptools >=77.0.3, wheel and build.
 python -m build --no-isolation --sdist --wheel --outdir dist/release python
 PACKAGE_BUILD_PYTHON="$(command -v python)" npm run test:packages
 ```
@@ -84,8 +126,6 @@ Both languages also have matching offline checks/dependency/snapshot examples:
 node examples/typescript/checks-and-dependencies.ts
 PYTHONPATH=python/src python3 examples/python/checks_and_dependencies.py
 ```
-
-
 
 ```sh
 PYTHONPATH=python/src python3 examples/python/fake_roundtrip.py
@@ -105,11 +145,11 @@ mkdir -p "$DEMO_ROOT/workspace" "$DEMO_ROOT/state"
 node examples/typescript/local.ts "$DEMO_ROOT/workspace" "$DEMO_ROOT/state"
 ```
 
-Enter `approve` or `deny` after inspecting the fixture result. Other input leaves the task pending. The example preserves the supplied state directory so you can inspect restart behavior; decide whether to retain it after the engine stops. Source entry points:
+Enter `approve` or `deny` after inspecting the fixture result. Other input leaves the task pending. The example preserves the supplied state directory so you can inspect restart behavior; decide whether to retain it after the engine stops. Applications using installed packages import their public entry points:
 
 ```ts
-import { createOrchestrator } from './packages/sdk-typescript/src/index.ts';
-import { createFakeAdapter } from './packages/engine/src/fake.ts';
+import { createOrchestrator } from '@agent-orch/sdk';
+import { createFakeAdapter } from '@agent-orch/engine/fake';
 
 const orch = await createOrchestrator({
   workspace: '/absolute/existing/workspace',
@@ -120,7 +160,7 @@ const orch = await createOrchestrator({
 });
 ```
 
-This snippet only creates the orchestrator. The complete example handles approval and shutdown. A timeout or cancellation of `task.wait({timeoutMs, signal})` stops only the local wait; remote cancellation requires an explicit `tasks.cancel`. Inspect and resolve paused/blocked states rather than waiting indefinitely for completion.
+This snippet only creates the orchestrator with an explicit offline fake adapter. The complete repository example uses source imports and handles task creation, approval and shutdown. A timeout or cancellation of `task.wait({timeoutMs, signal})` stops only the local wait; remote cancellation requires an explicit `tasks.cancel`. Inspect and resolve paused/blocked states rather than waiting indefinitely for completion.
 
 ## Standalone host and cross-language integration
 
@@ -172,7 +212,7 @@ node packages/cli/src/main.ts host --config /absolute/orchestrator.json
 Client examples:
 
 ```ts
-import { connectOrchestrator } from './packages/sdk-typescript/src/index.ts';
+import { connectOrchestrator } from '@agent-orch/sdk';
 const orch = await connectOrchestrator({
   socketPath: '/absolute/private-state/host.sock',
   requestTimeoutMs: 30_000,
