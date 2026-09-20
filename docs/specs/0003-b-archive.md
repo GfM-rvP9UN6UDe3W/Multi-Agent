@@ -1,98 +1,98 @@
-# SPEC-0003-B：容量背压后的封存与显式 store 切换
+# SPEC-0003-B: Archiving and explicit store rollover after capacity backpressure
 
-日期：2026-09-19。状态：**已确定设计，待 TDD 实现，无 RED/GREEN**。本文件补充 [SPEC-0003](./0003-policy-retention-deadlines.md) 的 AC-B01–B07，新增 AC-B08–B18；依赖 [0003-A](./0003-a-lifecycle.md) 的所有者核对和先行 [0003-A2](./0003-a2-execution-isolation.md) 的执行/结果隔离。本文接口、配置及故障恢复均尚未实现，不以已有测试通过作为本规格的验证证据。
+Date: 2026-09-19. Status: **design agreed; TDD implementation pending; no RED/GREEN evidence**. This supplements AC-B01–B07 of [SPEC-0003](./0003-policy-retention-deadlines.md) with AC-B08–B18. It depends on [A](./0003-a-lifecycle.md) owner reconciliation and prior [A2](./0003-a2-execution-isolation.md) execution/outcome isolation. APIs, configuration, and failure recovery described here are unimplemented. Existing passing tests do not validate this specification.
 
-## 1. 目标、范围与非目标
+## 1. Goals, scope, and exclusions
 
-最小 tombstone 与原 store 同寿命。达到默认 100 万最小快照/tombstone 的新增业务背压线后，所有者可以审计式提高配额，或者在满足收尾条件后显式执行 rollover：封存旧 store，在新 store 接受新工作。不能删除旧防重标识来腾出接单名额，也不能把原任务搬到新 store 重新执行。
+Minimal tombstones live as long as their store. At the proposed one-million minimal-snapshot/tombstone new-work threshold, owners may auditably raise capacity or, after settlement prerequisites are met, explicitly roll over: archive the old store and accept new work in a new one. Do not delete deduplication identities to free admission capacity or move old tasks into the new store for replay.
 
-本增量只实现本机、单所有者、完整 store 的离线封存、只读归档查询和活动 store 切换。不做逐条墓碑迁移、跨机器集群、分布式锁、归档自动删除、业务任务迁移或跨 store 全局幂等平台。封存指完整保存当时仍保留的数据；不承诺找回此前按 AC-B01–B04 合法回收的正文。
+Scope is local, single-owner, whole-store offline archiving, read-only archive queries, and active-store switching. Per-record tombstone migration, multi-machine clusters, distributed locks, automatic archive deletion, business-task migration, and global cross-store idempotency are excluded. An archive preserves data still retained at that point; it cannot recover bodies legally collected earlier under AC-B01–B04.
 
-本规格只授权后续在独占临时目录编写故障测试，不授权本轮实现、迁移、切换或删除真实数据，不改变双语言双运行时交付承诺。
+This specification authorizes later fault tests in exclusively owned temporary directories, not implementation, migration, switching, or deletion of real data in this design increment. The bilingual, dual-runtime delivery commitment remains unchanged.
 
-## 2. 身份、权限与查询契约
+## 2. Identity, authorization, and query contract
 
-### 2.1 不可改写的请求身份
+### 2.1 Immutable request identity
 
-每个业务变更请求携带 `expectedStoreId`。调用者保存的完整重试身份为 `(storeId, method, scope, idempotencyKey)`；请求摘要继续采用同一版本的规范化算法。SDK 在发送前固定该身份，成功回执和传输异常都带回它。重连、重新握手或切换宿主不能把待重试请求的旧 storeId 替换成当前值。
+Every business mutation carries `expectedStoreId`. Callers retain the full retry identity `(storeId, method, scope, idempotencyKey)` and a digest from the same versioned normalization algorithm. SDKs freeze that identity before sending and return it in both successful receipts and transport exceptions. Reconnection, re-handshake, or host switching must not replace a pending retry's old storeId with the current one.
 
-新宿主先校验身份，再进行业务幂等查找或任何变更。旧 storeId 的变更请求返回 `STORE_NAMESPACE_MISMATCH`，包含 expected/current storeId 及可查询的 archiveId（如有），不得创建操作、消息、任务或 dispatch。缺少身份返回 `STORE_NAMESPACE_REQUIRED`。旧请求只有只读查询或取回旧回执的路径，不能重定向成新 store 的变更。
+The new host validates identity before idempotency lookup or mutation. Old-store mutations return `STORE_NAMESPACE_MISMATCH`, including expected/current storeId and queryable archiveId when available, without creating operations, messages, tasks, or dispatches. Missing identity returns `STORE_NAMESPACE_REQUIRED`. Old requests have only read/query receipt-recovery paths; never redirect them into new-store mutations.
 
-命名空间强制绑定是破坏性变更，目标 wire 明确升级为 `protocolVersion="2.0"`，并协商 `storeNamespaces.version=1`；迁移后的宿主对 1.0 握手返回 `PROTOCOL_MISMATCH`，不能等业务请求执行后才发现不兼容。新 SDK 在 2.0 握手缺少上述能力时拒绝进入可写状态，不能靠忽略额外字段声称兼容。共享 schema、双语言 SDK、CLI 与宿主必须同一增量升级；数据库 schemaVersion 按 B 实施时前一已发布迁移版本递增，不与 wire 2.0 混用。字段未完成双语言接线前不得启用 rollover。
+Mandatory namespace binding is breaking: target `protocolVersion="2.0"` with `storeNamespaces.version=1`. Migrated hosts reject 1.0 handshakes with `PROTOCOL_MISMATCH` before business execution. New SDKs refuse writable state if a 2.0 handshake lacks the capability; ignoring extra fields is not compatibility. Upgrade shared schema, both SDKs, CLI, and host together. Increment database schemaVersion from the last released migration at B implementation time, separately from wire 2.0. Do not enable rollover before both languages are wired.
 
-### 2.2 所有者管理与可信目录
+### 2.2 Owner administration and trusted directories
 
-增加所有者管理操作 `stores.rollover({expectedStoreId, idempotencyKey})`，返回持久化 `rolloverId`；`rollovers.get({rolloverId})` 只读查询进度和最终结果。管理操作记录位于控制目录，以原 storeId、方法及键防重；同键重试不开始第二次切换，改变载荷继续冲突。活动 store 已改变后的管理重试只返回原记录，不成为新的切换授权。
+Add owner-only `stores.rollover({expectedStoreId, idempotencyKey})`, returning durable `rolloverId`, and read-only `rollovers.get({rolloverId})` for progress/results. Store management records in the control directory, deduplicated by original storeId, method, and key. Same-key retries do not start another switch; changed payloads conflict. After active-store change, retries only retrieve the original record and do not authorize another rollover.
 
-所有者可信配置指定 `controlDir`、`storesRoot`、`archiveRoot`，由宿主生成其下的 store/归档目录名。业务请求、模型工具和归档查询均不能提供任意本机路径、URL 或覆盖配置。目录必须为当前用户独占的真实绝对目录，位于工作区外；拒绝符号链接、目录穿越和不受信任的归档文件引用。嵌入模式和受管 stdio 的既有所有者身份可发起管理操作，普通 socket 客户端和模型工具拒绝为 `UNAUTHORIZED`。
+Owner configuration specifies `controlDir`, `storesRoot`, and `archiveRoot`; the host generates managed child-directory names. Business requests, model tools, and archive queries cannot supply arbitrary local paths/URLs or override configuration. Directories must be real absolute paths, exclusively owned by the current user and outside the workspace. Reject symlinks, traversal, and untrusted archive references. Existing embedded/managed-stdio owner identity may administer; ordinary sockets/model tools receive `UNAUTHORIZED`.
 
-`controlDir` 中的原子目录清单只保存每个 store 的身份、角色、受管位置、归档校验信息和切换记录，不为每个业务幂等键再建一份在线索引。历史墓碑保留在原 store 的只读归档内，因此在线目录规模随 store 数量增长，不随历史请求数量增长。
+The atomic control-directory manifest contains store identity, role, managed location, archive verification data, and rollover records. It does not duplicate every business idempotency key into an online index. Historical tombstones stay in read-only original-store archives, so the online directory grows with store count rather than historical request count.
 
-### 2.3 归档查询
+### 2.3 Archive queries
 
-`archives.lookup({storeId, method, scope, idempotencyKey, requestDigest?})` 仅按目录清单定位归档，执行与原作用域相同的权限检查。存在完整详情时返回原 operation；只有 tombstone 时返回 `OPERATION_HISTORY_EXPIRED`、原 operationId、已知终态及可保留的结果引用。提供的请求摘要不一致时返回 `IDEMPOTENCY_CONFLICT`。产物读取只能按归档内登记的 artifactId/摘要定位，不能接受路径。
+`archives.lookup({storeId, method, scope, idempotencyKey, requestDigest?})` locates archives only through the manifest and enforces original-scope authorization. Return the original operation if details survive. If only a tombstone remains, return `OPERATION_HISTORY_EXPIRED`, original operationId, known terminal state, and retained result references. A mismatched supplied digest returns `IDEMPOTENCY_CONFLICT`. Artifact reads use registered archive artifactId/digest, never caller paths.
 
-只有成功打开并核对正确归档、完成查询后才能返回 `NOT_FOUND`。未登记 store、归档不可达、校验失败分别返回 `ARCHIVE_NOT_FOUND`、`ARCHIVE_UNAVAILABLE`、`ARCHIVE_CORRUPT`；这些结果均不授权在新 store 执行原请求。归档校验至少覆盖 storeId、schema、数据库完整性及被读取文件的清单摘要。重放旧事件仍携带原 storeId/cursor；事件已回收时遵循原 retentionFloorCursor，不拼接新 store 的日志。
+Return `NOT_FOUND` only after successfully opening/verifying the correct archive and completing the lookup. An unregistered store, inaccessible archive, or failed integrity check returns `ARCHIVE_NOT_FOUND`, `ARCHIVE_UNAVAILABLE`, or `ARCHIVE_CORRUPT`, respectively. None authorizes replay in a new store. Verification covers at least storeId, schema, database integrity, and manifest digests for files read. Old events retain original storeId/cursor; collected history follows the original retentionFloorCursor rather than joining the new log.
 
-## 3. 背压与允许封存的条件
+## 3. Backpressure and rollover prerequisites
 
-100 万是禁止新增业务的背压线，不是禁止一切 INSERT 的物理硬闸。接单前必须同时为已受理工作预留有限的收尾记录和磁盘额度：现有任务的批准/取消/核对及其审计记录、状态和终态落盘、GC 收尾、rollover 清单与归档验证均可使用。实现须列出每种已支持收尾链的记录上界，并在预留不足时提前拒绝新工作；不能依靠达到上限后还有空间这一假设。重复同键使用原记录，不重复占预留。
+One million is a new-business backpressure line, not a physical ban on every INSERT. Before admission, reserve bounded settlement records and disk space for existing-task approval/cancel/reconcile and audits, state/terminal persistence, GC completion, rollover manifests, and archive verification. Implementation must enumerate record bounds for supported settlement chains and reject new work before reserves become insufficient. Do not assume capacity remains after hitting the limit. Same-key retries reuse records/reservations.
 
-收尾额度不能用于 tasks.create、messages.send、新 dispatch、恢复为可执行的工作或任意新业务。仅为已保存成果重新申请验收的 resume 可以作为收尾，但必须验证它不会派发模型请求。不同键反复创建无必要的控制记录不享有无限额度；超额明确拒绝并保留现有记录。同一管理操作的继续执行使用原 rolloverId。父规格的 256 MiB 应急文件用于释放已预留的元数据写入空间，不作为完整归档的容量保证。实际 SQLITE_FULL/ENOSPC 仍遵循 AC-B06：停止派发，不能以应急空间必然足够为前提。
+Settlement capacity cannot fund tasks.create, messages.send, new dispatches, execution-producing resume, or arbitrary new business. Saved-result acceptance resume may settle work only after proving it cannot dispatch a model request. Repeated unnecessary control records under new keys cannot consume unlimited reserves; reject excess explicitly while retaining history. Continue a management operation under its original rolloverId. The parent specification's 256 MiB emergency file frees reserved metadata space, not guaranteed whole-archive capacity. Actual SQLITE_FULL/ENOSPC still stops dispatch under AC-B06.
 
-仅在以下条件全部满足后，才能封存并切换：
+All of these are required before archive/switch:
 
-- 已持久停止新增业务与模型派发；所有 Task 均为 completed/failed/cancelled，无 queued/running/paused/waiting 状态的待继续任务。
-- 无活动或可能已提交但未核对的 dispatch；无未解决的 outcome_unknown、证据冲突或保留中的运行时资源隔离名额。
-- 无 pending 批准、未处理消息/outbox、待执行控制操作、未完成 GC/文件提交；只允许本次 rollover 管理操作自身处于进行中。
-- 所有自有运行时消费/清理句柄已确认结束，原 writer 已可独占停止；活跃快照租期已结束或正常释放，不能丢弃其保护引用强行切换。
-- 归档所需的数据库、产物、受管运行时历史及固定引用都可读取和核对，目标目录有足够空间，且所有可写入口均支持下述 fencing。
+- New business/model dispatch is durably stopped. Every Task is completed/failed/cancelled; no queued/running/paused/waiting work remains to continue.
+- No active or possibly submitted unreconciled dispatch, unresolved outcome_unknown, evidence conflict, or retained runtime-resource occupancy remains.
+- No pending approval, unprocessed message/outbox, pending control, unfinished GC, or file commit remains. Only this rollover management operation may be in progress.
+- All owned runtime consumer/cleanup handles are confirmed ended. The old writer can stop exclusively. Active snapshot leases have expired or been normally released; do not discard protected references to force a switch.
+- Required databases, artifacts, managed runtime history, and pinned references are readable/verifiable. Destination capacity is sufficient, and every write entry point supports fencing below.
 
-旧 unknown 操作保留其历史状态，但已有符合 0003-A 的有效 resolution、关联任务已终结且资源隔离已解除时，不再作为“未解决 unknown”阻塞。单纯进程退出、所有者声明“接受风险”、复制数据库或换 storeId 都不能替代核对。条件不满足返回 `ROLLOVER_BLOCKED` 和稳定对象 ID/原因；旧 store 保持收尾模式，可继续查询、批准、取消和核对。不能通过该 API 提供 force/ignoreUnknown 绕过阻断。
+Old unknown operations retain history but no longer count as unresolved when valid A resolution exists, the associated task is terminal, and resource isolation is released. Process exit, owner acceptance of risk, copying a database, or changing storeId cannot replace reconciliation. Failed prerequisites return `ROLLOVER_BLOCKED` with stable object IDs/reasons. Keep the old store in settlement mode for queries, approval, cancel, and reconciliation. No force/ignoreUnknown bypass is allowed.
 
-静态 pin 引用不要求先删除；其被引用内容必须完整进入归档并继续受保护。尚需修改原对象或恢复执行的引用不是静态引用，必须先解决。不存在自动把 pending/unknown 搬到新 store、取消后原样重排或补建同目标任务的路径。
+Static pins need not be deleted: archive their referenced content completely and preserve protection. References requiring object mutation or resumed execution are not static and must be resolved first. Never automatically move pending/unknown work, cancel-and-requeue it unchanged, or create replacement tasks targeting the same work.
 
-所有者选择取消尚未执行的工作时，任务、消息和 outbox 必须持久化可核对的未执行终态并保留防重记录，不能仅删除队列行以满足封存条件。已有执行不明的工作仍先走核对，不适用“尚未执行”的取消路径。
+When owners cancel work that has definitely not executed, persist auditable non-executed terminal states for tasks/messages/outbox and retain deduplication records. Deleting queue rows is insufficient. Uncertain execution must first be reconciled and cannot use this unexecuted-cancel path.
 
-## 4. 单 writer 与可恢复切换
+## 4. One writer and recoverable switching
 
-控制目录使用唯一 OS 所有者锁；活动引擎同时持有该锁及当前 store 的锁。目录清单保存 `activeStoreId` 与不可复用的 `writerEpoch`。每个可写入口在启动时核对绑定，并在模型派发、控制和持久变更前验证仍持有对应 epoch；不能仅凭旧 PID 消失接管。
+Use one OS owner lock for the control directory. The active engine holds it and the current store lock. The manifest records `activeStoreId` and a non-reusable `writerEpoch`. Every write entry point validates binding at startup and epoch ownership before model dispatch, control, or persistent mutation. A disappeared old PID is not takeover authority.
 
-包括“直接打开 stateDir”的所有可写入口都必须服从该注册关系。旧 store 的 retired 标记和最低写入 schema 版本使旧可写程序拒绝启动；如果仍存在不能识别这些规则的受支持入口，预检返回 `ROLLOVER_UNSUPPORTED`，不执行切换。此约束针对支持的宿主程序，不声称抵御同 OS 用户手工改库、删除锁或绕过管理入口。
+All write entry points, including direct stateDir opening, obey registration. A retired marker and minimum writable schema version make old programs refuse startup. If a supported entry point cannot enforce these rules, preflight returns `ROLLOVER_UNSUPPORTED` without switching. This contract covers supported hosts, not manual database edits, lock deletion, or bypass by the same OS user.
 
-每一步都先写入可恢复的 rollover 阶段记录，再推进不可逆边界。目录清单以同目录临时文件写入、fsync、原子替换并同步父目录；跨数据库与目录切换不假装成单一事务。阶段与恢复规则如下：
+Record each recoverable rollover phase before crossing its irreversible boundary. Write the manifest via a same-directory temporary file, fsync, atomic replacement, and parent-directory sync. Database and directory changes are not one fictional transaction.
 
-| 阶段 | 必须完成的动作 | 在此崩溃后的恢复 |
+| Phase | Required actions | Crash recovery |
 | --- | --- | --- |
-| preparing | 保存请求身份及原 writerEpoch，关闭新接单/派发入口，检查全部阻断条件及容量 | 原 store 只进入收尾/核对，不自动恢复执行；核对通过后续做，阻断原因可查询 |
-| archiving | 独占停止旧写入，创建离线一致副本到 archiveRoot 的受管 staging；保存数据库、现存产物、受管运行时历史和清单 | 不发布未验证副本；只续做或丢弃有本次 staging 标记的临时副本，原 store 仍是依据，不能删除其数据 |
-| archive_verified | 核对 storeId/schema/内容摘要和引用完整性，将 staging 在同文件系统内原子改名为最终归档；持久保存校验结果 | 可重新验证并复用同一归档；原 store 仍被禁止新派发，不重复创建另一归档身份 |
-| new_prepared | 在 storesRoot 建空的新 store，生成全新 storeId，记录 originStoreId/rolloverId，角色为 standby；不复制旧任务、操作或消息 | 新 store 不允许写业务或派发；按标记复用它，身份不因重试改变 |
-| old_retired | 持久写入旧 store 的 retired 角色、失效 epoch 和归档引用；关闭旧 writer | 即使阶段记录尚未推进，也以旧库退役标记阻止复活；恢复验证归档与 standby 后继续，允许暂时无 writer，禁止双 writer |
-| committed | 一次原子更新目录清单：登记旧归档、设置新 activeStoreId/新 writerEpoch、完成 rollover 结果；再允许新宿主启动 | 以清单为准，新 store 只能取得一个 writer；旧 store 只读。回执丢失按 rolloverId/原管理幂等键查询，不重新切换 |
+| preparing | Save identity/original writerEpoch, close admission/dispatch, check blockers and capacity | Old store stays in settlement/reconciliation; no automatic execution. Continue after checks; blockers remain queryable |
+| archiving | Exclusively stop old writes; create an offline consistent managed staging copy under archiveRoot with database, retained artifacts, runtime history, and manifest | Never publish an unverified copy. Resume or discard only this operation's marked staging copy. Original data remains authoritative and cannot be deleted |
+| archive_verified | Verify storeId/schema/digests/references; atomically rename staging to final archive on the same filesystem; persist verification | Reverify/reuse the same archive identity. Keep original dispatch stopped |
+| new_prepared | Create an empty store under storesRoot with a fresh storeId, originStoreId/rolloverId, and standby role; copy no tasks/operations/messages | No business writes/dispatch. Reuse the marked store and stable identity on retry |
+| old_retired | Persist retired role, invalid epoch, and archive reference in old store; close old writer | Retired database marker prevents revival even if phase record lags. Verify archive/standby and continue. A temporary absence of writers is allowed; two writers are forbidden |
+| committed | Atomically register old archive, set new activeStoreId/writerEpoch, and complete rollover result in the manifest; then allow new host startup | Manifest is authoritative. New store gets at most one writer; old store is read-only. Recover lost receipt by rolloverId/original management key without another switch |
 
-归档副本始终以只读方式打开，不能被“恢复”成同 storeId 的第二个 writer。只有清单 committed 后，新 store 才能启动业务写入；若归档或 standby 在提交前损坏，则停止切换并明确故障，不能跳过校验。old_retired 之后不自动回滚到旧 writer，必须修复并继续同一切换；原数据和阶段证据保留。
+Always open archives read-only; they cannot become a second writer with the same storeId. New business writes begin only after committed. Corrupt archive/standby before commit stops switching with an explicit error, never skipped checks. After old_retired, do not automatically roll back to the old writer: repair and continue the same rollover, preserving original data and phase evidence.
 
-提交前归档所需空间不足时，不得删除旧库或防重信息腾空间；返回容量错误，所有者可调整可信存储配置或提高容量后续做原操作。提交后也不自动删除原目录；后续如回收冗余副本，必须另有范围明确且不影响归档完整性的维护契约。
+If archive space is insufficient before commit, do not delete old data/deduplication identities. Return a capacity error; the owner can adjust trusted storage/capacity and continue the original operation. Do not automatically delete the original directory after commit either. Later redundant-copy collection needs a separately scoped maintenance contract preserving archive integrity.
 
-## 5. 幂等与备份边界
+## 5. Idempotency and backup boundaries
 
-新 store 没有继承旧业务键集合。保证的是携带原 storeId 的旧请求不会在新 store 执行，旧 store 的墓碑仍可定位；不保证调用者改写 storeId、换键并重新提交同一业务意图时能被识别。需要跨 store 防重的业务必须另行提供稳定 businessOperationId 和权威业务索引，本增量不提供该能力。
+The new store does not inherit old business keys. Guarantee that old requests carrying their original storeId cannot execute in the new store and that old tombstones remain locatable. Do not claim to recognize the same business intent after a caller changes storeId/key. Cross-store deduplication requires a separate stable businessOperationId and authoritative business index, outside this increment.
 
-保持 AC-B07：普通重启不换 storeId；旧备份回滚、独立导入或克隆必须分配新 storeId、记录来源且不得自动恢复执行。不得从旧备份恢复过时的活动目录/epoch，使已经 retired 的身份重新成为 writer。备份之后执行过的副作用和丢失的墓碑不能靠恢复旧快照补齐；未知部分按核对流程处理。归档副本是只读证据，不是绕过此规则的恢复入口。
+Preserve AC-B07: normal restart keeps storeId; old-backup rollback, independent import, or cloning creates a fresh storeId, records provenance, and never automatically resumes execution. An old active-directory/epoch backup cannot revive a retired writer. Restoring an old snapshot cannot reconstruct later side effects or missing tombstones; reconcile unknowns. Archives are read-only evidence, not a bypass into writable recovery.
 
-## 6. 编号验收条款
+## 6. Numbered acceptance criteria
 
-- **AC-B08（阈值与权限）**：用缩小的测试配额触发与 100 万同一逻辑的背压；新任务/消息/派发被拒，原同键重试可查询。所有者提高配额有旧值、新值及身份审计，普通客户端/模型工具被拒；另一路只能显式发起 rollover，不能自动删除 tombstone。
-- **AC-B09（收尾预留）**：在新增业务额度恰好耗尽时，已受理任务仍能完成批准、取消或合法核对，rollover 仍能保存阶段记录；预留不足在此前阻止接单。同键重试不重复计数，不同键洪泛不能无限借用预留。注入真实持久化故障仍停止派发，不伪造 durable 成功。
-- **AC-B10（命名空间）**：TS/Python 保存和重试完整身份；切换后旧键请求、丢回执后的重试、旧宿主连接残留请求均在任何变更之前被新 store 拒绝。缺失字段/未协商旧客户端也拒绝；SDK 不静默替换 expectedStoreId。
-- **AC-B11（目录与归档查询）**：只读 lookup 根据原 storeId 找到完整回执或 tombstone，详情过期及载荷冲突行为不变；在线索引只有 store/归档级记录。用户路径、符号链接、越界文件、越权读取及未登记 store 被拒。旧 cursor 不得用于新 store。
-- **AC-B12（损坏失败闭合）**：归档缺失、权限拒绝、数据库损坏、storeId 不符及产物摘要不符得到明确归档错误，不转为 NOT_FOUND，不产生模型调用或新操作。仅对已验证归档的真实无匹配键返回 NOT_FOUND。
-- **AC-B13（切换阻断）**：逐项构造 paused/pending/未处理 outbox/未解决 unknown/冲突证据/活动资源/未完成 GC/活跃快照，均阻止切换并返回对象 ID。仅进程停止或请求 force 不放行；合法 resolution 加终结任务及资源结束可解除对应阻断。新 store 不出现原任务的可执行副本。
-- **AC-B14（一致封存）**：离线副本保留同一 storeId、全部现存墓碑及被保护引用；用 WAL 状态、共享产物及运行时文件 fixture 验证一致性。空间不足和校验失败不登记可用归档，不删除原数据，不推进新 store 激活。
-- **AC-B15（逐步崩溃）**：在上表每一步动作前后，特别是写 retired 标记后但清单尚未更新、提交清单后但回执丢失时崩溃并重启。只恢复同一 rolloverId，不自动派发；未提交新库保持 standby，已提交只启用新 epoch；原请求查询结果无歧义。
-- **AC-B16（旧 writer fencing）**：用真实子进程竞争控制锁/store 锁，并分别尝试旧 epoch、直接旧 stateDir、旧 schema 写入和归档副本写入；最多一个活动 writer，旧身份不能提交、控制或派发。PID 被复用不授予所有权，也不触发查杀非自有进程。不支持 fencing 的入口存在时整个 rollover 被拒。
-- **AC-B17（新旧幂等边界）**：旧键带旧 storeId 在新 store 被拒且可归档查回；新 store 中首次使用同一裸键属于新命名空间，不宣称继承旧业务防重。明确记录调用者主动换身份/换键后的责任边界，不提供“自动重建旧请求”便利路径。
-- **AC-B18（备份与回滚）**：复现“旧备份后 K 执行、封存切换、导入旧备份、重试 K”，导入必须新身份且不自动执行旧工作；旧请求不能透明改绑。恢复旧目录清单不得复活 retired writer。核对、归档及恢复全过程无付费模型调用，双语言观察同样的状态和错误。
+- **AC-B08 (thresholds and permission):** use scaled test quotas with the same logic as one million. Refuse new task/message/dispatch while preserving same-key lookup. Audit owner quota changes with old/new values and identity; reject ordinary clients/model tools. The alternative is explicit rollover, never automatic tombstone deletion.
+- **AC-B09 (settlement reserves):** at exact admission exhaustion, accepted work can still approve/cancel/reconcile and rollover can persist phases. Insufficient reserves stop admission earlier. Same-key retries do not count twice; different-key floods cannot borrow indefinitely. Real persistence faults still stop dispatch without fake durable success.
+- **AC-B10 (namespaces):** TS/Python save/retry complete identity. After switching, old-key requests, lost-receipt retries, and requests lingering on old connections fail before new-store mutations. Reject missing fields/unnegotiated clients. SDKs never silently replace expectedStoreId.
+- **AC-B11 (directory and archive lookup):** read-only lookup finds original receipts/tombstones by storeId, preserving expired-detail and conflict behavior. Online indexes contain only store/archive records. Reject caller paths, symlinks, escaping files, unauthorized reads, and unknown stores. Old cursors cannot be used in new stores.
+- **AC-B12 (corruption fails closed):** missing/inaccessible archives, corrupt databases, mismatched storeId, and artifact digest failures return archive errors, not NOT_FOUND, without model calls/new operations. Only a genuine absence in a verified archive returns NOT_FOUND.
+- **AC-B13 (rollover blockers):** individually construct paused/pending work, unprocessed outbox, unresolved unknowns, evidence conflicts, active resources, unfinished GC, and active snapshots. Each blocks with object IDs. Process exit or force is insufficient. Valid resolution plus terminal tasks and stopped resources clears the applicable blocker. No executable old-task copies appear in the new store.
+- **AC-B14 (consistent archive):** retain original storeId, all surviving tombstones, and protected references. Verify WAL state, shared artifacts, and runtime-file fixtures. Capacity/integrity failures neither register a usable archive nor delete originals/activate the new store.
+- **AC-B15 (phase-by-phase crashes):** crash/restart before and after every phase action, especially after retired but before manifest update and after manifest commit but before receipt. Recover only the same rolloverId without automatic dispatch. Uncommitted stores remain standby; committed stores use only the new epoch. Original-request lookup is unambiguous.
+- **AC-B16 (old-writer fencing):** real subprocesses compete for control/store locks and attempt old epoch, direct old stateDir, old-schema writes, and archive writes. At most one active writer may submit/control/dispatch. PID reuse grants no ownership and triggers no unrelated-process killing. Unsupported fencing entry points block the whole rollover.
+- **AC-B17 (old/new idempotency):** old key plus old storeId fails in the new store and is recoverable from archives. First use of the same bare key in a new store belongs to a new namespace, without inherited business deduplication. Document caller responsibility for changing identities/keys; provide no automatic old-request recreation shortcut.
+- **AC-B18 (backup and rollback):** reproduce old backup → execute K → archive/switch → import old backup → retry K. Import gets a fresh identity without automatically executing old work or rebinding old requests. Restoring an old manifest cannot revive retired writers. Reconciliation/archive/recovery uses no paid models; both SDKs observe matching states/errors.
 
-后续先按以上 AC 编写失败测试并记录真实 RED，再实施 GREEN。使用临时目录、真实 SQLite/文件系统、受控故障点和自有 fixture 子进程；共享协议验收同时运行双语言集成。当前仅完成规格，无新增测试结果，也未验证 100 万规模性能或磁盘配额默认值。
+Implementation must first write failing AC tests and record actual RED, then GREEN. Use temporary directories, real SQLite/filesystems, controlled failure points, and owned fixture subprocesses, with both SDKs for shared protocol acceptance. Only the specification is complete; there are no new test results or verified million-record/disk-quota defaults.

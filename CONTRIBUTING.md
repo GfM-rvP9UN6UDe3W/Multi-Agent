@@ -1,20 +1,22 @@
-# 开发规范
+# Contribution guidelines
 
-本项目采用 TDD。以已接受的设计文档和 `docs/specs/` 中的验收条款为依据，先定义真实可观察行为，先运行失败测试，再补实现。不要把编译失败、替身通过或接口返回混写成生产验收。
+This project uses TDD. Start from the accepted design and acceptance criteria in `docs/specs/`: define observable behavior, run failing tests, then implement it. Distinguish compilation failures, passing test doubles, and interface responses from production acceptance.
 
-每个增量按以下顺序完成：
+Complete each increment in this order:
 
-1. 写 spec：问题、目标行为、范围、非目标、状态/协议约定和编号验收条款。
-2. 写测试：正常调用链以及与风险相关的失败路径。跨语言、重启、关闭和消息语义需做实际子进程集成；不只 mock 自己的方法调用。
-3. 运行 RED，记录命令和实际失败原因。已有行为已正确时可以直接补回归，但不要伪造失败历史。
-4. 实现使测试 GREEN。重构保持同一行为与绿灯，不夹带无关修改。
-5. 运行相关测试与 `npm run typecheck`。变更涉及共享 wire 或生命周期时同时运行 `npm test` 和 `npm run test:python`。
-6. 同步 spec、实际可运行 README 和变更证据。未来设计接口与已经可用的实现要区分。
+1. Write the specification: problem, target behavior, scope, non-goals, state/protocol rules, and numbered acceptance criteria.
+2. Write tests for the main call path and relevant failure cases. Cross-language, restart, shutdown, and messaging changes require real subprocess integration, not only mocks of your own methods.
+3. Run RED and record the command and actual failure. Behavior that is already correct may receive regression coverage directly; do not fabricate a failure history.
+4. Implement GREEN. Refactoring must preserve behavior and passing tests without unrelated changes.
+5. Run relevant tests and `npm run typecheck`. Shared wire or lifecycle changes require both `npm test` and `npm run test:python`.
+6. Update the specification, runnable README examples, and verification evidence. Distinguish future interfaces from implemented behavior.
 
-常规测试使用临时 workspace/stateDir 与确定性 fake runtime，不读取用户登录、不请求付费模型。真实 Claude/Codex 验收另列版本、身份来源、任务预算和模型结果，不能靠 fake fixture 证明。
+Ordinary tests use temporary workspace/stateDir directories and a deterministic fake runtime, without login credentials or paid model requests. Real Claude/Codex acceptance must separately record versions, identity sources, task budgets, and model results; fake fixtures cannot prove it.
 
-第一增量使用同一 OS 用户的可信本地边界。贡献不能暗中扩大网络监听、工具权限、目录访问或自动恢复范围。外部副作用未知时保留 unknown，不做盲目重试。生成的幂等键必须在丢失回执时仍能供调用者核对。
+The foundation assumes a trusted local boundary under one OS user. Contributions must not silently expand network listeners, tool permissions, directory access, or automatic recovery. Preserve unknown external outcomes without blind retries. Generated idempotency keys must remain available for recovery after a lost receipt.
 
-当前源代码直接由 Node 的 TypeScript stripping 执行，测试也用 `node:test`；只使用可擦除的 TS 语法。依赖锁定于 package-lock.json，不在正常启动时自动联网下载。Python 运行时只依赖标准库。
+Node executes TypeScript source through type stripping, and tests use `node:test`; use only erasable TypeScript syntax. Dependencies are locked in package-lock.json. Normal startup must not download dependencies. Python runtime dependencies are standard-library-only.
 
-尚未发布 npm/PyPI 包。发布与许可证选择单独决定，不在普通开发任务中默认执行。
+Write repository documentation, examples, and source comments in English. Preserve intentional multilingual test data where it verifies Unicode behavior.
+
+No npm/PyPI package is published. Publication and license selection require separate decisions and are not part of ordinary development tasks.

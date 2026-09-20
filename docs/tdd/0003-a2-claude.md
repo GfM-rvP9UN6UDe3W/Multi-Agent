@@ -1,19 +1,19 @@
-# SPEC-0003-A2 Claude 适配器执行预算和停止证据
+# SPEC-0003-A2: Claude execution budget and stop evidence
 
-日期：2026-09-19。范围仅为 `packages/adapter-claude/src/index.ts` 与 `tests/contract/adapter-claude-a2.test.ts`。依据 [SPEC-0003-A2](../specs/0003-a2-execution-isolation.md) 与 [共享引擎类型](../../packages/engine/src/types.ts) 的内部契约；无付费模型调用。
+Date: 2026-09-19. Scope: `packages/adapter-claude/src/index.ts` and `tests/contract/adapter-claude-a2.test.ts`. Based on [A2](../specs/0003-a2-execution-isolation.md) and internal [shared engine types](../../packages/engine/src/types.ts). No paid-model calls.
 
-## 行为
+## Behavior
 
-- 能力元数据将显式 `requestTimeoutMs` / `turnTimeoutMs` 报为上限；未显式配置时为 `null`，不把旧默认值报成用户上限。支持 v2 单轮预算和 v1 执行证据。单独调用时从 `execute` 开始共用默认 1,800,000 ms 总期限；受理不重置期限。宿主调用时采用引擎提供的单调剩余时间函数，并在终态返回后再次检查期限。受理等待同时受受理和总剩余预算限制。
-- 提交前的关闭、权限拒绝、取消、加载失败或预算耗尽会报告 `pre_submission` 双重停止证据。提交后只有匹配当前 Claude session id 的 SDK result 终态才报告远端停止；通用异常、断流、超时和异 session 终态均不伪造远端停止。
-- 匹配终态先通过同步回调记录 `runtime_terminal`，本地资源状态仍为 unknown。`Query.close()` 或迭代器 `return()` 确认清理后再报告 `resource_observation`。即使清理晚于 `execute()` 结束，原句柄仍持有回调并补报；序号按本次执行递增，重复清理不重复报告。原 RuntimeEvent 输出语义保持不变，未确认清理时成功结果仍压住为 unknown。
+- Capability metadata reports explicit requestTimeoutMs/turnTimeoutMs as caps and unspecified values as null, rather than treating old defaults as user caps. Supports budget v2 and evidence v1. Standalone execution shares a default 1,800,000 ms total deadline from execute entry, without resetting on acceptance. Host mode uses engine monotonic remaining-time functions and rechecks after terminal arrival. Acceptance waiting is bounded by both acceptance and total remaining time.
+- Pre-submission close, permission refusal, cancellation, load failure, or exhausted budget reports pre_submission with both resources stopped. After submission, only a result matching the current Claude session reports remote stop. Generic exceptions, disconnection, timeout, and wrong-session terminals do not.
+- Matched terminal evidence first reports runtime_terminal synchronously while local resources remain unknown. After baseline Query.close/iterator.return cleanup confirmation, report resource_observation. Retained handles keep the original callback and report late cleanup even after execute ends. Per-execution sequences increase; repeated cleanup does not duplicate reports. RuntimeEvent semantics stay unchanged; unconfirmed cleanup withholds success as unknown.
 
-## TDD 证据
+## TDD evidence
 
-先新增 6 个行为测试并运行 `node --test tests/contract/adapter-claude-a2.test.ts`：**0/6，RED**。失败分别显示能力字段缺失、受理后重新给满终态期限、无执行证据回调、迟到清理无通知、异 session 被当成成功结果及提交前拒绝无停止证据。实现后运行 `node --test tests/contract/adapter-claude-a2.test.ts tests/contract/claude-deadlines.test.ts tests/contract/adapters.test.ts`：**38/38，GREEN**。
+Add six behavior tests; `node --test tests/contract/adapter-claude-a2.test.ts` gives **0/6, RED**: missing capability fields, renewed full deadline after acceptance, absent evidence callback, no late-cleanup notification, wrong-session success, and no pre-submission stop evidence. After implementation, `node --test tests/contract/adapter-claude-a2.test.ts tests/contract/claude-deadlines.test.ts tests/contract/adapters.test.ts` gives **38/38, GREEN**.
 
-随后增加“宿主预算在提交前已耗尽”测试，运行单文件测试：**6/7**，新测试 RED，`query()` 错误地被调用。增加提交前预算检查后，相关三文件测试：**39/39，GREEN**。审查发现过期后的匹配终态被丢弃，会让已结束执行仍占名额；追加迟到终态测试，单文件 **7/8**，新测试 RED，修复后相关三文件 **40/40，GREEN**。迟到终态只补执行停止证据，不把已超时的业务结果改成成功。`npx prettier --check packages/adapter-claude/src/index.ts tests/contract/adapter-claude-a2.test.ts` 通过。
+Add exhausted-host-budget-before-send: **6/7**, new RED because query was called. Pre-submission budget checks yield **39/39 GREEN** across the three files. Review found discarded late matched terminals could retain slots after execution ended. Add late terminal: **7/8**, new RED; fix yields **40/40 GREEN**. Late terminals add stop evidence without converting timed-out business results to success. `npx prettier --check packages/adapter-claude/src/index.ts tests/contract/adapter-claude-a2.test.ts` passed.
 
-复核宿主单调预算又发现适配器把宿主 `remaining*Ms()` 返回值直接放入本地 `setTimeout`，会在宿主时钟未到期时误超时。新增固定宿主剩余 20ms、SDK 30ms 返回测试，**8/9，RED**；改为宿主回调判定到期后，该测试通过，但“SDK 永不返回且宿主预算递减”的新增测试 **9/10，RED**（200ms 守卫超时）。最终定时器只负责最多 50ms 后重新读取宿主剩余值，剩余值归零才超时；单独调用仍用本地单调期限。Claude A2、既有 Claude 期限和旧 lifecycle 合计 **40/40，GREEN**，包含 retained-cleanup 回归。
+Further review found host remaining values passed directly to local setTimeout could expire before the host clock. A constant host 20 ms remainder with SDK response at 30 ms gave **8/9 RED**. Host-owned expiry fixed it, but a never-returning SDK with decreasing budget gave **9/10 RED** at the 200 ms guard. Final timers only wake within 50 ms to reread host remaining time; zero triggers expiry. Standalone mode keeps local monotonic deadlines. Claude A2, existing deadline, and old lifecycle suites reached **40/40 GREEN**, including retained cleanup.
 
-首次 `npm run typecheck` 在共享 SDK 接线测试的 `Orchestrator.scheduler` 尚未实现时失败 7 项；没有 Claude 适配器或本测试的类型错误。共享接线完成后重跑 `npm run typecheck` 已通过。完整引擎、Python 和跨语言验证由 A2 主任务合并后统一执行。fixture 证明的是离线契约与受控清理行为；真实 Claude SDK 子进程及终态涵盖范围仍须按 SPEC-0002 的厂商验收另行验证。
+Initial npm run typecheck found seven shared-wiring errors while Orchestrator.scheduler was absent, with none in Claude code/tests. After shared wiring completed, typecheck passed. The primary A2 task ran full engine/Python/cross-language verification. Fixtures prove offline contracts and controlled cleanup only; real SDK subprocesses and terminal coverage still require SPEC-0002 provider acceptance.

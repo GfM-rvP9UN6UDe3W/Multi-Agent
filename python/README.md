@@ -266,7 +266,7 @@ allows explicit requeueing; `failed`/`interrupted` make the original task failed
 The earlier unknown operation retains its status and gains a `resolution` reference.
 Keep a stable business key and use `operations.lookup` after a lost receipt instead of
 submitting a new key. The complete
-[TS/Python examples](../SDK_USAGE_AND_WIRING.md#114-本轮已实现所有者人工核对)
+[TS/Python examples](../SDK_USAGE_AND_WIRING.md#114-implemented-owner-attestation)
 show the target and evidence mapping. [Python TDD evidence](../docs/tdd/0003-a-python.md)
 and [increment evidence](../docs/tdd/0003-a-evidence.md) distinguish fixture verification
 from unperformed real-model acceptance.
