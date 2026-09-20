@@ -18,7 +18,7 @@ Python distribution tooling belongs in an isolated venv, not the runtime package
 
 ```sh
 BUILD_PYTHON=/absolute/build-venv/bin/python
-"$BUILD_PYTHON" -m build --no-isolation --sdist --wheel --outdir dist/release python
+"$BUILD_PYTHON" scripts/build-python.py dist/release
 PACKAGE_BUILD_PYTHON="$BUILD_PYTHON" npm run test:packages
 ```
 
@@ -37,14 +37,14 @@ This requires Claude SDK 0.3.274 and Codex CLI 0.153.4, uses the real SDK agains
 | Environment | Evidence in this task |
 | --- | --- |
 | macOS Darwin 25.6.0 arm64, Apple M5 Pro, Node 24.14.0, Python 3.14.6 | Full local suites, native protocol-only checks, package smoke and capacity samples |
-| macOS 14 / Ubuntu 24.04, Node 22.18.0 + Python 3.11.13 | CI configured; not executed here |
-| macOS 14 / Ubuntu 24.04, Node 24.14.0 + Python 3.14.6 | CI configured; not executed here |
-| Claude SDK 0.3.274 / Codex CLI 0.153.4 | Local protocol checks; exact-version two-OS CI configured |
+| macOS 14 / Ubuntu 24.04, Node 22.18.0 | Last published CI failed; SPEC-0011 fixes use Python 3.11.9 on macOS and 3.11.13 on Linux. Current-source remote result pending |
+| macOS 14 / Ubuntu 24.04, Node 24.14.0 + Python 3.14.6 | Last published CI failed contract tests; fixes await a current-source remote run |
+| Claude SDK 0.3.274 + Zod 4.4.3 / Codex CLI 0.153.4 | Real local binaries with scripted loopback responses: tools, approval, retained history, fork/reuse/compact and both clients pass |
 | Single-file CJS/ESM Claude host, Node 24.14.0, no node_modules | Actual engine tasks, approval, four native MCP operations and injected inspection pass |
 | Real Claude/Codex models and actual native sandbox | Not executed or accepted |
 | Axion Vite/Electron 43.2.0 / Node 24.18 | Host-side acceptance pending; generic Node bundles do not establish this |
 
-The broad optional Claude peer range is an installation constraint, not a claim that all versions pass. Re-run drift review before changing tested candidates. The [capacity report](../tdd/0009-capacity.json) covers bounded 1k/10k retained-task samples, not million-record/10 GiB production validation.
+The broad optional Claude peer range is an installation constraint, not a claim that all versions pass. Re-run drift review before changing tested candidates. SPEC-0011 extends the [capacity measurements](../tdd/0011-capacity.json) to 50k retained tasks; this is not million-record/10 GiB production validation. The [current readiness ledger](readiness.md) contains exact remaining gates and native-gateway reproduction commands.
 
 ## Separately authorized native smoke
 

@@ -14,6 +14,7 @@ import type {
   UsageRecord,
 } from '../../packages/engine/src/types.ts';
 import { withClaudeProcess } from '../fixtures/claude-process.ts';
+import { controlledExecutionBudget } from '../fixtures/execution-budget.ts';
 
 type UsageEvent = Extract<RuntimeEvent, { type: 'usage' }>;
 type ReportingInput = RuntimeInput & { reportUsage: (event: UsageEvent) => void };
@@ -243,6 +244,7 @@ test('AC-P06 resumed or initialized session mismatch cannot publish usage', asyn
 
 test('AC-P06 cleanup uncertainty and late terminal retain usage with unknown fields', async () => {
   for (const late of [false, true]) {
+    const clock = controlledExecutionBudget();
     let release!: () => void;
     const gate = new Promise<void>((resolve) => {
       release = resolve;
@@ -250,12 +252,15 @@ test('AC-P06 cleanup uncertainty and late terminal retain usage with unknown fie
     const observed: UsageEvent[] = [];
     const adapter = createClaudeAdapter({
       cleanupTimeoutMs: 20,
-      turnTimeoutMs: 40,
       query: withClaudeProcess(
         () =>
           (async function* () {
+            await new Promise((resolve) => setTimeout(resolve, 150));
             yield { type: 'system', subtype: 'init', session_id: 'expected' };
-            if (late) await gate;
+            if (late) {
+              clock.expire();
+              await gate;
+            }
             yield {
               type: 'result',
               subtype: 'error_max_turns',
@@ -279,9 +284,14 @@ test('AC-P06 cleanup uncertainty and late terminal retain usage with unknown fie
         prompt: 'fixture',
         permissionProfile: 'read-only',
         signal: new AbortController().signal,
+        executionBudget: clock.budget,
         reportUsage: (value) => observed.push(value),
       }))
         events.push(event);
+      assert.ok(
+        events.some((event) => event.type === 'accepted'),
+        'Native init must precede the tested deadline',
+      );
       assert.equal((events.at(-1) as Extract<RuntimeEvent, { type: 'error' }>).outcome, 'unknown');
       release();
       const deadline = performance.now() + 2000;

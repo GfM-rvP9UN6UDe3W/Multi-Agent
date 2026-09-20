@@ -280,9 +280,10 @@ class LocalEngine implements Engine {
   }
   private deadline(session: SessionSnapshot, kind: OperationLifecycle['kind']): OperationLifecycle {
     const duration = kind === 'shutdown' ? 30000 : this.timeouts[`${kind}Ms`];
+    const enteredAt = this.clock.wallNow();
     return {
-      enteredAt: this.time(),
-      deadlineAt: new Date(this.clock.wallNow() + duration).toISOString(),
+      enteredAt: new Date(enteredAt).toISOString(),
+      deadlineAt: new Date(enteredAt + duration).toISOString(),
       policyVersion: 1,
       kind,
       expectedGeneration: session.generation,

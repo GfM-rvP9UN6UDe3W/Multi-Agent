@@ -1,12 +1,51 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, rmSync, existsSync, readFileSync } from 'node:fs';
+import {
+  mkdtempSync,
+  mkdirSync,
+  rmSync,
+  existsSync,
+  readFileSync,
+  symlinkSync,
+  writeFileSync,
+  realpathSync,
+} from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { Store } from '../../packages/engine/src/store.ts';
 import { StorageGovernance } from '../../packages/engine/src/storage.ts';
+import { createArchive, verifyArchive } from '../../packages/engine/src/archive.ts';
 
 const DAY = 86400000;
+
+test('0011-R08 native helper symlinks are counted without traversal and omitted from archives', () => {
+  const f = fixture();
+  try {
+    const helpers = join(f.store.stateDir, 'runtime/codex/tmp/arg0/codex-arg0Ab12CD');
+    mkdirSync(helpers, { recursive: true });
+    const target = join(f.root, 'outside-binary');
+    writeFileSync(target, Buffer.alloc(1024 * 1024));
+    const before = f.policy.status().bytes;
+    symlinkSync(target, join(helpers, 'apply_patch'));
+    const after = f.policy.status().bytes;
+    assert.equal(after - before, Buffer.byteLength(target));
+    const history = join(f.store.stateDir, 'runtime/codex/session.jsonl');
+    writeFileSync(history, 'retained native history\n');
+    const archive = join(realpathSync(f.root), 'archive');
+    const manifest = createArchive(f.store, archive, 'native-helper-archive');
+    assert.ok(manifest.files.some((file) => file.path === 'runtime/codex/session.jsonl'));
+    assert.ok(!manifest.files.some((file) => file.path.includes('apply_patch')));
+    verifyArchive(archive, { storeId: f.store.storeId }, true);
+    assert.equal(readFileSync(target).length, 1024 * 1024);
+    symlinkSync(f.root, join(helpers, 'unexpected'));
+    assert.throws(() => f.policy.status(), { code: 'UNTRUSTED_PATH' });
+    assert.throws(() => createArchive(f.store, join(realpathSync(f.root), 'bad-archive'), 'bad'), {
+      code: 'UNTRUSTED_PATH',
+    });
+  } finally {
+    f.close();
+  }
+});
 function fixture() {
   const root = mkdtempSync(join(tmpdir(), 'orch-storage-'));
   const workspace = join(root, 'work');

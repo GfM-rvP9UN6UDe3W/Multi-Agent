@@ -6,7 +6,7 @@ Licensed under the [MIT License](LICENSE). Commercial use, modification and redi
 
 **The five npm packages are ESM-only; direct `require()` is not exported.** Host-side single-file CJS and ESM bundles are supported through the [bundled-host integration contract](docs/acceptance/bundled-host.md). A Claude consumer installs **`@agent-orch/sdk` + `@agent-orch/engine` + `@agent-orch/adapter-claude`**. The SDK alone does not install a provider. The other packages are `@agent-orch/adapter-codex` and `@agent-orch/cli`. Local RC tarballs and their SHA-256 manifest can be installed without public npm publication.
 
-**Development packages; not published to npm or PyPI.** SPEC-0001–0010 cover storage, routing, accounting and bundled-host delivery. The recorded local regression on 2026-09-21 passed **435 Node tests and 48 Python tests**, with no skipped tests; nine package-installation/bundle modes also passed. See the [completion matrix](docs/specs/0009-complete-design.md#completion-matrix), [original implementation evidence](docs/tdd/0009-complete-design.md), and [RC/bundle verification evidence](docs/tdd/0010-bundled-host-delivery.md). Real-model acceptance, actual OS sandbox enforcement, external application integration, economic benefit and registry publication remain unverified boundaries. Ordinary tests use explicit fake runtimes or owned protocol fixtures without login credentials or model requests.
+**Development packages; not published to npm or PyPI.** SPEC-0001–0011 cover storage, routing, accounting and bundled-host delivery. The recorded local regression on 2026-09-21 passed **438 Node tests and 48 Python tests**, with no skipped tests; nine package-installation/bundle modes also passed. See the [completion matrix](docs/specs/0009-complete-design.md#completion-matrix), [original implementation evidence](docs/tdd/0009-complete-design.md), [RC/bundle verification evidence](docs/tdd/0010-bundled-host-delivery.md), and [current release-readiness evidence](docs/tdd/0011-release-readiness.md). Real Claude/Codex binaries also pass tools, approval, saved-history fork/reuse/compact and both-client checks against a scripted loopback gateway. See the [remaining-gate ledger](docs/acceptance/readiness.md). Real-model acceptance, actual OS sandbox enforcement, external application integration, economic benefit and registry publication remain unverified boundaries. Ordinary tests use explicit fake runtimes or owned protocol fixtures without login credentials or model requests.
 
 ## Install and integrate
 
@@ -20,19 +20,20 @@ Choose packages for the process that will own or connect to the engine:
 | `@agent-orch/adapter-codex` | Codex App Server adapter | Codex execution |
 | `@agent-orch/cli` | Standalone/managed Node host and commands | CLI or Python-owned host operation |
 
-Use local tarballs from one candidate version. To build a new MIT-licensed npm candidate from this checkout:
+Use local tarballs from one candidate version. The current local MIT candidate is `0.1.0-rc.3` (Python `0.1.0rc3`). To reproduce it in a fresh artifact directory:
 
 ```sh
 npm ci --ignore-scripts
-npm run build:packages -- dist/release/0.1.0-rc.2 --version 0.1.0-rc.2
+npm run build:packages -- dist/release/0.1.0-rc.3 --version 0.1.0-rc.3
+/absolute/build-env/bin/python scripts/build-python.py dist/release/0.1.0-rc.3 --version 0.1.0-rc.3
 ```
 
-`0.1.0-rc.2` is an example of the next candidate version, not an already published release. The build writes five tarballs and `npm-manifest.json`; verify their SHA-256 values before installation. In the consuming project, install the three Claude packages together, substituting the absolute artifact directory:
+This candidate is local and unpublished. The builds write five npm tarballs, a Python wheel/sdist and SHA-256 manifests. Existing candidate directories are immutable; use a new version for changed bytes. Verify hashes before installation. In the consuming project, install the three Claude packages together, substituting the absolute artifact directory:
 
 ```sh
-npm install /absolute/rc/agent-orch-sdk-0.1.0-rc.2.tgz \
-  /absolute/rc/agent-orch-engine-0.1.0-rc.2.tgz \
-  /absolute/rc/agent-orch-adapter-claude-0.1.0-rc.2.tgz
+npm install /absolute/rc/agent-orch-sdk-0.1.0-rc.3.tgz \
+  /absolute/rc/agent-orch-engine-0.1.0-rc.3.tgz \
+  /absolute/rc/agent-orch-adapter-claude-0.1.0-rc.3.tgz
 ```
 
 Keep the generated npm lockfile. Install the Codex adapter instead for Codex execution; add the CLI when running a separate Node host. Python installs its wheel separately and connects to that Node host; the Python package does not bundle or download an engine.
@@ -43,7 +44,7 @@ The delivered `0.1.0-rc.1` artifacts predate the MIT decision and retain their o
 
 The host owns its pinned Claude SDK and native executable. When supplying `config.query`, also supply a matching `createMcpServer` callback if orchestration tools are enabled, and `inspectSession` if native history inspection is required. Missing MCP binding fails before submission; missing inspection binding reports `unavailable`. The adapter does not silently resolve another SDK for an injected host.
 
-Public helpers `createClaudeMcpServer(tools, { sdk, zod })` and `inspectClaudeSession(input, sdk)` bind those operations to the host's dependencies. Default Node loading requires the optional native SDK and Zod 4 peers. See the [complete host-injection example](docs/acceptance/bundled-host.md#host-owned-claude-sdk).
+Public helpers `createClaudeMcpServer(tools, { sdk, zod })` and `inspectClaudeSession(input, sdk)` bind those operations to the host's dependencies. Default Node loading requires the optional native SDK and **Zod 4.4.3** peer. Native enumeration exposed an incompatibility between SDK 0.3.274 and Zod 4.6.5; widening this tested pairing requires repeating tools/list and real-binary checks. See the [complete host-injection example](docs/acceptance/bundled-host.md#host-owned-claude-sdk).
 
 Package exports are ESM-only. The package smoke verifies CJS and ESM single-file hosts after removing node_modules and moving each executable into a separate deployment directory. Its CJS configuration adapts `import.meta.url` only in the third-party Claude SDK; see the [exact bundle configuration](scripts/package-bundles-smoke.mjs). Actual Axion Vite/Electron 43.2.0 / Node 24.18 acceptance remains pending.
 
@@ -61,6 +62,8 @@ Package exports are ESM-only. The package smoke verifies CJS and ESM single-file
 - [Lifecycle, storage and routing contracts](docs/specs/0003-policy-retention-deadlines.md)
 - [Design completion specification](docs/specs/0009-complete-design.md)
 - [Bundled-host delivery specification](docs/specs/0010-bundled-host-delivery.md)
+- [Release-readiness fixes and native verification](docs/specs/0011-release-readiness.md)
+- [Current acceptance gates](docs/acceptance/readiness.md)
 - [TDD evidence](docs/tdd/0001-evidence.md)
 - [Contribution guidelines](CONTRIBUTING.md)
 - [Full product design](AGENT_ORCHESTRATION_DESIGN.md) and [integration guide](SDK_USAGE_AND_WIRING.md)
@@ -90,7 +93,7 @@ See the [JSON Schema](schemas/protocol.schema.json), generated TypeScript `WireT
 
 ## Local development and verification
 
-Declared minimums are Node.js 22.18+ and Python 3.11+. Recorded local verification used Node.js 24.14.0 and Python 3.14.6. Node's built-in SQLite prints an experimental warning on that verified runtime. The [CI matrix](.github/workflows/offline.yml) configures macOS/Linux and minimum/current runtime jobs. Check [GitHub Actions](https://github.com/masonlee39/Multi-Agent/actions/workflows/offline.yml) for the result of a specific commit; local test counts above do not imply remote CI success.
+Declared minimums are Node.js 22.18+ and Python 3.11+. Recorded local verification used Node.js 22.18.0 and 24.14.0, and Python 3.14.6. Node's built-in SQLite prints an experimental warning on that verified runtime. The [CI matrix](.github/workflows/offline.yml) configures macOS/Linux and minimum/current runtime jobs. Check [GitHub Actions](https://github.com/masonlee39/Multi-Agent/actions/workflows/offline.yml) for the result of a specific commit; local test counts above do not imply remote CI success.
 
 Run from the repository root:
 
@@ -110,13 +113,13 @@ Node executes erasable TypeScript source directly. Distribution builds emit Java
 ```sh
 npm run build:packages
 # Use an isolated Python build environment with setuptools >=77.0.3, wheel and build.
-python -m build --no-isolation --sdist --wheel --outdir dist/release python
+python scripts/build-python.py dist/release
 PACKAGE_BUILD_PYTHON="$(command -v python)" npm run test:packages
 ```
 
 The package smoke creates fresh temporary npm installations and a Python venv, runs embedded TS and owned-host Python, checks each optional adapter independently, exercises the packaged Codex MCP bridge and actual Claude SDK MCP transport, rebuilds the sdist and repeats the Python round trip without network access. It also bundles SDK + engine + Claude adapter as CJS and ESM, deletes the temporary node_modules, and runs fixture tasks through human approval in both formats. `PACKAGE_BUILD_PYTHON` must point to the prepared build environment to include the sdist rebuild. Native provider dependencies are optional and are not downloaded at ordinary startup. See [acceptance instructions](docs/acceptance/README.md) and [local RC installation](docs/acceptance/bundled-host.md).
 
-Scheduling uses indexed queued tasks and active dispatches. Retained history still affects some storage/accounting queries; it is not an unlimited-capacity claim. Run `npm run benchmark:capacity -- 1000,10000 100` for bounded offline measurements. On the recorded Apple M5 Pro / Node 24.14.0 host, 1,000 versus 10,000 retained tasks produced approximately 21.6 versus 21.0 dispatches/s, and task admission p95 of 5.12 versus 8.44 ms. See [raw measurements](docs/tdd/0009-capacity.json) and their [limits](docs/tdd/0009-complete-design.md#capacity-and-supported-environments).
+Scheduling uses indexed queued tasks and active dispatches. Retained history still affects some storage/accounting queries; it is not an unlimited-capacity claim. Run `npm run benchmark:capacity -- 1000,10000,50000 100` for bounded offline measurements. On the recorded Apple M5 Pro / Node 24.14.0 host, admission p95 was 6.13 / 8.68 / 16.77 ms respectively. See [raw measurements](docs/tdd/0011-capacity.json) and the [measurement limits](docs/acceptance/readiness.md).
 
 ## Run the complete Python example
 
@@ -289,8 +292,8 @@ It uses only temporary SQLite stores and a fake runtime. It reopens the host out
 
 | Runtime | Integration used by this repository | Version baseline | Verified boundary |
 | --- | --- | --- | --- |
-| Claude | Optional `@anthropic-ai/claude-agent-sdk` peer dependency; `query()` and native session resume | **0.3.241 is the declared minimum**, with peer range **`>=0.3.241 <1`**. **0.3.274** is the exact offline-tested candidate and pinned protocol CI version. | Installed 0.3.274 SDK MCP/permission/interruption transport against owned offline children, engine-bound tools, observed fixture exits, and lifecycle tests. The range is an installation constraint, not proof that every release works. Real SDK/model end-to-end acceptance is pending. |
-| Codex | Managed **`codex app-server`** subprocess; stdio JSONL and App Server **v2** types. The adapter does **not** import `@openai/codex-sdk`. | **`codex-cli 0.153.4`** was used for the recorded protocol-type comparison and offline launch-option checks. | v2 types generated by that CLI, configuration preflight, and actual offline subprocess fixtures. Other CLI versions require regenerated types and contract tests; real-model acceptance is pending. |
+| Claude | Optional `@anthropic-ai/claude-agent-sdk` peer dependency; `query()` and native session resume | **0.3.241 is the declared minimum**, with peer range **`>=0.3.241 <1`**. **0.3.274** is the exact offline-tested candidate and pinned protocol CI version. | Installed 0.3.274 SDK with Zod 4.4.3, native Claude 2.1.274 against a scripted loopback gateway, actual tool enumeration/invocation, retained history, fork/reuse/compact, both clients, and offline permission/interruption transport. The range is an installation constraint, not proof that every release works. Real SDK/model end-to-end acceptance is pending. |
+| Codex | Managed **`codex app-server`** subprocess; stdio JSONL and App Server **v2** types. The adapter does **not** import `@openai/codex-sdk`. | **`codex-cli 0.153.4`** was used for the recorded protocol-type comparison and offline launch-option checks. | v2 types generated by that CLI, real 0.153.4 binary with scripted gateway responses, deferred MCP discovery/invocation, retained history, fork/reuse/compact, both clients, and offline failure fixtures. Other CLI versions require regenerated types and contract tests; real-model acceptance is pending. |
 
 These are the integration baselines for the published source, not claims about the latest upstream releases. The manifests are [Claude](packages/adapter-claude/package.json) and [Codex](packages/adapter-codex/package.json); detailed evidence and limitations are in [SPEC-0002](docs/specs/0002-runtime-adapters.md#compatibility-boundaries-and-sources). Official OpenAI documentation distinguishes [App Server](https://learn.chatgpt.com/docs/app-server) from the [Codex SDK](https://learn.chatgpt.com/docs/codex-sdk), and states that generated protocol types are specific to the CLI version used.
 

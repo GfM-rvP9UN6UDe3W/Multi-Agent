@@ -21,7 +21,7 @@ export async function createClaudeMcpServer(
     } catch (cause) {
       throw Object.assign(
         new Error(
-          'Claude MCP requires @anthropic-ai/claude-agent-sdk and zod ^4.0.0, or explicit host SDK/Zod bindings',
+          'Claude MCP requires @anthropic-ai/claude-agent-sdk and zod 4.4.3, or explicit host SDK/Zod bindings',
           { cause },
         ),
         { code: 'CLAUDE_DEPENDENCY_UNAVAILABLE' },

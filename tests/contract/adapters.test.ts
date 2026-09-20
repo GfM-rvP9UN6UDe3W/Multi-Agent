@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { test } from 'node:test';
+import { test, type TestContext } from 'node:test';
 import { createClaudeAdapter } from '../../packages/adapter-claude/src/index.ts';
 import { createCodexAdapter } from '../../packages/adapter-codex/src/index.ts';
 import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
@@ -8,6 +8,7 @@ import { tmpdir } from 'node:os';
 import type { RuntimeEvent, RuntimeInput } from '../../packages/engine/src/types.ts';
 
 import { withClaudeProcess } from '../fixtures/claude-process.ts';
+import { controlledExecutionBudget } from '../fixtures/execution-budget.ts';
 
 function input(overrides: Partial<RuntimeInput> = {}): RuntimeInput {
   return {
@@ -137,13 +138,14 @@ let turnId = 'codex-turn-1';
 let initialized = false;
 readline.createInterface({input: process.stdin}).on('line', line => {
   const request = JSON.parse(line);
+  if (process.env.FIXTURE_REQUESTS) fs.appendFileSync(process.env.FIXTURE_REQUESTS, request.method + '\n');
   if (request.method === 'initialize') {
     if (mode === 'stall-initialize') return;
     if (mode === 'flood') {
       for (let n=0;n<400;n++) send({method:'unrelated',params:{n}});
       return;
     }
-    send({id: request.id, result: {userAgent: 'fixture'}});
+    setTimeout(() => send({id: request.id, result: {userAgent: 'fixture'}}), Number(process.env.FIXTURE_STARTUP_DELAY || 0));
   } else if (request.method === 'initialized') {
     initialized = true;
   } else if (request.method === 'thread/start' || request.method === 'thread/resume') {
@@ -343,39 +345,73 @@ test('AC adapter Codex: refuses modified managed configuration before spawn', as
   }
 });
 
-test('AC adapter Codex: request and terminal waits are bounded with unknown after turn submission', async () => {
-  const options = { requestTimeoutMs: 50, turnTimeoutMs: 50, closeTimeoutMs: 50 };
-  const before = await collect(
-    createCodexAdapter({
-      command: process.execPath,
-      args: ['-e', fixture, 'stall-initialize'],
-      ...options,
-    }).execute(input()),
-  );
+async function stalledCodex(t: TestContext, mode: string) {
+  const dir = await mkdtemp(join(tmpdir(), 'orch-codex-boundary-'));
+  const requests = join(dir, 'requests'),
+    capture = join(dir, 'child.json');
+  const clock = controlledExecutionBudget();
+  const adapter = createCodexAdapter({
+    command: process.execPath,
+    args: ['-e', fixture, mode],
+    env: {
+      FIXTURE_CAPTURE: capture,
+      FIXTURE_REQUESTS: requests,
+      FIXTURE_STARTUP_DELAY: '150',
+    },
+    closeTimeoutMs: 50,
+  });
+  const events: RuntimeEvent[] = [];
+  let ended = false;
+  const finished = (async () => {
+    try {
+      for await (const event of adapter.execute(
+        input({ stateDir: dir, executionBudget: clock.budget }),
+      ))
+        events.push(event);
+    } finally {
+      ended = true;
+    }
+  })();
+  t.after(async () => {
+    clock.expire();
+    await finished;
+    await adapter.close?.();
+    await rm(dir, { recursive: true, force: true });
+  });
+  const boundary = mode === 'stall-initialize' ? 'initialize' : 'turn/start';
+  const needsAcceptance = !['stall-initialize', 'stall-turn-ack'].includes(mode);
+  const deadline = performance.now() + 10000;
+  while (true) {
+    const observed = await readFile(requests, 'utf8').catch((error) => {
+      if (error.code === 'ENOENT') return '';
+      throw error;
+    });
+    if (
+      observed.split('\n').includes(boundary) &&
+      (!needsAcceptance || events.some((e) => e.type === 'accepted'))
+    )
+      break;
+    assert.equal(
+      ended,
+      false,
+      `Native fixture ended before ${boundary}: ${JSON.stringify(events)}`,
+    );
+    assert.ok(performance.now() < deadline, `Native fixture did not reach ${boundary}`);
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+  clock.expire();
+  await finished;
+  return { events, capture };
+}
+
+test('AC adapter Codex: request and terminal waits are bounded with unknown after turn submission', async (t) => {
+  const { events: before } = await stalledCodex(t, 'stall-initialize');
   assert.equal((before.at(-1) as Extract<RuntimeEvent, { type: 'error' }>).outcome, 'failed');
-  const ack = await collect(
-    createCodexAdapter({
-      command: process.execPath,
-      args: ['-e', fixture, 'stall-turn-ack'],
-      ...options,
-    }).execute(input()),
-  );
+  const { events: ack } = await stalledCodex(t, 'stall-turn-ack');
   assert.equal((ack.at(-1) as Extract<RuntimeEvent, { type: 'error' }>).outcome, 'unknown');
-  const terminal = await collect(
-    createCodexAdapter({
-      command: process.execPath,
-      args: ['-e', fixture, 'stall-terminal'],
-      ...options,
-    }).execute(input()),
-  );
+  const { events: terminal } = await stalledCodex(t, 'stall-terminal');
   assert.equal((terminal.at(-1) as Extract<RuntimeEvent, { type: 'error' }>).outcome, 'unknown');
-  const noisy = await collect(
-    createCodexAdapter({
-      command: process.execPath,
-      args: ['-e', fixture, 'spam-terminal'],
-      ...options,
-    }).execute(input()),
-  );
+  const { events: noisy } = await stalledCodex(t, 'spam-terminal');
   assert.equal((noisy.at(-1) as Extract<RuntimeEvent, { type: 'error' }>).outcome, 'unknown');
 });
 
@@ -392,25 +428,11 @@ test('AC adapter Codex: excessive uncorrelated messages fail bounded queue', asy
   assert.match((events.at(-1) as Extract<RuntimeEvent, { type: 'error' }>).message, /queue limit/i);
 });
 
-test('AC adapter Codex: escalates to SIGKILL and waits for owned child exit', async () => {
-  const dir = await mkdtemp(join(tmpdir(), 'agent-orch-child-'));
-  const capture = join(dir, 'child.json');
-  try {
-    const adapter = createCodexAdapter({
-      command: process.execPath,
-      args: ['-e', fixture, 'ignore-term'],
-      env: { ...process.env, FIXTURE_CAPTURE: capture },
-      requestTimeoutMs: 1000,
-      turnTimeoutMs: 50,
-      closeTimeoutMs: 50,
-    });
-    const events = await collect(adapter.execute(input({ stateDir: dir })));
-    assert.equal((events.at(-1) as Extract<RuntimeEvent, { type: 'error' }>).outcome, 'unknown');
-    const { pid } = JSON.parse(await readFile(capture, 'utf8'));
-    assert.throws(() => process.kill(pid, 0), { code: 'ESRCH' });
-  } finally {
-    await rm(dir, { recursive: true, force: true });
-  }
+test('AC adapter Codex: escalates to SIGKILL and waits for owned child exit', async (t) => {
+  const { events, capture } = await stalledCodex(t, 'ignore-term');
+  assert.equal((events.at(-1) as Extract<RuntimeEvent, { type: 'error' }>).outcome, 'unknown');
+  const { pid } = JSON.parse(await readFile(capture, 'utf8'));
+  assert.throws(() => process.kill(pid, 0), { code: 'ESRCH' });
 });
 
 test('AC adapter Claude: closes SDK iterator when next throws', async () => {

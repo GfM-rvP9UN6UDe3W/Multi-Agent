@@ -370,7 +370,7 @@ Page a fixed snapshotId/cursor within byte bounds. The default 60-second lease f
 
 The sole host checks GC after recovery and hourly, without models. Batches target at most 500 records or 8 MiB and 50 ms transactions: work budgets, not measured throughput. Mark artifact candidates, recheck/block new references, move to managed quarantine, delete, then record outcome. Recover/continue after crashes without unmarked dangling references. WAL checkpointing is separate; no forced online full VACUUM.
 
-Proposed capacity: stateDir 10 GiB including DB/WAL/artifacts/runtime files; warn at 80%, stop new tasks/messages/model turns at 90%. Free filesystem space below 1 GiB also allows only diagnostics/settlement. Reserve a 256 MiB emergency file for terminal metadata after release, not guaranteed arbitrary-size results. One million minimal snapshots/tombstones stops new work too; owners may raise limits or explicitly archive, never auto-delete deduplication history.
+Implemented policy defaults (not measured production limits): stateDir 10 GiB including DB/WAL/artifacts/runtime files; warn at 80%, stop new tasks/messages/model turns at 90%. Free filesystem space below 1 GiB also allows only diagnostics/settlement. Reserve a 256 MiB emergency file for terminal metadata after release, not guaranteed arbitrary-size results. One million minimal snapshots/tombstones stops new work too; owners may raise limits or explicitly archive, never auto-delete deduplication history.
 
 [B](./docs/specs/0003-b-archive.md) defines whole-store archive/new-namespace rollover and AC-B08–B18. Settle tasks/approvals/outbox/unknown/resources first, archive the complete retained store with read-only tombstone lookup, and use a fresh storeId without executable copies of old tasks. Fixed expectedStoreId rejects old requests in the new store; inaccessible archives are not non-execution proof. Trusted control manifest, writerEpoch, and retired markers fence old writers. Recovery may temporarily have no writer, never two. Reserve finite settlement/management capacity before admission backpressure. This provides no cross-store semantic deduplication or namespace bypass for pending execution.
 
@@ -382,7 +382,7 @@ At thresholds, run eligible GC first; if insufficient, return STORAGE_PRESSURE a
 
 Callers explicitly declare intent; an existing primary session may submit the same declaration through work_delegate. Application developers or the already-working primary session make semantic judgments. Do not add a management model call for routing. The host does not infer valuable parallelism from goal prose, token overlap, or intersecting paths. A declaration is a constrained request, not permission or benefit evidence.
 
-Proposed TaskSpec.contextPlan/work_delegate.contextPlan share requestedMode: continue|parallel_tools|reuse|fork|fresh, independent:boolean, dependencyTaskIds, contextRefs (versioned artifacts/checkpoints), candidateSessionId?, snapshotRef?, fallbackModes, and maxQueueWaitMs. References declare needed material; shared references prove neither semantic relatedness nor cache hits. Read budget/permissions/write scope from registered authorization; these fields cannot enlarge them. A root task's initial session is not delegation. With an existing primary session, omitted contextPlan means continue, not an automatic child.
+Implemented TaskSpec.contextPlan/work_delegate.contextPlan share requestedMode: continue|parallel_tools|reuse|fork|fresh, independent:boolean, dependencyTaskIds, contextRefs (versioned artifacts/checkpoints), candidateSessionId?, snapshotRef?, fallbackModes, and maxQueueWaitMs. References declare needed material; shared references prove neither semantic relatedness nor cache hits. Read budget/permissions/write scope from registered authorization; these fields cannot enlarge them. A root task's initial session is not delegation. With an existing primary session, omitted contextPlan means continue, not an automatic child.
 
 Check requested candidates and explicitly allowed fallbacks in order:
 
@@ -523,7 +523,7 @@ Other eligible work can proceed after execution stops while results await reconc
 
 The shared 1800-second new-turn budget starts at dispatch without acceptance renewal. Implicit adapter 300-second limits are removed; shorter explicit values remain with effective source diagnostics. Old deadlines and independent SDK/control/cleanup budgets are unchanged. Both 1800 seconds and 32 entries need real-task calibration. [A2](./docs/specs/0003-a2-execution-isolation.md) defines evidence/configuration/compatibility and AC-A2-01–12.
 
-scheduler.get/getConflict are read-only; resolveConflict is owner-only. Reconcile executionReleased and resolved distinguish resources from business. Schema2 migration verifies a schema1 backup; wire remains 1.0 and old records recover conservatively. Custom adapters migrate to executionBudget v2 or fail before create/dispatch. See [usage 11.5](./SDK_USAGE_AND_WIRING.md#115-implemented-scheduler-queries-and-resource-conflicts).
+scheduler.get/getConflict are read-only; resolveConflict is owner-only. Reconcile executionReleased and resolved distinguish resources from business. Current storage schema 3 and wire 2.0 supersede the original A2 schema2/wire1 baseline. Migration verifies a complete backup; old records recover conservatively. Custom adapters migrate to executionBudget v2 or fail before create/dispatch. See [usage 11.5](./SDK_USAGE_AND_WIRING.md#115-implemented-scheduler-queries-and-resource-conflicts).
 
 ### 6.2 Content-injection boundaries
 
@@ -581,7 +581,7 @@ An adapter's capability declaration is not evidence that the host actually enfor
 
 [SPEC-0007](./docs/specs/0007-host-policy-and-usage.md) also implements an embedded policy surface on the standalone adapters. Claude accepts generic native options and a bounded per-dispatch extension while reserving model/cwd/session/spawn ownership. Its built-in guard protects engine state and constrains native file mutations to the canonical workspace; native sandboxing is mandatory for workspace-write Bash. Custom/MCP tools remain host-authorized. Codex explicitly maps workspace-write roots and independent network/search policy. The stock JSON CLI remains read-only and cannot carry callbacks. This is not the concrete application bridge below.
 
-Expanded execution cannot inherit minimal read-only stop assumptions. A host `observeExecutionStop` callback observes the exact dispatch/native IDs after its main terminal, within a bounded wait. Only an explicit true result plus independently observed local exit can complete the adapter's stop proof. The adapter's terminal coverage capability with this callback denotes this combined proof, not main-terminal coverage by itself. Late positive proof can release A while Q remains. Claude active interruption remains unsupported; task-result approval and native tool confirmation remain independent.
+Expanded execution cannot inherit minimal read-only stop assumptions. A host `observeExecutionStop` callback observes the exact dispatch/native IDs after its main terminal, within a bounded wait. Only an explicit true result plus independently observed local exit can complete the adapter's stop proof. The adapter's terminal coverage capability with this callback denotes this combined proof, not main-terminal coverage by itself. Late positive proof can release A while Q remains. SPEC-0008 implements Claude active interruption through the streaming Query; task-result approval and native tool confirmation remain independent.
 
 Usage observations are now published durably: `usage.recorded` and its `UsageRecord` share one SQLite transaction. Callback and iterator reports deduplicate by dispatch/usage ID; conflicts reject. Both clients can read one exact record by ID. The host projects with a durable outbox, advances checkpoints only with committed projection, and deduplicates by store/record identity. This guarantees replay of persisted observations, not a distributed transaction or reconstruction of unreported native requests. Aggregate turn usage cannot establish exhaustive per-request accounting. See the [offline forwarding example](./examples/typescript/usage-forwarding.ts).
 
@@ -668,7 +668,7 @@ Concurrent edits require module ownership or isolated directories. A forked sess
 
 ### 8.1 Task acceptance contract
 
-Require human acceptance by an authorized caller or checks against preregistered rules. Natural-language criteria describe goals, not automatically true booleans. Without executable checks, use human acceptance. Current implementation supports human mode; checks remains target scope.
+Require human acceptance by an authorized caller or checks against preregistered rules. Natural-language criteria describe goals, not automatically true booleans. Without executable checks, use human acceptance. Both human acceptance and frozen, preregistered executable checks are implemented under SPEC-0009.
 
 The owner registers verificationRules at host initialization using the same serializable structure in TS/Python-local/CLI configuration. Agents and ordinary connected clients cannot register ad hoc rules; language callbacks are not cross-language verification rules.
 
@@ -734,6 +734,8 @@ Add delegation tools, at most two active model sessions, dependencies, batched r
 ### Stage D: first open-source release
 
 Package npm SDK, Python wheel/sdist, optional adapters, and CLI together. Validate clean installs, single-provider dependencies, preflight, mismatch, migrations, and three modes. Supply equivalent examples/support matrix. State Node/official-runtime dependencies; Python is not a pure-Python engine.
+
+Release-readiness repairs follow [SPEC-0011](docs/specs/0011-release-readiness.md). Native timeout fixtures must establish the intended execution boundary before advancing their test clock; real process startup is a separately bounded preparation phase. Production deadlines still include startup and must be derived from a single captured start time. Preserve their original limits and unknown-outcome rules. Remote matrix failures require actual failure evidence and a new successful run, not a local-only completion claim.
 
 ### Stage E: data-driven optimization
 
@@ -821,9 +823,9 @@ tests/
   economics/            # Budgeted real-task cost experiments
 ```
 
-This is the target tree. Implemented directories exist in the foundation; others remain future scope. Internal boundaries do not mandate separately published packages.
+The implemented source tree and five modular local packages follow these boundaries. Public registry publication remains separate.
 
-| Artifact | Proposed name | Responsibility |
+| Artifact | Local package name | Responsibility |
 | --- | --- | --- |
 | TS SDK | @agent-orch/sdk | Public API, embedded engine, local client |
 | Python SDK | PyPI agent-orch; import agent_orch | Equivalent async API, transport, host management |
@@ -831,9 +833,9 @@ This is the target tree. Implemented directories exist in the foundation; others
 | Codex adapter | @agent-orch/adapter-codex | Optional App Server integration/version support |
 | CLI/host | @agent-orch/cli | Command consumer and shared-engine process entry |
 
-Use one repository/release version. npm/PyPI publication is not atomic; mark a release usable only once all required artifacts exist and clean installs pass. Python binds a compatible engine protocol range; host binds tested adapter/runtime combinations. Target shared-schema generation provides types/validation, while ergonomic handles/async/exceptions remain handwritten and checked with shared fixtures. Current types are handwritten; generation is a release-design goal.
+Use one repository/release version. npm/PyPI publication is not atomic; mark a release usable only once all required artifacts exist and clean installs pass. Python binds a compatible engine protocol range; host binds tested adapter/runtime combinations. Shared-schema generation now provides TypeScript/Python wire types and validation artifacts. Ergonomic handles, async behavior and exceptions remain handwritten and checked with shared fixtures.
 
-Target CLI run owns the engine and handles interactive approval until completion. Noninteractive operation without an approver persists pause then closes. host runs foreground stdio/Unix; submit/status/control connect; doctor checks environment/version/permission/configuration only, never equating HTTP reachability with model/tool acceptance. No automatic system-service installation; Python manages its stdio host.
+CLI run owns the engine and handles interactive approval until completion. Noninteractive operation without an approver persists pause then closes. host runs foreground stdio/Unix; submit/status/control connect; doctor checks environment/version/permission/configuration only, never equating HTTP reachability with model/tool acceptance. No automatic system-service installation; Python manages its stdio host.
 
 attach observes a specified task and interactive approvals; exiting does not cancel work. tool-bridge is the runtime-started internal MCP stdio entry, not another scheduler. Maintain installation/arguments/templates in the companion guide.
 
@@ -843,7 +845,7 @@ Before first public package release, provide README, both quickstarts, API/proto
 
 The design establishes product/language/protocol/storage/state/mode/release/acceptance boundaries and records official/local checks. Offline protocol generation occurred on 2026-09-18; foundation implementation regenerated local Codex 0.153.4 types on 2026-09-19 for minimal-adapter comparison under SPEC-0002.
 
-Foundation TS/Python/host/SQLite/task/mail/control/human-acceptance/adapters are implemented; see [foundation evidence](./docs/tdd/0001-evidence.md). A adds durable deadlines, unknown isolation, owner attestation, and bounded cleanup; see [lifecycle evidence](./docs/tdd/0003-a-evidence.md). A2 adds separate leases/quarantine and shared budgets. Unmarked full examples remain design sketches; README is the current entry point. Real models, cache economics, MCP bridge, and the complete first version remain unaccepted.
+Foundation TS/Python/host/SQLite/task/mail/control/human-acceptance/adapters are implemented; see [foundation evidence](./docs/tdd/0001-evidence.md). A adds durable deadlines, unknown isolation, owner attestation, and bounded cleanup; see [lifecycle evidence](./docs/tdd/0003-a-evidence.md). A2 adds separate leases/quarantine and shared budgets. Unmarked full examples remain design sketches; README is the current entry point. SPEC-0009–0011 implement the broader contract and verify the MCP bridge, real native binaries, retained-history fork/reuse/compaction and both clients against a scripted local gateway. Real model quality, cache economics, deployment sandbox behavior and external application integration remain separate gates; see the [readiness ledger](./docs/acceptance/readiness.md).
 
 Historical upstream inspection commands, not project-provided commands:
 
@@ -884,8 +886,8 @@ SPEC-0009 implements the following engineering boundaries; their real-release ev
 | Item | Decision and later acceptance |
 | --- | --- |
 | G4: content injection | Use 6.2 threat model. Before MCP bridge deployment test malicious files/results, forged approval, unauthorized control, and budget exhaustion. Arbitrary-shell profiles cannot claim four tools enforce all model calls |
-| G5: upstream drift | Support only exact matrix-tested versions; wide dependency ranges are not support guarantees. Maintenance plan: adapter maintainers manually run a weekly non-paid latest-stable protocol preflight. Candidates regenerate/review types and run recorded/fault tests; release adds budgeted real-model regression. Normal CI pins supported versions. Failed candidates never auto-update lockfiles/enable unknown capability. Adapter owners handle upstream breaks; core owners handle public protocol. Pinned offline native-protocol CI is configured in .github/workflows/offline.yml; remote jobs and any weekly drift automation have not been run or scheduled by this task |
-| G6: capacity | Two model sessions is a pilot safety bound; 1 MiB frames/64 pending per connection are guards, not SQLite throughput claims. SPEC-0009 bounds total connections/pending bytes/queues/logical sessions and records event/dispatch rates, SQLite BEGIN timing, RSS, WAL/disk and GC on 1k/10k retained-task fixtures. BEGIN timing is not multi-writer contention. Publish production capacity only after representative load breakpoints; section 4.5 quotas remain policy settings |
+| G5: upstream drift | Support only exact matrix-tested versions; wide dependency ranges are not support guarantees. Maintenance plan: adapter maintainers manually run a weekly non-paid latest-stable protocol preflight. Candidates regenerate/review types and run recorded/fault tests; release adds budgeted real-model regression. Normal CI pins supported versions. Failed candidates never auto-update lockfiles/enable unknown capability. Adapter owners handle upstream breaks; core owners handle public protocol. Pinned offline native-protocol CI is configured in .github/workflows/offline.yml; the last published revision ran both protocol jobs successfully but failed four contract jobs. SPEC-0011 corrects the observed failures and adds native-gateway checks; the changed revision still needs remote CI. No weekly drift automation has been scheduled |
+| G6: capacity | Two model sessions is a pilot safety bound; 1 MiB frames/64 pending per connection are guards, not SQLite throughput claims. SPEC-0009 bounds total connections/pending bytes/queues/logical sessions and records event/dispatch rates, SQLite BEGIN timing, RSS, WAL/disk and GC on 1k/10k fixtures, extended to 50k under SPEC-0011. BEGIN timing is not multi-writer contention. Publish production capacity only after representative load breakpoints; section 4.5 quotas remain policy settings |
 | G7: schedule/staffing | Retain both languages/runtimes and plan dependencies, not a mechanical 2×2×3 multiplier (Python does not embed TS). Uncalibrated placeholders: real capability/threat verification 4–8 engineer-days; retention/deadline/reconciliation 7–10; bridge/dependencies/safe parallelism 5–8; packaging/compatibility/docs 4–7; cross-stage performance/fault drills 3–5. Total 23–38 engineer-days, two engineers plus independent review, roughly 3–5 dependent weeks. This is not a delivery promise; excludes account/upstream waits, license decisions, and stage E. Reestimate after capability failures; deadlines do not waive safety gates |
 
 Current completion is recorded in [SPEC-0009](docs/specs/0009-complete-design.md#completion-matrix): deadlines, leases/quarantine, bounded inspection, declared routing, fork/compact/rotate/stop, tools, checks, approvals, costs, retention/GC/snapshots, archive rollover and package builds are implemented with offline evidence. Automatic outcome resolution and economic optimization remain disabled. No paid experiments, production deployment, Axion changes or package publication were performed. Assumption gates A01–A08 remain real-release criteria; passing local fixtures cannot mark those gates passed.

@@ -1,0 +1,152 @@
+{
+  "environment": {
+    "platform": "darwin",
+    "release": "25.6.0",
+    "arch": "arm64",
+    "node": "v24.14.0",
+    "cpus": 18,
+    "cpuModel": "Apple M5 Pro",
+    "physicalMemoryBytes": 68719476736
+  },
+  "limits": "Bounded single-process local measurements; SQLite BEGIN timing is not multi-writer throughput, and no million-record or 10-GiB claim is made",
+  "rows": [
+    {
+      "historyTasks": 1000,
+      "historyRecords": 3000,
+      "fixtureTasks": 100,
+      "seedMs": 81.89841700000001,
+      "elapsedMs": 4746.534417,
+      "dispatchesPerSecond": 21.06800271832939,
+      "eventsPerSecond": 252.81603261995267,
+      "admissionP95Ms": 6.133749999999964,
+      "sqliteBeginP95Ms": 0.0036660000000665605,
+      "eventLoopP95Ms": 54.067199,
+      "peakObservedRssBytes": 133398528,
+      "walBytes": 4313672,
+      "databaseBytes": 5746688,
+      "storageBytes": 10331876,
+      "storageRecords": 3403,
+      "snapshotFirstPageMs": 8.401958000000377,
+      "snapshotPageItems": 128,
+      "gc": [
+        {
+          "records": 74,
+          "bytes": 12910,
+          "durationMs": 50.376124999999774,
+          "oversizedArtifacts": [],
+          "retentionFloorCursor": "0",
+          "elapsedMs": 51.219082999999955
+        },
+        {
+          "records": 172,
+          "bytes": 30684,
+          "durationMs": 50.54962500000056,
+          "oversizedArtifacts": [],
+          "retentionFloorCursor": "0",
+          "elapsedMs": 51.07008300000052
+        },
+        {
+          "records": 178,
+          "bytes": 31862,
+          "durationMs": 50.271208000000115,
+          "oversizedArtifacts": [],
+          "retentionFloorCursor": "0",
+          "elapsedMs": 50.74741699999959
+        }
+      ],
+      "modelCalls": 0
+    },
+    {
+      "historyTasks": 10000,
+      "historyRecords": 30000,
+      "fixtureTasks": 100,
+      "seedMs": 763.8676249999999,
+      "elapsedMs": 4968.7891660000005,
+      "dispatchesPerSecond": 20.125627523959224,
+      "eventsPerSecond": 241.50753028751066,
+      "admissionP95Ms": 8.683082999999897,
+      "sqliteBeginP95Ms": 0.0028330000004643807,
+      "eventLoopP95Ms": 65.110015,
+      "peakObservedRssBytes": 151076864,
+      "walBytes": 9496632,
+      "databaseBytes": 31371264,
+      "storageBytes": 41139412,
+      "storageRecords": 30403,
+      "snapshotFirstPageMs": 41.11899999999878,
+      "snapshotPageItems": 128,
+      "gc": [
+        {
+          "records": 46,
+          "bytes": 8010,
+          "durationMs": 51.47045900000012,
+          "oversizedArtifacts": [],
+          "retentionFloorCursor": "0",
+          "elapsedMs": 52.152000000000044
+        },
+        {
+          "records": 46,
+          "bytes": 8050,
+          "durationMs": 51.13533399999869,
+          "oversizedArtifacts": [],
+          "retentionFloorCursor": "0",
+          "elapsedMs": 51.620082999999795
+        },
+        {
+          "records": 43,
+          "bytes": 7665,
+          "durationMs": 51.35679100000016,
+          "oversizedArtifacts": [],
+          "retentionFloorCursor": "0",
+          "elapsedMs": 51.830167000000074
+        }
+      ],
+      "modelCalls": 0
+    },
+    {
+      "historyTasks": 50000,
+      "historyRecords": 150000,
+      "fixtureTasks": 100,
+      "seedMs": 3950.077707999999,
+      "elapsedMs": 5923.728417,
+      "dispatchesPerSecond": 16.88126007144733,
+      "eventsPerSecond": 202.57512085736795,
+      "admissionP95Ms": 16.766374999999243,
+      "sqliteBeginP95Ms": 0.0032499999997526174,
+      "eventLoopP95Ms": 65.044479,
+      "peakObservedRssBytes": 261472256,
+      "walBytes": 46716712,
+      "databaseBytes": 149090304,
+      "storageBytes": 196144068,
+      "storageRecords": 150403,
+      "snapshotFirstPageMs": 206.04679100000067,
+      "snapshotPageItems": 128,
+      "gc": [
+        {
+          "records": 8,
+          "bytes": 1368,
+          "durationMs": 57.87754199999836,
+          "oversizedArtifacts": [],
+          "retentionFloorCursor": "0",
+          "elapsedMs": 58.66899999999805
+        },
+        {
+          "records": 8,
+          "bytes": 1392,
+          "durationMs": 58.697958000000654,
+          "oversizedArtifacts": [],
+          "retentionFloorCursor": "0",
+          "elapsedMs": 59.292874999999185
+        },
+        {
+          "records": 8,
+          "bytes": 1400,
+          "durationMs": 57.813083000000915,
+          "oversizedArtifacts": [],
+          "retentionFloorCursor": "0",
+          "elapsedMs": 58.42033300000185
+        }
+      ],
+      "modelCalls": 0
+    }
+  ]
+}

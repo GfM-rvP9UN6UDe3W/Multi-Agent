@@ -223,6 +223,29 @@ async function fixture(accepted = true) {
   };
 }
 
+test('0011-R01 control deadline uses one wall-clock sample and retry preserves it', async () => {
+  const f = await fixture();
+  try {
+    const t = await f.create();
+    const params = {
+      target: target(await f.session(t.sessionId)),
+      command: { action: 'pause', mode: 'drain' },
+      idempotencyKey: 'exact-deadline',
+    };
+    f.clock.wallNow = () => f.clock.wall++;
+    const operation = await read<OperationSnapshot>(f.engine, 'sessions.control', params);
+    assert.equal(
+      Date.parse(operation.lifecycle!.deadlineAt) - Date.parse(operation.lifecycle!.enteredAt),
+      50,
+    );
+    const replay = await read<OperationSnapshot>(f.engine, 'sessions.control', params);
+    assert.deepEqual(replay.lifecycle, operation.lifecycle);
+  } finally {
+    f.clock.wallNow = () => f.clock.wall;
+    await f.cleanup();
+  }
+});
+
 test('0003-A01/A03 drain deadline is durable, independent of wall-clock rollback and retries', async () => {
   const f = await fixture();
   try {

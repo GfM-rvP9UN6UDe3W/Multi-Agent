@@ -12,11 +12,11 @@ import {
   statSync,
   readdirSync,
 } from 'node:fs';
-import { join } from 'node:path';
+import { join, relative } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { performance } from 'node:perf_hooks';
 import { Store, type Table } from './store.ts';
-import { syncDirectory } from './durable-files.ts';
+import { syncDirectory, isCodexHelperLink } from './durable-files.ts';
 import { fail } from './errors.ts';
 import { fields, integer, object, string } from './validation.ts';
 import type { OperationSnapshot } from './types.ts';
@@ -132,7 +132,10 @@ export class StorageGovernance {
       readdirSync(path).reduce((sum, name) => {
         const child = join(path, name),
           stat = lstatSync(child);
-        if (stat.isSymbolicLink()) fail('UNTRUSTED_PATH', 'Managed storage contains a symlink');
+        if (stat.isSymbolicLink()) {
+          if (isCodexHelperLink(relative(this.store.stateDir, child))) return sum + stat.size;
+          fail('UNTRUSTED_PATH', 'Managed storage contains a symlink');
+        }
         return sum + (stat.isDirectory() ? directoryBytes(child) : stat.isFile() ? stat.size : 0);
       }, 0);
     const bytes = directoryBytes(this.store.stateDir);

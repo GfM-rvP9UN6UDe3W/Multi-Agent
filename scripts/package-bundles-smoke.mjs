@@ -23,7 +23,7 @@ export async function smokeClaudeBundles({ root, isolated, run }) {
           `
 import assert from 'node:assert/strict';
 import {createClaudeMcpServer} from '@agent-orch/adapter-claude';
-await assert.rejects(createClaudeMcpServer({definitions:[],call:async()=>null}), error => error.code === 'CLAUDE_DEPENDENCY_UNAVAILABLE' && error.message.includes('zod ^4.0.0') && error.cause?.message.includes('zod'));
+await assert.rejects(createClaudeMcpServer({definitions:[],call:async()=>null}), error => error.code === 'CLAUDE_DEPENDENCY_UNAVAILABLE' && error.message.includes('zod 4.4.3') && error.cause?.message.includes('zod'));
 `,
         ],
         { cwd: isolated },

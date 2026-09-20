@@ -1,0 +1,24 @@
+# SPEC-0011: Finish release-readiness engineering
+
+Date: 2026-09-21. Status: local implementation, regressions, real-binary scripted-gateway acceptance and MIT candidate complete. Current-source remote CI and deployment/model gates remain explicit in the readiness ledger.
+
+## Problem and scope
+
+The current main commit passes local offline tests, but GitHub run 35525915849 failed all four contract jobs. macOS cannot install the pinned Python 3.11.13 arm64 distribution. Other jobs expose startup/deadline races in adapter and host fixtures and a real one-millisecond control-deadline drift caused by sampling the wall clock twice. Passing local fixtures does not establish real-provider, production capacity or application acceptance.
+
+Complete reproducible cross-environment verification, correct proven defects, update stale design/status statements and produce a new MIT-licensed local candidate. Preserve namespace, resource-release, idempotency and paid-execution boundaries. Do not modify Axion, enable unmeasured economic routing, weaken assertions, silently retry failed tests or change production timeouts to mask slow test startup. Real-provider experiments require concrete model, identity-source, pricing and budget parameters; prepare reviewable plans before their separately authorized execution. Registry publication and remote source changes are separate delivery actions.
+
+## Acceptance criteria
+
+- **R01 — Exact deadlines:** Derive a control lifecycle's enteredAt and deadlineAt from one captured wall-clock value. A clock advancing between reads cannot extend the configured duration; retries retain the original deadline. Prove the old implementation fails with a deterministic advancing-clock test.
+- **R02 — Deterministic native fixtures:** Timeout tests reach the intended pre-send, submitted or accepted boundary before expiring an injected execution budget. Slow child startup must not turn a post-submission test into a pre-submission failure. Keep real owned subprocess cleanup and signal assertions.
+- **R03 — Host readiness:** Separate bounded host startup from tested shutdown/turn deadlines; surface child exit/stderr when initialization fails. Test startup delay explicitly. Late-usage tests establish native initialization before expiring observation; cleanup uncertainty and usage delivery remain separate assertions.
+- **R04 — Executable CI matrix:** Select exact Python distributions available for the declared runner architecture. Preserve both operating systems and supported Node/Python families. Capture test logs even on failure, and distinguish current-source local results from the last published-commit CI result.
+- **R05 — Readiness evidence:** Synchronize current design, protocol/schema, checks, tools, license and support status without rewriting historical RED/GREEN evidence. Produce an explicit remaining-gate ledger with executable scenarios, required evidence and honest blocked/unverified states.
+- **R06 — Bounded experiments:** Extend or prepare the native/economic/capacity verification needed by the accepted design, with versioned evidence, finite resources and no model calls in ordinary tests. Unknown quality/cost/history cannot enable automatic optimization. Application-specific Axion acceptance remains outside this repository's mutation boundary.
+- **R07 — MIT candidate:** Build a fresh immutable version of all five npm packages and Python wheel/sdist with MIT metadata and license files, coherent release identities, hashes and clean-install/bundle evidence. Preserve existing artifacts and the mapSpecifier/provider-isolation checks.
+- **R08 — Native runtime behavior:** Run the installed binaries through the engine against a bounded loopback gateway with synthetic credentials. Verify the four orchestration tools reach the native model-facing inventory, a bound tool returns real engine state, task approval completes after resource release, and retained native history is inspectable. Treat deferred tool discovery and runtime-created helper files as native behavior, without relaxing archive/path isolation or claiming model-quality acceptance.
+
+## Verification
+
+Start with the exact remote failure logs and new deterministic RED cases. Run focused subprocess tests, generated/type/format checks, full Node/Python regressions, exact-version local compatibility where available, and final package installation/bundle smoke. Remote CI is accepted only from an actual run of the resulting source revision. Record missing model/application/production evidence explicitly; fixture success never closes those gates.

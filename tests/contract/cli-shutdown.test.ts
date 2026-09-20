@@ -30,7 +30,7 @@ async function until<T>(read: () => T | Promise<T>, timeoutMs = 3000): Promise<N
   throw new Error('Fixture condition did not become true before its deadline');
 }
 
-function rpc(input: Readable, output: Writable) {
+function rpc(input: Readable, output: Writable, diagnostics: () => string) {
   let nextId = 0;
   let storeId: string;
   let buffer = '';
@@ -59,6 +59,10 @@ function rpc(input: Readable, output: Writable) {
       }
     }
   });
+  input.on('end', () => {
+    for (const request of pending.values())
+      request.reject(new Error(`Fixture host ended before its RPC response: ${diagnostics()}`));
+  });
   output.on('error', () => {});
   return async <T = unknown>(method: string, params: Record<string, unknown> = {}): Promise<T> => {
     if (MUTATIONS.has(method)) params = { expectedStoreId: storeId!, ...params };
@@ -67,7 +71,10 @@ function rpc(input: Readable, output: Writable) {
     try {
       return await new Promise<T>((resolve, reject) => {
         pending.set(id, { resolve: (value) => resolve(value as T), reject });
-        timer = setTimeout(() => reject(new Error(`Fixture RPC timed out: ${method}`)), 2000);
+        timer = setTimeout(
+          () => reject(new Error(`Fixture RPC timed out: ${method}; ${diagnostics()}`)),
+          method === 'initialize' ? 10000 : 2000,
+        );
         output.write(JSON.stringify({ jsonrpc: '2.0', id, method, params }) + '\n');
       });
     } finally {
@@ -82,6 +89,7 @@ async function runningHost(
   transport: 'unix' | 'stdio',
   shutdown?: CloseOptions,
   delayMs = 150,
+  startupDelayMs = 0,
 ) {
   const root = await realpath(await mkdtemp(join(tmpdir(), 'orch-signal-')));
   const workspace = join(root, 'workspace');
@@ -96,16 +104,29 @@ async function runningHost(
       workspace,
       stateDir,
       providers: { fake: { model: 'fake-model', delayMs, result: resultText } },
+      storage: { emergencyBytes: 4096 },
       ...(shutdown ? { shutdown } : {}),
     }),
   );
-  const proc = spawn(process.execPath, [
+  const args = [
     cli,
     'host',
     '--config',
     configPath,
     ...(transport === 'stdio' ? ['--stdio'] : ['--socket', socketPath]),
-  ]);
+  ];
+  const proc = spawn(
+    process.execPath,
+    startupDelayMs
+      ? [
+          '--input-type=module',
+          '-e',
+          'const [delay, cli, ...args] = process.argv.slice(1); await new Promise(r => setTimeout(r, Number(delay))); process.argv = [process.execPath, cli, ...args]; await import((await import("node:url")).pathToFileURL(cli).href);',
+          String(startupDelayMs),
+          ...args,
+        ]
+      : args,
+  );
   const exited = once(proc, 'exit');
   let stderr = '';
   proc.stderr.on('data', (chunk) => {
@@ -124,11 +145,11 @@ async function runningHost(
     await until(() => {
       if (proc.exitCode !== null) throw new Error(`Host exited: ${stderr}`);
       return stderr.includes('listening on');
-    });
+    }, 10000);
     socket = createConnection(socketPath);
     await once(socket, 'connect');
-    call = rpc(socket, socket);
-  } else call = rpc(proc.stdout, proc.stdin);
+    call = rpc(socket, socket, () => stderr);
+  } else call = rpc(proc.stdout, proc.stdin, () => stderr);
   await call('initialize', { protocolVersion: '2.0', sdkVersion: 'test' });
   const task = await call<TaskSnapshot>('tasks.create', {
     spec: {
@@ -183,6 +204,15 @@ async function runningHost(
     },
   };
 }
+
+test('0011-R03 delayed stdio startup does not consume the configured shutdown deadline', async (t) => {
+  const f = await runningHost(t, 'stdio', { mode: 'interrupt', timeoutMs: 500 }, 5000, 2200);
+  f.proc.kill('SIGTERM');
+  await f.waitForExit();
+  const persisted = f.persisted();
+  assert.equal(persisted.task.status, 'paused');
+  assert.equal(persisted.waits[0].data.timeoutMs, 500);
+});
 
 for (const transport of ['unix', 'stdio'] as const) {
   for (const signal of ['SIGINT', 'SIGTERM'] as const) {

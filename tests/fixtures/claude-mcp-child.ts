@@ -1,6 +1,7 @@
 import { exerciseTools } from './orchestration-actions.ts';
 import { createInterface } from 'node:readline';
 import { TOOL_NAMES } from '../../packages/engine/src/tools.ts';
+import assert from 'node:assert/strict';
 const session = '11111111-1111-4111-8111-111111111111';
 const send = (value: unknown) => process.stdout.write(JSON.stringify(value) + '\n');
 const queue = [
@@ -81,6 +82,11 @@ async function engineTools() {
     capabilities: {},
     clientInfo: { name: 'fixture', version: '1' },
   });
+  const inventory = await mcp('tools/list', {});
+  assert.deepEqual(
+    inventory.result?.tools.map((tool: { name: string }) => tool.name),
+    TOOL_NAMES,
+  );
   const result = await exerciseTools(async (name, request) => {
     const response = await mcp('tools/call', { name, arguments: { request } });
     if (response.result.isError) throw new Error(response.result.content[0].text);
@@ -139,6 +145,13 @@ for await (const line of createInterface({ input: process.stdin })) {
     pending.delete(value.response.request_id);
     resolve(value.response.response.mcp_response);
   } else if (value.type === 'control_response' && value.response.request_id.startsWith('mcp-')) {
+    const response = value.response.response?.mcp_response;
+    assert.equal(response?.error, undefined, JSON.stringify(response));
+    if (value.response.request_id === 'mcp-2')
+      assert.deepEqual(
+        response.result.tools.map((tool: { name: string }) => tool.name),
+        TOOL_NAMES,
+      );
     results.push(value.response);
     next();
   } else if (value.type === 'control_response' && value.response.request_id === 'permission-1') {

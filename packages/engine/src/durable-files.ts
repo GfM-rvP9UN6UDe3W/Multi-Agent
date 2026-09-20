@@ -36,6 +36,12 @@ export function fileDigest(path: string): string {
   if (!lstatSync(path).isFile()) fail('ARCHIVE_CORRUPT', 'Expected a regular file');
   return createHash('sha256').update(readFileSync(path)).digest('hex');
 }
+/** Runtime-generated executable aliases are never followed or copied into archives. */
+export function isCodexHelperLink(relative: string): boolean {
+  return /^runtime\/codex\/tmp\/arg0\/codex-arg0[A-Za-z0-9]+\/(?:apply_patch|applypatch|codex-execve-wrapper|codex-linux-sandbox)$/.test(
+    relative.replaceAll('\\', '/'),
+  );
+}
 export function regularFiles(
   root: string,
   prefix = '',
@@ -45,6 +51,7 @@ export function regularFiles(
     const path = join(root, name),
       relative = prefix ? `${prefix}/${name}` : name;
     const stat = lstatSync(path);
+    if (stat.isSymbolicLink() && isCodexHelperLink(relative)) continue;
     if (stat.isSymbolicLink())
       fail('UNTRUSTED_PATH', 'Managed storage cannot contain symlinks', { relative });
     if (stat.isDirectory()) result.push(...regularFiles(path, relative));

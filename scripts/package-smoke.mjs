@@ -20,6 +20,23 @@ const env = {
   NODE_PATH: '',
 };
 const manifest = JSON.parse(await readFile(join(release, 'npm-manifest.json'), 'utf8'));
+const releaseVersions = new Set(manifest.packages.map((pkg) => pkg.version));
+assert.equal(releaseVersions.size, 1, 'All npm packages must share one release version');
+const releaseVersion = [...releaseVersions][0];
+const pythonVersion = releaseVersion.replace('-rc.', 'rc');
+const pythonManifest = JSON.parse(
+  await readFile(join(pythonRelease, 'python-manifest.json'), 'utf8'),
+);
+assert.equal(pythonManifest.releaseVersion, releaseVersion);
+assert.equal(pythonManifest.version, pythonVersion);
+for (const file of pythonManifest.files)
+  assert.equal(
+    createHash('sha256')
+      .update(await readFile(join(pythonRelease, file.file)))
+      .digest('hex'),
+    file.sha256,
+    file.file,
+  );
 const archive = (name) => join(release, manifest.packages.find((pkg) => pkg.name === name).file);
 const run = (command, args, options = {}) =>
   execFileSync(command, args, { cwd: base, env, encoding: 'utf8', timeout: 60000, ...options });
@@ -98,7 +115,7 @@ try {
         join(isolated, 'missing-peer.mjs'),
         `import assert from 'node:assert/strict';
 import {createClaudeMcpServer} from '@agent-orch/adapter-claude';
-await assert.rejects(createClaudeMcpServer({definitions:[],call:async()=>null}),e=>e.code==='CLAUDE_DEPENDENCY_UNAVAILABLE'&&e.message.includes('zod ^4.0.0'));
+await assert.rejects(createClaudeMcpServer({definitions:[],call:async()=>null}),e=>e.code==='CLAUDE_DEPENDENCY_UNAVAILABLE'&&e.message.includes('zod 4.4.3'));
 console.log('missing-peer-ok');`,
       );
       assertOutput(
@@ -158,7 +175,7 @@ assert.equal(events.at(-1).type,'result',JSON.stringify(events));assert.equal(ca
     '--disable-pip-version-check',
     '--no-index',
     '--no-deps',
-    join(pythonRelease, 'agent_orch-0.1.0-py3-none-any.whl'),
+    join(pythonRelease, `agent_orch-${pythonVersion}-py3-none-any.whl`),
   ]);
   const pythonScript = `import asyncio,json\nfrom agent_orch import Orchestrator,TaskSpec,RuntimeSpec,AcceptanceSpec,validate_wire\nfrom agent_orch import wire_types\nasync def main():\n client=await Orchestrator.local(engine_command=${JSON.stringify([process.execPath, cli, 'host', '--stdio', '--config', join(base, 'python-config.json')])},close_timeout=3)\n try:\n  task=await client.tasks.create(TaskSpec(goal='installed Python managed host',runtime=RuntimeSpec('fake','fixture'),acceptance=AcceptanceSpec(criteria=['fixture review'])))\n  async for event in client.events(task_id=task.id):\n   if event.type=='approval.requested':\n    approval=await client.approvals.get(event.data.approval_id)\n    await client.approvals.decide(approval.approval_id,{'choice':'approve','expected_revision':approval.revision})\n    break\n  done=await task.wait(timeout=5)\n  assert done.status=='completed'\n  print(json.dumps({'mode':'installed-python-managed','status':done.status,'modelCalls':0}))\n finally: await client.close(timeout=3)\nasyncio.run(main())\n`;
   await mkdir(join(base, 'python-state'));
@@ -180,7 +197,7 @@ assert.equal(events.at(-1).type,'result',JSON.stringify(events));assert.equal(ca
     run(builder, [
       '-c',
       'import tarfile,sys; tarfile.open(sys.argv[1]).extractall(sys.argv[2],filter="data")',
-      join(pythonRelease, 'agent_orch-0.1.0.tar.gz'),
+      join(pythonRelease, `agent_orch-${pythonVersion}.tar.gz`),
       extracted,
     ]);
     const rebuilt = join(base, 'rebuilt');
@@ -192,7 +209,7 @@ assert.equal(events.at(-1).type,'result',JSON.stringify(events));assert.equal(ca
       '--wheel',
       '--outdir',
       rebuilt,
-      join(extracted, 'agent_orch-0.1.0'),
+      join(extracted, `agent_orch-${pythonVersion}`),
     ]);
     run(vpython, [
       '-m',
@@ -202,7 +219,7 @@ assert.equal(events.at(-1).type,'result',JSON.stringify(events));assert.equal(ca
       '--no-index',
       '--no-deps',
       '--force-reinstall',
-      join(rebuilt, 'agent_orch-0.1.0-py3-none-any.whl'),
+      join(rebuilt, `agent_orch-${pythonVersion}-py3-none-any.whl`),
     ]);
     const roundtrip = JSON.parse(run(vpython, ['python-roundtrip.py']));
     results.push({ ...roundtrip, mode: 'installed-wheel-rebuilt-from-sdist' });
