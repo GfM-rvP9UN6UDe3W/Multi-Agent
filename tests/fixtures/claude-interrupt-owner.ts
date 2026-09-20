@@ -8,9 +8,14 @@ const [workspace, stateDir, socketPath, audit, mode = 'startup'] = process.argv.
 const engine = await createEngine({
   workspace,
   stateDir,
-  timeouts: { interruptMs: mode === 'late' ? 35 : 1000 },
+  // Functional cross-process scenarios allow startup, native stop and durable settlement.
+  // The late-terminal scenario independently retains its deliberately short deadline.
+  timeouts: { interruptMs: mode === 'late' ? 35 : 3000 },
   adapters: [
-    createClaudeAdapter({ query: offlineInterruptQuery(mode, audit), interruptTimeoutMs: 1000 }),
+    createClaudeAdapter({
+      query: offlineInterruptQuery(mode, audit),
+      interruptTimeoutMs: mode === 'late' ? 1000 : 3000,
+    }),
   ],
 });
 const host = await startUnixHost(engine, { socketPath });

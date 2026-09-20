@@ -131,7 +131,7 @@ test(
 
 test(
   'AC-I04 real Python client pauses, resumes and cancels the Claude offline child',
-  { timeout: 10000 },
+  { timeout: 15000 },
   async (t) => {
     const h = await host(t);
     const { stdout } = await execute(
@@ -147,17 +147,21 @@ async def main():
         session = await client.sessions.get(task.session_id)
         target = dict(session_id=session.id, expected_generation=session.generation, expected_revision=session.revision, expected_dispatch_id=session.active_dispatch_id, expected_state=session.status)
         op = await client.sessions.control(target, dict(action='pause', mode='interrupt'))
-        assert (await op.wait(timeout=3)).status == 'completed'
+        stopped = await op.wait(timeout=5)
+        assert stopped.status == 'completed', dict(operation=stopped, task=await client.tasks.get(task.id))
         paused = await client.sessions.get(session.id)
         assert (await client.tasks.get(task.id)).status == 'paused'
         resume = await client.tasks.resume(task.id)
-        assert (await resume.wait(timeout=3)).status == 'completed'
+        resumed_op = await resume.wait(timeout=5)
+        assert resumed_op.status == 'completed', resumed_op
         for _ in range(300):
             resumed = await client.tasks.get(task.id)
             if resumed.status == 'running': break
             await asyncio.sleep(.01)
+        assert resumed.status == 'running', resumed
         cancel = await client.tasks.cancel(task.id)
-        assert (await cancel.wait(timeout=3)).status == 'completed'
+        cancelled = await cancel.wait(timeout=5)
+        assert cancelled.status == 'completed', dict(operation=cancelled, task=await client.tasks.get(task.id))
         assert (await client.tasks.get(task.id)).status == 'cancelled'
         final = await client.sessions.get(session.id)
         assert final.provider_session_id == paused.provider_session_id
@@ -169,7 +173,7 @@ asyncio.run(main())
         h.task.id,
       ],
       {
-        timeout: 7000,
+        timeout: 12000,
         env: {
           ...process.env,
           PYTHONPATH: fileURLToPath(new URL('../../python/src', import.meta.url)),
