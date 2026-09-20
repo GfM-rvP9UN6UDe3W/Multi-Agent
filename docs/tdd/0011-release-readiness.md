@@ -1,6 +1,6 @@
 # SPEC-0011 verification evidence
 
-Date: 2026-09-21. Local implementation and native-gateway verification complete; packaging verification recorded below. No current-source remote CI pass is claimed.
+Date: 2026-09-21. Local implementation, native-gateway verification, immutable MIT packaging and all six remote CI jobs complete for source `cf574c4`. Earlier pending/failing results below remain as historical evidence; the final result is recorded at the end.
 
 ## Baseline and RED
 
@@ -95,3 +95,11 @@ The user authorized commit/push and continued CI verification. Source `05bd2daae
 For a reproducible RED, the Codex fixture delays initialization by 300 ms. The original 180 ms setup fails to reach turn/start: **0/1**, `/private/tmp/agent-orch-0011-remote-red.log`. With the controlled monotonic budget started after native acceptance, the same delayed fixture preserves the wall-clock rollback, unknown-outcome, bounded cleanup and child-release assertions. Focused regression passes **68/68**, and Python passes **48/48**, no skips (`-remote-focused.log`, `-remote-python.log`). Production runtime deadlines and success/unknown rules are unchanged. No failed test is silently retried.
 
 Full local follow-up: **438/438** Node tests, zero skips, 27.62 s (`/private/tmp/agent-orch-0011-remote-node.log`); **48/48** Python tests, 7.79 s; typecheck, five generated artifacts, formatting and diff checks pass. Remote revalidation remains required for this follow-up revision.
+
+## Final remote GREEN and immutable rc.4
+
+Source **cf574c470077fdeb5974f3889d88854e88b48819** passed all **6/6** jobs in [run 35529393933](https://github.com/masonlee39/Multi-Agent/actions/runs/35529393933). The four contract environments (macOS 14 / Ubuntu 24.04 × Node 22.18.0 / 24.14.0 with the declared Python versions) each passed **438/438 Node**, **48/48 Python**, generated/type/format checks, package builds, all **nine** clean-install/bundle modes and the 1k/10k capacity experiment. Both native jobs passed the pinned protocol check and all six real-binary scripted-gateway groups for each provider. [0011-ci.json](0011-ci.json) preserves exact job IDs, step results and log evidence. There were no skipped tests or retried failed steps in this run.
+
+The follow-up changes include the optional packaged conformance harness, so new immutable npm **0.1.0-rc.4** and Python **0.1.0rc4** archives were built from this clean committed source. All seven archives pass SHA-256, exact MIT license-file and version-metadata checks; local clean offline installation/bundle smoke again passes nine modes (`/private/tmp/agent-orch-0011-rc4-package.log`). Earlier rc.1–rc.3 artifacts are unchanged. The handoff is `dist/release/agent-orch-0.1.0-rc.4.zip` with an adjacent SHA-256 and inner source/release manifests.
+
+R01–R09 are complete within this repository's scope. The [readiness ledger](../acceptance/readiness.md) retains selected production gateway quality/billing, deployment sandbox, Axion integration, measured economic policy, production-scale capacity and publication gates; this CI result does not supply those deployment-specific observations.

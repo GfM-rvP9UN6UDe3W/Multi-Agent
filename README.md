@@ -20,20 +20,20 @@ Choose packages for the process that will own or connect to the engine:
 | `@agent-orch/adapter-codex` | Codex App Server adapter | Codex execution |
 | `@agent-orch/cli` | Standalone/managed Node host and commands | CLI or Python-owned host operation |
 
-Use local tarballs from one candidate version. The current local MIT candidate is `0.1.0-rc.3` (Python `0.1.0rc3`). To reproduce it in a fresh artifact directory:
+Use local tarballs from one candidate version. The current local MIT candidate is `0.1.0-rc.4` (Python `0.1.0rc4`). To reproduce it in a fresh artifact directory:
 
 ```sh
 npm ci --ignore-scripts
-npm run build:packages -- dist/release/0.1.0-rc.3 --version 0.1.0-rc.3
-/absolute/build-env/bin/python scripts/build-python.py dist/release/0.1.0-rc.3 --version 0.1.0-rc.3
+npm run build:packages -- dist/release/0.1.0-rc.4 --version 0.1.0-rc.4
+/absolute/build-env/bin/python scripts/build-python.py dist/release/0.1.0-rc.4 --version 0.1.0-rc.4
 ```
 
 This candidate is local and unpublished. The builds write five npm tarballs, a Python wheel/sdist and SHA-256 manifests. Existing candidate directories are immutable; use a new version for changed bytes. Verify hashes before installation. In the consuming project, install the three Claude packages together, substituting the absolute artifact directory:
 
 ```sh
-npm install /absolute/rc/agent-orch-sdk-0.1.0-rc.3.tgz \
-  /absolute/rc/agent-orch-engine-0.1.0-rc.3.tgz \
-  /absolute/rc/agent-orch-adapter-claude-0.1.0-rc.3.tgz
+npm install /absolute/rc/agent-orch-sdk-0.1.0-rc.4.tgz \
+  /absolute/rc/agent-orch-engine-0.1.0-rc.4.tgz \
+  /absolute/rc/agent-orch-adapter-claude-0.1.0-rc.4.tgz
 ```
 
 Keep the generated npm lockfile. Install the Codex adapter instead for Codex execution; add the CLI when running a separate Node host. Python installs its wheel separately and connects to that Node host; the Python package does not bundle or download an engine.
@@ -93,7 +93,7 @@ See the [JSON Schema](schemas/protocol.schema.json), generated TypeScript `WireT
 
 ## Local development and verification
 
-Declared minimums are Node.js 22.18+ and Python 3.11+. Recorded local verification used Node.js 22.18.0 and 24.14.0, and Python 3.14.6. Node's built-in SQLite prints an experimental warning on that verified runtime. The [CI matrix](.github/workflows/offline.yml) configures macOS/Linux and minimum/current runtime jobs. Check [GitHub Actions](https://github.com/masonlee39/Multi-Agent/actions/workflows/offline.yml) for the result of a specific commit; local test counts above do not imply remote CI success.
+Declared minimums are Node.js 22.18+ and Python 3.11+. Recorded local verification used Node.js 22.18.0 and 24.14.0, and Python 3.14.6. Node's built-in SQLite prints an experimental warning on that verified runtime. The [CI matrix](.github/workflows/offline.yml) configures macOS/Linux and minimum/current runtime jobs. Source `cf574c4` passed all six jobs in [run 35529393933](https://github.com/masonlee39/Multi-Agent/actions/runs/35529393933): four full contract/package/capacity environments and two real-native scripted-gateway jobs. See the [recorded CI evidence](docs/tdd/0011-ci.json).
 
 Run from the repository root:
 

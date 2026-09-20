@@ -37,8 +37,8 @@ This requires Claude SDK 0.3.274 and Codex CLI 0.153.4, uses the real SDK agains
 | Environment | Evidence in this task |
 | --- | --- |
 | macOS Darwin 25.6.0 arm64, Apple M5 Pro, Node 24.14.0, Python 3.14.6 | Full local suites, native protocol-only checks, package smoke and capacity samples |
-| macOS 14 / Ubuntu 24.04, Node 22.18.0 | Last published CI failed; SPEC-0011 fixes use Python 3.11.9 on macOS and 3.11.13 on Linux. Current-source remote result pending |
-| macOS 14 / Ubuntu 24.04, Node 24.14.0 + Python 3.14.6 | Last published CI failed contract tests; fixes await a current-source remote run |
+| macOS 14 / Ubuntu 24.04, Node 22.18.0 | Passed 438 Node / 48 Python tests, package and capacity checks in [run 35529393933](https://github.com/masonlee39/Multi-Agent/actions/runs/35529393933), source `cf574c4`; Python 3.11.9 on macOS and 3.11.13 on Linux |
+| macOS 14 / Ubuntu 24.04, Node 24.14.0 + Python 3.14.6 | Passed the same full matrix in run 35529393933; both separate native jobs also passed real binaries with scripted gateways |
 | Claude SDK 0.3.274 + Zod 4.4.3 / Codex CLI 0.153.4 | Real local binaries with scripted loopback responses: tools, approval, retained history, fork/reuse/compact and both clients pass |
 | Single-file CJS/ESM Claude host, Node 24.14.0, no node_modules | Actual engine tasks, approval, four native MCP operations and injected inspection pass |
 | Real Claude/Codex models and actual native sandbox | Not executed or accepted |

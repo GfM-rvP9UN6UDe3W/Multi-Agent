@@ -1,0 +1,689 @@
+{
+  "sourceCommit": "cf574c470077fdeb5974f3889d88854e88b48819",
+  "runId": 35529393933,
+  "url": "https://github.com/masonlee39/Multi-Agent/actions/runs/35529393933",
+  "jobs": [
+    {
+      "id": 106127188405,
+      "name": "pinned-native-protocol (macos-14)",
+      "conclusion": "success",
+      "steps": [
+        {
+          "name": "Set up job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 1
+        },
+        {
+          "name": "Run actions/checkout@v4",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 2
+        },
+        {
+          "name": "Run actions/setup-node@v4",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 3
+        },
+        {
+          "name": "Run actions/setup-python@v5",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 4
+        },
+        {
+          "name": "Run npm ci --ignore-scripts",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 5
+        },
+        {
+          "name": "Install exact native development dependencies (no login or model calls)",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 6
+        },
+        {
+          "name": "Run node scripts/check-native-protocol.mjs",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 7
+        },
+        {
+          "name": "Real Claude binary with a scripted loopback gateway (no paid models)",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 8
+        },
+        {
+          "name": "Real Codex binary with a scripted loopback gateway (no paid models)",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 9
+        },
+        {
+          "name": "Run actions/upload-artifact@v4",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 10
+        },
+        {
+          "name": "Post Run actions/setup-python@v5",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 18
+        },
+        {
+          "name": "Post Run actions/setup-node@v4",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 19
+        },
+        {
+          "name": "Post Run actions/checkout@v4",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 20
+        },
+        {
+          "name": "Complete job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 21
+        }
+      ],
+      "proof": [
+        "2026-09-20T18:33:02.8906170Z {\"provider\":\"claude\",\"status\":\"passed\",\"cases\":[\"engine-task-native-mcp-human-approval-resource-release\",\"retained-native-history-read-only-inspection\",\"fork-distinct-native-identity-and-inherited-history\",\"serial-reuse-preserves-native-identity\",\"manual-compact-native-boundary-and-resource-release\",\"python-client-native-task-approval-history-and-usage\"],\"evidence\":\"/Users/runner/work/Multi-Agent/Multi-Agent/dist/verification/native-claude.json\"}",
+        "2026-09-20T18:33:04.7342650Z {\"provider\":\"codex\",\"status\":\"passed\",\"cases\":[\"engine-task-native-mcp-human-approval-resource-release\",\"retained-native-history-read-only-inspection\",\"fork-distinct-native-identity-and-inherited-history\",\"serial-reuse-preserves-native-identity\",\"manual-compact-native-boundary-and-resource-release\",\"python-client-native-task-approval-history-and-usage\"],\"evidence\":\"/Users/runner/work/Multi-Agent/Multi-Agent/dist/verification/native-codex.json\"}"
+      ]
+    },
+    {
+      "id": 106127188505,
+      "name": "contracts (ubuntu-24.04, 22.18.0, 3.11.13)",
+      "conclusion": "success",
+      "steps": [
+        {
+          "name": "Set up job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 1
+        },
+        {
+          "name": "Run actions/checkout@v4",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 2
+        },
+        {
+          "name": "Run actions/setup-node@v4",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 3
+        },
+        {
+          "name": "Run actions/setup-python@v5",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 4
+        },
+        {
+          "name": "Run npm ci --ignore-scripts",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 5
+        },
+        {
+          "name": "Run npm run check:generated && npm run typecheck && npm run format:check",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 6
+        },
+        {
+          "name": "Node contract tests",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 7
+        },
+        {
+          "name": "Python contract tests",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 8
+        },
+        {
+          "name": "Run python -m pip install setuptools==80.9.0 wheel==0.45.1 build==1.2.2.post1 packaging==25.0 pyproject_hooks==1.2.0",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 9
+        },
+        {
+          "name": "Run npm run build:packages",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 10
+        },
+        {
+          "name": "Run python scripts/build-python.py dist/release",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 11
+        },
+        {
+          "name": "Clean offline npm, wheel and sdist installation",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 12
+        },
+        {
+          "name": "Run node scripts/capacity-benchmark.ts 1000,10000 100 > dist/capacity.json",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 13
+        },
+        {
+          "name": "Run actions/upload-artifact@v4",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 14
+        },
+        {
+          "name": "Post Run actions/setup-python@v5",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 26
+        },
+        {
+          "name": "Post Run actions/setup-node@v4",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 27
+        },
+        {
+          "name": "Post Run actions/checkout@v4",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 28
+        },
+        {
+          "name": "Complete job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 29
+        }
+      ],
+      "proof": [
+        "2026-09-20T18:33:53.8575935Z # tests 438",
+        "2026-09-20T18:33:53.8576322Z # pass 438",
+        "2026-09-20T18:33:53.8576516Z # fail 0",
+        "2026-09-20T18:33:53.8576911Z # skipped 0",
+        "2026-09-20T18:34:08.9930964Z Ran 48 tests in 14.854s",
+        "2026-09-20T18:34:26.8632245Z {\"offline\":true,\"node\":\"v22.18.0\",\"results\":[{\"mode\":\"installed-embedded\",\"status\":\"completed\",\"modelCalls\":0},{\"mode\":\"installed-codex-private-mcp\",\"tools\":4,\"modelCalls\":0},{\"mode\":\"installed-codex-only\",\"imported\":true,\"modelCalls\":0,\"nativeDependency\":\"not_installed_or_invoked\"},{\"mode\":\"installed-claude-mcp\",\"taskStatuses\":[\"completed\",\"completed\"],\"mcpCalls\":4,\"queryCalls\":1,\"inspectionCalls\":1,\"modelCalls\":0,\"electronRuntime\":false},{\"mode\":\"bundled-cjs-no-node-modules\",\"taskStatuses\":[\"completed\",\"completed\"],\"mcpCalls\":4,\"queryCalls\":1,\"inspectionCalls\":1,\"modelCalls\":0,\"electronRuntime\":false,\"nativeSdkVersion\":\"0.3.274\",\"nodeModulesRemoved\":true},{\"mode\":\"bundled-esm-no-node-modules\",\"taskStatuses\":[\"completed\",\"completed\"],\"mcpCalls\":4,\"queryCalls\":1,\"inspectionCalls\":1,\"modelCalls\":0,\"electronRuntime\":false,\"nativeSdkVersion\":\"0.3.274\",\"nodeModulesRemoved\":true},{\"mode\":\"installed-claude-only\",\"imported\":true,\"modelCalls\":0,\"nativeDependency\":\"pinned-sdk-mcp-with-offline-peer\"},{\"mode\":\"installed-python-managed\",\"status\":\"completed\",\"modelCalls\":0},{\"mode\":\"installed-wheel-rebuilt-from-sdist\",\"status\":\"completed\",\"modelCalls\":0}]}"
+      ]
+    },
+    {
+      "id": 106127188513,
+      "name": "contracts (ubuntu-24.04, 24.14.0, 3.14.6)",
+      "conclusion": "success",
+      "steps": [
+        {
+          "name": "Set up job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 1
+        },
+        {
+          "name": "Run actions/checkout@v4",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 2
+        },
+        {
+          "name": "Run actions/setup-node@v4",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 3
+        },
+        {
+          "name": "Run actions/setup-python@v5",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 4
+        },
+        {
+          "name": "Run npm ci --ignore-scripts",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 5
+        },
+        {
+          "name": "Run npm run check:generated && npm run typecheck && npm run format:check",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 6
+        },
+        {
+          "name": "Node contract tests",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 7
+        },
+        {
+          "name": "Python contract tests",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 8
+        },
+        {
+          "name": "Run python -m pip install setuptools==80.9.0 wheel==0.45.1 build==1.2.2.post1 packaging==25.0 pyproject_hooks==1.2.0",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 9
+        },
+        {
+          "name": "Run npm run build:packages",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 10
+        },
+        {
+          "name": "Run python scripts/build-python.py dist/release",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 11
+        },
+        {
+          "name": "Clean offline npm, wheel and sdist installation",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 12
+        },
+        {
+          "name": "Run node scripts/capacity-benchmark.ts 1000,10000 100 > dist/capacity.json",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 13
+        },
+        {
+          "name": "Run actions/upload-artifact@v4",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 14
+        },
+        {
+          "name": "Post Run actions/setup-python@v5",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 26
+        },
+        {
+          "name": "Post Run actions/setup-node@v4",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 27
+        },
+        {
+          "name": "Post Run actions/checkout@v4",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 28
+        },
+        {
+          "name": "Complete job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 29
+        }
+      ],
+      "proof": [
+        "2026-09-20T18:33:43.9254591Z ℹ tests 438",
+        "2026-09-20T18:33:43.9255736Z ℹ pass 438",
+        "2026-09-20T18:33:43.9256158Z ℹ fail 0",
+        "2026-09-20T18:33:43.9256942Z ℹ skipped 0",
+        "2026-09-20T18:33:58.7751417Z Ran 48 tests in 14.512s",
+        "2026-09-20T18:34:16.3666074Z {\"offline\":true,\"node\":\"v24.14.0\",\"results\":[{\"mode\":\"installed-embedded\",\"status\":\"completed\",\"modelCalls\":0},{\"mode\":\"installed-codex-private-mcp\",\"tools\":4,\"modelCalls\":0},{\"mode\":\"installed-codex-only\",\"imported\":true,\"modelCalls\":0,\"nativeDependency\":\"not_installed_or_invoked\"},{\"mode\":\"installed-claude-mcp\",\"taskStatuses\":[\"completed\",\"completed\"],\"mcpCalls\":4,\"queryCalls\":1,\"inspectionCalls\":1,\"modelCalls\":0,\"electronRuntime\":false},{\"mode\":\"bundled-cjs-no-node-modules\",\"taskStatuses\":[\"completed\",\"completed\"],\"mcpCalls\":4,\"queryCalls\":1,\"inspectionCalls\":1,\"modelCalls\":0,\"electronRuntime\":false,\"nativeSdkVersion\":\"0.3.274\",\"nodeModulesRemoved\":true},{\"mode\":\"bundled-esm-no-node-modules\",\"taskStatuses\":[\"completed\",\"completed\"],\"mcpCalls\":4,\"queryCalls\":1,\"inspectionCalls\":1,\"modelCalls\":0,\"electronRuntime\":false,\"nativeSdkVersion\":\"0.3.274\",\"nodeModulesRemoved\":true},{\"mode\":\"installed-claude-only\",\"imported\":true,\"modelCalls\":0,\"nativeDependency\":\"pinned-sdk-mcp-with-offline-peer\"},{\"mode\":\"installed-python-managed\",\"status\":\"completed\",\"modelCalls\":0},{\"mode\":\"installed-wheel-rebuilt-from-sdist\",\"status\":\"completed\",\"modelCalls\":0}]}"
+      ]
+    },
+    {
+      "id": 106127188522,
+      "name": "contracts (macos-14, 24.14.0, 3.14.6)",
+      "conclusion": "success",
+      "steps": [
+        {
+          "name": "Set up job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 1
+        },
+        {
+          "name": "Run actions/checkout@v4",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 2
+        },
+        {
+          "name": "Run actions/setup-node@v4",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 3
+        },
+        {
+          "name": "Run actions/setup-python@v5",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 4
+        },
+        {
+          "name": "Run npm ci --ignore-scripts",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 5
+        },
+        {
+          "name": "Run npm run check:generated && npm run typecheck && npm run format:check",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 6
+        },
+        {
+          "name": "Node contract tests",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 7
+        },
+        {
+          "name": "Python contract tests",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 8
+        },
+        {
+          "name": "Run python -m pip install setuptools==80.9.0 wheel==0.45.1 build==1.2.2.post1 packaging==25.0 pyproject_hooks==1.2.0",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 9
+        },
+        {
+          "name": "Run npm run build:packages",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 10
+        },
+        {
+          "name": "Run python scripts/build-python.py dist/release",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 11
+        },
+        {
+          "name": "Clean offline npm, wheel and sdist installation",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 12
+        },
+        {
+          "name": "Run node scripts/capacity-benchmark.ts 1000,10000 100 > dist/capacity.json",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 13
+        },
+        {
+          "name": "Run actions/upload-artifact@v4",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 14
+        },
+        {
+          "name": "Post Run actions/setup-python@v5",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 26
+        },
+        {
+          "name": "Post Run actions/setup-node@v4",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 27
+        },
+        {
+          "name": "Post Run actions/checkout@v4",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 28
+        },
+        {
+          "name": "Complete job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 29
+        }
+      ],
+      "proof": [
+        "2026-09-20T18:34:03.1756340Z ℹ tests 438",
+        "2026-09-20T18:34:03.1758040Z ℹ pass 438",
+        "2026-09-20T18:34:03.1758950Z ℹ fail 0",
+        "2026-09-20T18:34:03.1760260Z ℹ skipped 0",
+        "2026-09-20T18:34:15.3132990Z Ran 48 tests in 11.599s",
+        "2026-09-20T18:34:32.5441140Z {\"offline\":true,\"node\":\"v24.14.0\",\"results\":[{\"mode\":\"installed-embedded\",\"status\":\"completed\",\"modelCalls\":0},{\"mode\":\"installed-codex-private-mcp\",\"tools\":4,\"modelCalls\":0},{\"mode\":\"installed-codex-only\",\"imported\":true,\"modelCalls\":0,\"nativeDependency\":\"not_installed_or_invoked\"},{\"mode\":\"installed-claude-mcp\",\"taskStatuses\":[\"completed\",\"completed\"],\"mcpCalls\":4,\"queryCalls\":1,\"inspectionCalls\":1,\"modelCalls\":0,\"electronRuntime\":false},{\"mode\":\"bundled-cjs-no-node-modules\",\"taskStatuses\":[\"completed\",\"completed\"],\"mcpCalls\":4,\"queryCalls\":1,\"inspectionCalls\":1,\"modelCalls\":0,\"electronRuntime\":false,\"nativeSdkVersion\":\"0.3.274\",\"nodeModulesRemoved\":true},{\"mode\":\"bundled-esm-no-node-modules\",\"taskStatuses\":[\"completed\",\"completed\"],\"mcpCalls\":4,\"queryCalls\":1,\"inspectionCalls\":1,\"modelCalls\":0,\"electronRuntime\":false,\"nativeSdkVersion\":\"0.3.274\",\"nodeModulesRemoved\":true},{\"mode\":\"installed-claude-only\",\"imported\":true,\"modelCalls\":0,\"nativeDependency\":\"pinned-sdk-mcp-with-offline-peer\"},{\"mode\":\"installed-python-managed\",\"status\":\"completed\",\"modelCalls\":0},{\"mode\":\"installed-wheel-rebuilt-from-sdist\",\"status\":\"completed\",\"modelCalls\":0}]}"
+      ]
+    },
+    {
+      "id": 106127188527,
+      "name": "contracts (macos-14, 22.18.0, 3.11.9)",
+      "conclusion": "success",
+      "steps": [
+        {
+          "name": "Set up job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 1
+        },
+        {
+          "name": "Run actions/checkout@v4",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 2
+        },
+        {
+          "name": "Run actions/setup-node@v4",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 3
+        },
+        {
+          "name": "Run actions/setup-python@v5",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 4
+        },
+        {
+          "name": "Run npm ci --ignore-scripts",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 5
+        },
+        {
+          "name": "Run npm run check:generated && npm run typecheck && npm run format:check",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 6
+        },
+        {
+          "name": "Node contract tests",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 7
+        },
+        {
+          "name": "Python contract tests",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 8
+        },
+        {
+          "name": "Run python -m pip install setuptools==80.9.0 wheel==0.45.1 build==1.2.2.post1 packaging==25.0 pyproject_hooks==1.2.0",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 9
+        },
+        {
+          "name": "Run npm run build:packages",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 10
+        },
+        {
+          "name": "Run python scripts/build-python.py dist/release",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 11
+        },
+        {
+          "name": "Clean offline npm, wheel and sdist installation",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 12
+        },
+        {
+          "name": "Run node scripts/capacity-benchmark.ts 1000,10000 100 > dist/capacity.json",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 13
+        },
+        {
+          "name": "Run actions/upload-artifact@v4",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 14
+        },
+        {
+          "name": "Post Run actions/setup-python@v5",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 26
+        },
+        {
+          "name": "Post Run actions/setup-node@v4",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 27
+        },
+        {
+          "name": "Post Run actions/checkout@v4",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 28
+        },
+        {
+          "name": "Complete job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 29
+        }
+      ],
+      "proof": [
+        "2026-09-20T18:33:42.8006100Z # tests 438",
+        "2026-09-20T18:33:42.8006400Z # pass 438",
+        "2026-09-20T18:33:42.8006550Z # fail 0",
+        "2026-09-20T18:33:42.8006850Z # skipped 0",
+        "2026-09-20T18:33:53.1772310Z Ran 48 tests in 9.990s",
+        "2026-09-20T18:34:11.5651880Z {\"offline\":true,\"node\":\"v22.18.0\",\"results\":[{\"mode\":\"installed-embedded\",\"status\":\"completed\",\"modelCalls\":0},{\"mode\":\"installed-codex-private-mcp\",\"tools\":4,\"modelCalls\":0},{\"mode\":\"installed-codex-only\",\"imported\":true,\"modelCalls\":0,\"nativeDependency\":\"not_installed_or_invoked\"},{\"mode\":\"installed-claude-mcp\",\"taskStatuses\":[\"completed\",\"completed\"],\"mcpCalls\":4,\"queryCalls\":1,\"inspectionCalls\":1,\"modelCalls\":0,\"electronRuntime\":false},{\"mode\":\"bundled-cjs-no-node-modules\",\"taskStatuses\":[\"completed\",\"completed\"],\"mcpCalls\":4,\"queryCalls\":1,\"inspectionCalls\":1,\"modelCalls\":0,\"electronRuntime\":false,\"nativeSdkVersion\":\"0.3.274\",\"nodeModulesRemoved\":true},{\"mode\":\"bundled-esm-no-node-modules\",\"taskStatuses\":[\"completed\",\"completed\"],\"mcpCalls\":4,\"queryCalls\":1,\"inspectionCalls\":1,\"modelCalls\":0,\"electronRuntime\":false,\"nativeSdkVersion\":\"0.3.274\",\"nodeModulesRemoved\":true},{\"mode\":\"installed-claude-only\",\"imported\":true,\"modelCalls\":0,\"nativeDependency\":\"pinned-sdk-mcp-with-offline-peer\"},{\"mode\":\"installed-python-managed\",\"status\":\"completed\",\"modelCalls\":0},{\"mode\":\"installed-wheel-rebuilt-from-sdist\",\"status\":\"completed\",\"modelCalls\":0}]}"
+      ]
+    },
+    {
+      "id": 106127188534,
+      "name": "pinned-native-protocol (ubuntu-24.04)",
+      "conclusion": "success",
+      "steps": [
+        {
+          "name": "Set up job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 1
+        },
+        {
+          "name": "Run actions/checkout@v4",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 2
+        },
+        {
+          "name": "Run actions/setup-node@v4",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 3
+        },
+        {
+          "name": "Run actions/setup-python@v5",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 4
+        },
+        {
+          "name": "Run npm ci --ignore-scripts",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 5
+        },
+        {
+          "name": "Install exact native development dependencies (no login or model calls)",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 6
+        },
+        {
+          "name": "Run node scripts/check-native-protocol.mjs",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 7
+        },
+        {
+          "name": "Real Claude binary with a scripted loopback gateway (no paid models)",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 8
+        },
+        {
+          "name": "Real Codex binary with a scripted loopback gateway (no paid models)",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 9
+        },
+        {
+          "name": "Run actions/upload-artifact@v4",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 10
+        },
+        {
+          "name": "Post Run actions/setup-python@v5",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 18
+        },
+        {
+          "name": "Post Run actions/setup-node@v4",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 19
+        },
+        {
+          "name": "Post Run actions/checkout@v4",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 20
+        },
+        {
+          "name": "Complete job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 21
+        }
+      ],
+      "proof": [
+        "2026-09-20T18:33:46.5181042Z {\"provider\":\"claude\",\"status\":\"passed\",\"cases\":[\"engine-task-native-mcp-human-approval-resource-release\",\"retained-native-history-read-only-inspection\",\"fork-distinct-native-identity-and-inherited-history\",\"serial-reuse-preserves-native-identity\",\"manual-compact-native-boundary-and-resource-release\",\"python-client-native-task-approval-history-and-usage\"],\"evidence\":\"/home/runner/work/Multi-Agent/Multi-Agent/dist/verification/native-claude.json\"}",
+        "2026-09-20T18:33:48.7606701Z {\"provider\":\"codex\",\"status\":\"passed\",\"cases\":[\"engine-task-native-mcp-human-approval-resource-release\",\"retained-native-history-read-only-inspection\",\"fork-distinct-native-identity-and-inherited-history\",\"serial-reuse-preserves-native-identity\",\"manual-compact-native-boundary-and-resource-release\",\"python-client-native-task-approval-history-and-usage\"],\"evidence\":\"/home/runner/work/Multi-Agent/Multi-Agent/dist/verification/native-codex.json\"}"
+      ]
+    }
+  ]
+}

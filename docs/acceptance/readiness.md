@@ -2,9 +2,11 @@
 
 Updated 2026-09-21 for SPEC-0011. This ledger distinguishes implemented SDK behavior, real native runtime behavior with scripted responses, and deployment evidence that those tests cannot supply.
 
-## Verified locally
+## Verified implementation and runtime behavior
 
 - Current Node 24.14.0 regression: 438/438; Python 3.14.6: 48/48; no skipped tests. Generated artifacts, strict TypeScript, formatting and diff checks pass. Node 22.18.0 is also tested explicitly; exact results are recorded in [TDD evidence](../tdd/0011-release-readiness.md).
+- Source `cf574c470077fdeb5974f3889d88854e88b48819` passed all six jobs in [CI run 35529393933](https://github.com/masonlee39/Multi-Agent/actions/runs/35529393933). Every macOS/Linux × Node 22/24 contract job passed 438 Node tests, 48 Python tests, nine package modes and capacity checks. Both native jobs passed Claude/Codex scripted-gateway verification. [Exact job evidence](../tdd/0011-ci.json) records the source SHA and step results.
+- Immutable MIT candidate `0.1.0-rc.4` (Python `0.1.0rc4`) contains all five npm packages plus wheel/sdist, with clean committed-source provenance, archive checksums and nine clean installation/bundle modes. Earlier candidates are preserved.
 - Claude SDK 0.3.274 / native Claude 2.1.274 with **Zod 4.4.3**, and Codex 0.153.4 run as actual owned binaries. Both TypeScript and Python clients create tasks, observe native output, approve it and read retained history/usage through the engine.
 - Both native runtimes expose the four bound orchestration tools. A native `work_read` returns actual engine state, native delegation tools are absent from the observed inventory, completed execution releases resources, fork preserves parent history under a distinct native ID, serial reuse retains identity, and manual compaction emits a native boundary. These tests use a bounded loopback gateway, synthetic credentials and scripted model responses.
 - Storage fault, namespace, archive and idempotency regressions remain enabled. Codex executable aliases under `runtime/codex/tmp/arg0/codex-arg0*/` are measured by link bytes without following them and omitted from archive/backup payloads. Other symlinks, including ancestor-directory links and unexpected helper names, remain rejected. Retained native history is still copied and verified.
@@ -15,7 +17,6 @@ Updated 2026-09-21 for SPEC-0011. This ledger distinguishes implemented SDK beha
 
 | Gate | Current status | Required evidence / action |
 | --- | --- | --- |
-| Current-source macOS/Linux CI | Local fixes complete; remote verification pending | Commit/push the reviewed change, then inspect all four contract jobs and both native jobs for that exact SHA. The last published revision's [run 35525915849](https://github.com/masonlee39/Multi-Agent/actions/runs/35525915849) failed four contract jobs; its two protocol jobs passed. A workflow edit is not a new CI result. |
 | Selected production gateway/model | Native transport verified with scripted responses; model quality and real billing unverified | Bind the application's chosen model/gateway and host-owned identity. Run equivalent TS/Python task, tool, cancellation and failure scenarios with a finite request/time/spending limit. Claude/Codex are runtimes; official-vendor models are not required. Preserve missing prices/usage as unknown. |
 | Deployment permission profile | Read-only inventory and engine authorization verified; OS/shell adversarial enforcement unverified | On each deployed OS/profile, test allowed workspace reads/writes, outside/private-state access, symlink races, escaped/background subprocesses and forged orchestration requests. Inventory absence alone cannot prove shell isolation. |
 | Axion application integration | CLI availability verified; application acceptance outside this repository's mutation scope | A separately scoped Axion task must verify the actual application adapter, admission, permission callbacks, durable host binding, background resource observation and Electron build. Use the [bundled-host contract](bundled-host.md). |

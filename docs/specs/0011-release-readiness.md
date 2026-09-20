@@ -1,6 +1,6 @@
 # SPEC-0011: Finish release-readiness engineering
 
-Date: 2026-09-21. Status: local implementation, regressions, real-binary scripted-gateway acceptance and MIT candidate complete. Current-source remote CI and deployment/model gates remain explicit in the readiness ledger.
+Date: 2026-09-21. Status: R01–R09 complete, including six successful remote CI jobs for source `cf574c4` and immutable MIT candidate rc.4. Deployment/model gates remain explicit in the readiness ledger.
 
 ## Problem and scope
 
