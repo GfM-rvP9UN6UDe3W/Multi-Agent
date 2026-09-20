@@ -238,12 +238,23 @@ export interface UsageRecord {
   outputTokens: number | null;
   raw: Json;
 }
+export type RuntimeBudgetCapabilities = {
+  version: 2;
+  acceptanceCapMs: number | null;
+  turnCapMs: number | null;
+};
+export type RuntimeEvidenceCapabilities = {
+  version: 1;
+  terminalCoversExecution: boolean;
+};
 export interface RuntimeCapabilities {
   provider: string;
   resume: boolean;
   interrupt: boolean;
   permissionProfiles: ('read-only' | 'workspace-write')[];
-  [key: string]: Json;
+  executionBudget: RuntimeBudgetCapabilities;
+  executionEvidence?: RuntimeEvidenceCapabilities;
+  [key: string]: Json | undefined;
 }
 export interface RuntimeInput {
   taskId: string;
@@ -259,6 +270,12 @@ export interface RuntimeInput {
   generation?: number;
   executionBudget?: ExecutionBudget;
   reportExecutionEvidence?: (evidence: ExecutionEvidence) => void;
+}
+/** Required at the engine-to-host boundary; standalone provider calls retain RuntimeInput. */
+export interface EngineRuntimeInput extends RuntimeInput {
+  generation: number;
+  executionBudget: ExecutionBudget;
+  reportExecutionEvidence: (evidence: ExecutionEvidence) => void;
 }
 export type RuntimeEvent =
   | { type: 'accepted'; providerSessionId: string }

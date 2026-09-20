@@ -229,14 +229,16 @@ test('AC-R01 preserves FIFO and capacity after a queued candidate loses adapter 
   const unavailableBase = createFakeAdapter({ provider: 'unavailable' });
   const unavailable: RuntimeAdapter = {
     ...unavailableBase,
-    capabilities: () => ({
-      ...unavailableBase.capabilities(),
-      executionBudget: {
-        version: supported ? 2 : 1,
-        acceptanceCapMs: null,
-        turnCapMs: null,
-      },
-    }),
+    // Deliberately inject a runtime downgrade that the public type now rejects.
+    capabilities: () =>
+      ({
+        ...unavailableBase.capabilities(),
+        executionBudget: {
+          version: supported ? 2 : 1,
+          acceptanceCapMs: null,
+          turnCapMs: null,
+        },
+      }) as ReturnType<RuntimeAdapter['capabilities']>,
   };
   const started: string[] = [];
   const release = new Map<string, () => void>();

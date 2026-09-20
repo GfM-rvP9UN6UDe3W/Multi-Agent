@@ -1,1 +1,13 @@
-{"name":"@agent-orch/engine","version":"0.1.0","private":true,"type":"module","exports":{".":"./src/index.ts","./types":"./src/types.ts","./fake":"./src/fake.ts"}}
+{
+  "name": "@agent-orch/engine",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./types": "./src/types.ts",
+    "./fake": "./src/fake.ts",
+    "./testing": "./src/testing.ts",
+    "./testing-host": "./src/testing-host.ts"
+  }
+}

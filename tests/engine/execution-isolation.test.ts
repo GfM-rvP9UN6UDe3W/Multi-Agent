@@ -871,12 +871,14 @@ test('A2-10 legacy adapter resume fails before queuing and does not stop other p
     await f.engine.close();
     const legacy: RuntimeAdapter = {
       provider: 'fake',
-      capabilities: () => ({
-        provider: 'fake',
-        resume: true,
-        interrupt: true,
-        permissionProfiles: ['read-only'],
-      }),
+      // Deliberately emulate an untyped legacy integration missing budget v2.
+      capabilities: () =>
+        ({
+          provider: 'fake',
+          resume: true,
+          interrupt: true,
+          permissionProfiles: ['read-only'],
+        }) as ReturnType<RuntimeAdapter['capabilities']>,
       async *execute() {
         throw new Error('legacy must not execute');
       },

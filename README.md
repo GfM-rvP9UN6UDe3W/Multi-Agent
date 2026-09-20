@@ -2,7 +2,7 @@
 
 One Node.js orchestration engine, with TypeScript and Python SDKs for local applications that manage tasks, durable messages, session state, and human acceptance.
 
-**This is an unpublished development version. The foundation, SPEC-0003-A lifecycle, A2 execution isolation, SPEC-0004 reliability fixes, and SPEC-0005 wire-contract tests are implemented.** Runnable source and offline fixture verification are available; the complete first-release design is not yet implemented. A2 evidence covers [cross-language integration](docs/tdd/0003-a2-wiring.md), [Claude](docs/tdd/0003-a2-claude.md), and [Codex](docs/tdd/0003-a2-codex.md). Earlier evidence remains in the foundation and A records. Ordinary tests use an explicitly enabled `fake` runtime or protocol fixtures, without model requests or login credentials. The Claude/Codex adapters implement a minimal protocol and bounded resource cleanup; real-model end-to-end acceptance remains unverified.
+**This is an unpublished development version. The foundation, SPEC-0003-A lifecycle, A2 execution isolation, SPEC-0004 reliability fixes, SPEC-0005 wire-contract tests, and SPEC-0006 host-runtime contracts are implemented.** Runnable source and offline fixture verification are available; the complete first-release design is not yet implemented. A2 evidence covers [cross-language integration](docs/tdd/0003-a2-wiring.md), [Claude](docs/tdd/0003-a2-claude.md), and [Codex](docs/tdd/0003-a2-codex.md). Earlier evidence remains in the foundation and A records. Ordinary tests use an explicitly enabled `fake` runtime or protocol fixtures, without model requests or login credentials. The Claude/Codex adapters implement a minimal protocol and bounded resource cleanup; real-model end-to-end acceptance remains unverified.
 
 - [Foundation specification and acceptance criteria](docs/specs/0001-foundation.md)
 - [Runtime adapter specification](docs/specs/0002-runtime-adapters.md)
@@ -10,6 +10,7 @@ One Node.js orchestration engine, with TypeScript and Python SDKs for local appl
 - [A2 contract: execution occupancy, outcome quarantine, and shared deadlines](docs/specs/0003-a2-execution-isolation.md)
 - [Reliability fixes: scheduling, shutdown, request deadlines, and Claude cleanup](docs/specs/0004-runtime-reliability.md)
 - [Client recovery and wire-snapshot contracts](docs/specs/0005-wire-contract.md)
+- [Host runtime contract and offline conformance](docs/specs/0006-host-runtime-contract.md)
 - [Archive and namespace-transition specification — not implemented](docs/specs/0003-b-archive.md)
 - [Phased specification: A/A2 implemented; B/C retention and routing pending](docs/specs/0003-policy-retention-deadlines.md)
 - [TDD evidence](docs/tdd/0001-evidence.md)
@@ -27,6 +28,7 @@ One Node.js orchestration engine, with TypeScript and Python SDKs for local appl
 | Control and recovery | Durable deadlines, pause/drain, supported interrupt, resume, cancel, and continued shutdown waits; unknown quarantine and owner reconciliation, without automatic resend after crashes or timeouts |
 | Scheduler diagnostics | Read-only `scheduler.get/getConflict`; owner-only `scheduler.resolveConflict` for resource conflicts with newly verified evidence |
 | TypeScript | In-process `createOrchestrator` or Unix-socket `connectOrchestrator` |
+| Existing application runtimes | Injected adapters, typed and validated budget/evidence capabilities, required host-input preflight, and an optional offline conformance suite |
 | Python | `Orchestrator.local` owns a Node child process; `Orchestrator.connect` connects to the same shared host |
 | Local protocol | JSON-RPC 2.0, stdio/Unix socket, version handshake, 1 MiB frames, 64 pending requests |
 | CLI | `host`, `doctor`, `submit`, `status`, and `approve`; other commands are explicitly rejected |
@@ -181,6 +183,19 @@ An owner can also settle Claude records with no observed spawn, but only after e
 A third-party adapter whose prepare returns a non-function or throws is rejected before commit with `INVALID_RUNTIME_CONTRACT`. If its finalizer fails after attestation commits, `RESOURCE_CLEANUP_INCOMPLETE` carries operationId and `auditCommitted: true`. Inspect `result.resourceCleanup.status`, then explicitly retry reconcile with the original target, evidence, and idempotency key. get/lookup/wait only read receipts; waiting on persisted alone reaches the local timeout. While pending, `RESOURCE_CLEANUP_PENDING` blocks new dispatches on this host; successful acknowledgement resumes dispatch without automatic retry. If memory cleanup succeeded but acknowledgement failed, retry only persistence. After restart loses the original finalizer, retain outcome_unknown instead of substituting a new adapter. A committed declaration and a retired resource record are separate states.
 
 Matching contradictory evidence for released execution creates `EXECUTION_EVIDENCE_CONFLICT`, persistently blocking new dispatches across restarts. The owner reads conflictId/revision through `scheduler.getConflict`, then submits newly verified stop evidence through `scheduler.resolveConflict`. This does not rewrite acceptance history or automatically reduce Q. Ordinary socket clients cannot resolve conflicts, and each conflict must be handled separately.
+
+## Existing application runtimes
+
+Inject an application-owned `RuntimeAdapter` through `EngineConfig.adapters` to use an existing application's complete admission, permission, tool, and audit pipeline. The standalone provider adapters remain optional. Budget v2 is required and typed; malformed capabilities are rejected before task admission and rechecked before queued work starts. `requireEngineRuntimeInput` preserves the original engine identity, signal, remaining budget, and evidence callback. It does not authenticate callers or enforce host permissions.
+
+```sh
+node examples/typescript/hosted.ts
+node --test tests/contract/host-runtime.test.ts tests/contract/host-runtime-process.test.ts
+```
+
+The example uses an explicitly offline host fixture and simulated task review, creates temporary state, and cleans it up. The reusable test suite covers native acceptance, rejection, ambiguous submission, duplicate keys/usage, cancellation without stop proof, live background resources, stale evidence, and explicit owner recovery. A real host-process crash/restart test includes a Python client. The `./testing` and `./testing-host` exports are optional and not loaded by normal engine startup.
+
+This increment is not a production Axion bridge, durable cross-store journal, authenticated multi-tenant boundary, packaged-application/hot-update acceptance, or real-model verification. A main-turn result is not proof that all owned work stopped; tool confirmation is not human task acceptance. See [the integration guide](SDK_USAGE_AND_WIRING.md#51-integrating-an-existing-applications-runtime), [SPEC-0006](docs/specs/0006-host-runtime-contract.md), and [verification evidence](docs/tdd/0006-host-runtime-contract.md).
 
 ## Claude/Codex integration status and version baselines
 

@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 One Node orchestration engine with thin TypeScript and Python SDKs. The engine exclusively owns SQLite state, scheduling, deadlines, and adapter calls. The SDKs use the shared JSON-RPC contract; they do not implement another scheduler, open the database, or call models themselves.
 
-Implemented scope: SPEC-0001 foundation, SPEC-0003-A lifecycle, A2 execution isolation, SPEC-0004 scheduling/shutdown/TypeScript request-deadline/Claude cleanup fixes, and SPEC-0005 client recovery guidance and wire-snapshot contract tests. Storage schema 2, wire 1.0, event schemaVersion 1. SPEC-0003-B/C retention, GC, archival, and routing are not implemented. Git remote: `git@github.com:masonlee39/Multi-Agent.git`. No npm/PyPI packages are published.
+Implemented scope: SPEC-0001 foundation, SPEC-0003-A lifecycle, A2 execution isolation, SPEC-0004 scheduling/shutdown/TypeScript request-deadline/Claude cleanup fixes, SPEC-0005 client recovery guidance and wire-snapshot contract tests, and SPEC-0006 typed host-runtime contracts and offline conformance. Storage schema 2, wire 1.0, event schemaVersion 1. SPEC-0003-B/C retention, GC, archival, and routing are not implemented. Git remote: `git@github.com:masonlee39/Multi-Agent.git`. No npm/PyPI packages are published.
 
 ## Common commands
 
@@ -62,7 +62,7 @@ Node 22.18+ / Python 3.11+; recorded verification used Node 24.14.0 and Python 3
 
 **Cleanup receipts.** Check the prepare result is a function before committing. After the declaration commits, finalizer failure or failed completion persistence returns RESOURCE_CLEANUP_INCOMPLETE, retaining operationId and a pending receipt and pausing new dispatches on this host. Only an explicit owner retry with the original payload/key continues the original finalizer. If memory cleanup already finished, retry only its durable acknowledgement. A restart that loses the original finalizer retains outcome_unknown; do not prepare again or simulate success. Successful calls return completed, and the resource-completion event is persisted in the acknowledgement transaction.
 
-**Adapter contract.** `RuntimeAdapter` in `packages/engine/src/types.ts` requires `capabilities()` to declare `executionBudget={version:2,...}`; otherwise tasks.create fails with UNSUPPORTED_CAPABILITY before persistence. `execute()` produces RuntimeEvent values. Adapters retaining resources after execute must implement `hasActiveResources()`. `engine/src/fake.ts` provides the deterministic offline runtime used by tests.
+**Adapter contract.** `RuntimeCapabilities` requires a typed `executionBudget={version:2,...}` with explicit null caps; optional `executionEvidence` is typed version 1. `readRuntimeCapabilities` validates detached immutable JSON snapshots before admission and again before dispatch. Missing/unsupported versions fail with UNSUPPORTED_CAPABILITY; malformed declarations fail with INVALID_RUNTIME_CONTRACT. Each dispatch uses one snapshot, including its permission check and terminal coverage. `execute()` produces RuntimeEvent values. Adapters retaining resources after execute must implement `hasActiveResources()`. Hosted adapters call `requireEngineRuntimeInput` before submission to require the original generation, budget, and evidence callback; standalone `RuntimeInput` stays compatible. This preflight is not authentication. `engine/src/fake.ts` remains the automatic deterministic runtime. Optional `engine/src/testing.ts` and `testing-host.ts` provide controlled-host conformance and an offline example without loading test code into ordinary startup. A passed fixture does not validate a real application's bridge or permission enforcement.
 
 **SDK parity.** TypeScript Orchestrator wraps both the in-process engine and UnixRpcClient with one API. `python/src/agent_orch/client.py` mirrors it. Wire fields are camelCase; Python converts only known envelope fields to snake_case. Raw JSON such as operation.result retains camelCase, for example `result["executionReleased"]`. API changes must update both SDKs and schemas/protocol.schema.json manually; there is no code generation.
 
@@ -95,6 +95,7 @@ Read the relevant specification before changing behavior. Resolve implementation
 | `docs/specs/0003-b-archive.md` | Archive and namespace transition, not implemented |
 | `docs/specs/0004-runtime-reliability.md` | Historical scheduling scans, signal shutdown, TS request deadlines, and Claude exit/cleanup evidence |
 | `docs/specs/0005-wire-contract.md` | Client cleanup recovery, real wire snapshots, cross-language mapping, and test-validator boundaries |
+| `docs/specs/0006-host-runtime-contract.md` | Typed adapter capabilities, runtime/input preflight, existing-host offline conformance, and process recovery |
 | `docs/tdd/*.md` | Observed RED/GREEN evidence for each increment |
 | `schemas/protocol.schema.json` | Normative wire data definitions |
 

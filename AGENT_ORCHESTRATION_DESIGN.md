@@ -12,6 +12,8 @@ The 2026-09-19 design review clarified routing responsibility, per-request cost 
 
 The second review's N1 is implemented in A2 with offline verification: separate execution/outcome accounting and a shared engine/adapter total budget, default 1800 seconds for new turns. N2 archive rollover remains pending under [B](./docs/specs/0003-b-archive.md). N3 retains the joint dual-runtime first-release commitment while allowing independent provider development, acceptance, and readiness tracking.
 
+The 2026-09-20 host-integration revision makes an existing application's execution pipeline an explicit integration target. Sections 7.3–7.5 distinguish the current adapter extension point, the host's responsibilities, and delivery slices. [SPEC-0006](./docs/specs/0006-host-runtime-contract.md) defines the contract and offline conformance increment. Axion is a reference application, not a dependency of the engine. Runtime compatibility, offline contract acceptance, packaged application acceptance, and real-model acceptance are separate milestones.
+
 ## 1. Problem and design goals
 
 Some multi-agent weaknesses arise from limited effective context. Splitting, summarizing, transferring, and recovering context may compensate while adding cost and complexity. This does not imply all multi-agent value comes from context limitations.
@@ -80,6 +82,8 @@ flowchart TD
   CORE --> TOOLS[Fixed bridge: delegation, messages, status, control]
   CORE --> CA[Claude adapter]
   CORE --> CX[Codex App Server adapter]
+  CORE --> HA[Application-owned runtime adapter]
+  HA --> HP[Existing host: admission, permissions, tools, audit, runtime]
   CA --> CW[Official Claude Agent SDK]
   CX --> XW[Official Codex App Server]
   CW --> ART[Versioned code and artifacts]
@@ -561,13 +565,57 @@ Disable native multi-agent in owned processes; the local reference lists multi_a
 
 Shell can bypass accounting by starting model processes. Enforcing host-managed delegation requires execution-environment restrictions as well as tool policy; measure/document coverage in the first verification stage.
 
-### 7.3 Application adapter interface
+### 7.3 Current application adapter extension point
+
+An application can already pass its own `RuntimeAdapter` through `EngineConfig.adapters`. Keep the independent Claude/Codex adapters for standalone consumers; an existing application need not replace or load them. Choosing an embedded or separate engine process does not determine which execution pipeline enforces permissions. MCP/CLI transport is not an authorization boundary, and the project MCP bridge remains unimplemented.
+
+The current extension point has synchronous, side-effect-free `capabilities()`, `execute(input): AsyncIterable<RuntimeEvent>`, optional `close()`, and resource-observation hooks. The engine supplies the dispatch identity, generation, shared monotonic execution budget, cancellation signal, and evidence callback. Direct standalone adapter calls may omit engine-only fields; a hosted adapter must require them rather than create replacement identities, deadlines, or evidence channels. Construction, capability inspection, and preflight must not submit work, spawn processes, inspect credentials, or open host resources.
+
+Declare `executionBudget` version 2 as a named required TypeScript capability, including explicit nulls for unspecified caps. Declare optional `executionEvidence` version 1 with a typed `terminalCoversExecution` flag. Missing evidence coverage is conservative, not implicit support. Validate the same shapes at runtime for JavaScript/untyped adapters before a task is persisted and again before dispatch. Provider identity, booleans, permission profiles, versioned fields, and JSON extension values must be valid; invalid declarations must never turn into permissive defaults. Capture one validated declaration for each dispatch's budget and terminal-coverage decision.
+
+An adapter's capability declaration is not evidence that the host actually enforces it. A reusable offline conformance suite must exercise the real engine with a controlled implementation of the host boundary: native acceptance, pre-submission rejection, ambiguous disconnection, cancellation without stop proof, live background resources after a main-turn result, late evidence, result acceptance, and conservative restart. Tests must assert persisted tasks, operations, events, and execution occupancy, not merely compare handcrafted events.
+
+### 7.4 Existing-host execution and persistence responsibilities
+
+The integration direction is:
+
+```text
+Application -> orchestration engine -> application-owned RuntimeAdapter
+                                      -> host admission and execution service
+                                      -> host runtime, tools, confirmations, and audit
+```
+
+For Axion, the complete prompt-command pipeline is the candidate entry point. Its event pump only consumes events; calling the pump or a raw runtime does not recreate admission, permission clamping, tool-boundary wiring, or record persistence. The concrete Axion bridge requires separate implementation and validation against the host's actual permission modes, including attended/unattended and background execution. Do not copy those policies into this SDK.
+
+| Concern | Required ownership and behavior |
+| --- | --- |
+| Trusted caller | Host code binds the authenticated user, installation/project, allowed workspace, model profile, and execution origin. Prompt text and ordinary task fields cannot grant authority. The current local SDK is not a multi-tenant identity boundary. |
+| Dispatch binding | The host durably binds engine store/task/session/dispatch/generation to its own session/turn and native IDs before submitting work. Repeated delivery of the same binding returns the original receipt; a conflicting binding is rejected. This durable host journal is an integration requirement, not an implemented engine wire field. |
+| Admission | Distinguish rejected-before-submission, queued, native-accepted, and uncertain submission. Host method return, UI readiness, process start, or queue insertion cannot synthesize `accepted`. A thrown/absent receipt after possible submission stays unknown. |
+| Permissions | The host enforces the requested permission profile through its existing trusted path. Unsupported mappings fail closed; do not fall back to full access or represent an unattended orchestrator turn as a user turn. |
+| Approval | Host tool confirmation authorizes an operation before execution. Engine human task acceptance reviews the result afterward. Neither decision satisfies the other. |
+| Completion and stop | A main-turn result does not certify that child work, background tools, owned local handles, or remote execution have stopped. Report each observation separately. Cancellation acknowledgement, stream completion, and Promise resolution are not stop proof. |
+| Shared runtime | Stop only work owned by the exact dispatch. Do not close a shared process used by another turn. Track owned resources until independently confirmed stopped, including after `execute()` ends. |
+| Engine state | SQLite is authoritative for scheduling, dispatches, messages, execution leases, quarantine, operations, task acceptance, and orchestration events. |
+| Host state | The host remains authoritative for conversation content, detailed tool/stream events, permission decisions, execution observations, and host audit. Keep rich UI events there; pass only orchestration facts and stable references to the engine. |
+| Projection and recovery | Maintain durable cursor/checkpoint and deduplication keys when projecting engine events into the host. Commit projection before advancing the checkpoint; replay must be harmless. Do not create two independent authorities for task completion or bill the same usage twice. |
+| Restart | Reattach only with independently verified binding and ownership. Lost receipt, missing in-memory handle, or host restart does not prove non-execution and must not trigger a new-key resend. Existing owner reconciliation remains the recovery path. |
+
+### 7.5 Delivery slices and acceptance boundaries
+
+1. **Runtime contract and offline acceptance:** implement explicit capability types, runtime validation, a reusable conformance suite, and a runnable deterministic host-adapter example. Preserve the existing wire/storage versions and provider adapters. The example is deliberately offline and is not an Axion adapter or a durable host journal.
+2. **Concrete host integration:** implement the host's durable dispatch binding, structured admission/native receipts, origin and permission mapping, complete resource observations, and idempotent event projection. Run the suite through the actual host integration seam, then obtain separately authorized real-model acceptance on that path. A real-model run through a standalone provider adapter does not validate the host bridge.
+3. **Packaging and capacity:** define distributable package exports, verify actual bundled/installed artifacts and Electron runtime support, then measure event-loop latency, database growth, and shutdown under load. Synchronous SQLite may justify a worker or dedicated process; there is no measured application-latency conclusion yet. Pure TypeScript and built-in SQLite alone do not prove hot-update eligibility. Existing retention/GC and publication work remain separate.
+
+### 7.6 Future session-control extension
+
+The following expanded session-management facade remains a future design. It is not today's `RuntimeAdapter` and is not required to implement the current extension point:
 
 This is a proposed project interface, not official SDK class names or runnable current code:
 
 ```ts
-interface RuntimeAdapter {
-  capabilities(): Promise<RuntimeCapabilities>;
+interface FutureSessionRuntime {
+  capabilities(): RuntimeCapabilities;
   open(spec: SessionSpec): Promise<RuntimeHandle>;
   resume(ref: SessionRef): Promise<RuntimeHandle>;
   fork(ref: SessionRef, spec: ForkSpec): Promise<RuntimeHandle>;

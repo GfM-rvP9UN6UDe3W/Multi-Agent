@@ -287,6 +287,38 @@ export async function runDemo(
 
 A read-only goal does not replace permissionProfile. Fixed keys allow retry recovery; genuinely new work needs a new business key. Paused/blocked paths return state for caller handling, so return may be TaskSnapshot or terminal TaskResult; see section 10.
 
+### 5.1 Integrating an existing application's runtime
+
+Use `createOrchestrator({ workspace, stateDir, adapters: [applicationAdapter] })` with an application-owned implementation of the current `RuntimeAdapter`. The built-in adapters are optional; do not start another provider runtime when the application already owns permission checks, tools, confirmations, and audit. This is an in-process extension point. The stock CLI currently allows only fake/Claude/Codex providers and is not a loader for arbitrary adapter modules.
+
+Follow [design sections 7.3–7.5](./AGENT_ORCHESTRATION_DESIGN.md#73-current-application-adapter-extension-point) in this order:
+
+1. Declare the exact provider, permission profiles, resume/interrupt support, budget v2 caps, and evidence v1 coverage. Require the engine's generation, shared remaining budget, and evidence callback; do not reset the timer at host admission.
+2. Enter the host's full admission/execution pipeline with a trusted caller and a durable dispatch binding. A queue receipt is not native acceptance. Definite rejection before submission can produce failed plus pre-submission stop evidence; ambiguity after possible submission must remain unknown.
+3. Preserve separate tool-confirmation and task-acceptance paths. Keep full host tool/UI events in the host; map native acceptance, result, usage, interruption, failure, and independently observed execution evidence into the engine contract.
+4. Keep resource observation alive for owned child/background work after the main turn ends. Never declare terminal coverage simply because the host emitted a completed UI turn. Stop acknowledgements and no remaining in-memory handle are insufficient evidence.
+5. Use stable identifiers and a durable projection checkpoint for host persistence. Recover a missing receipt with the original dispatch identity; do not replay uncertain work. Engine restart retains unresolved executions for owner reconciliation.
+
+The [SPEC-0006](./docs/specs/0006-host-runtime-contract.md) implementation covers the typed contract, runtime validation, reusable offline acceptance, and a deterministic example. It does not implement a concrete Axion bridge, durable cross-store journal, authenticated multi-tenant API, MCP bridge, package publication, or application hot update. The host journal and event projection above are requirements for the concrete integration, not current configuration fields.
+
+`readRuntimeCapabilities(adapter)` returns a validated, detached, recursively frozen snapshot. `RuntimeBudgetCapabilities` requires version 2 and explicit nulls for unspecified caps; `RuntimeEvidenceCapabilities` names version 1 coverage. Inside a hosted adapter, call `requireEngineRuntimeInput(input)` before host submission to obtain `EngineRuntimeInput`. It preserves the original identity, signal, budget functions, and evidence callback; it is not authentication or proof of host enforcement. Ordinary standalone provider calls retain their optional `RuntimeInput` engine fields.
+
+Run the complete offline example and contract tests from the source checkout:
+
+```sh
+node examples/typescript/hosted.ts
+node --test tests/contract/host-runtime.test.ts tests/contract/runtime-capabilities.test.ts tests/contract/runtime-input.test.ts
+node --test tests/contract/host-runtime-process.test.ts
+```
+
+The example creates and cleans up a temporary workspace/stateDir. Its output reports a null native ID while queued, waiting_approval before an explicitly simulated review, completed afterward, one dispatch, and no occupied execution slot. It never reads credentials or invokes a model. Its host bindings exist only in memory.
+
+The optional `packages/engine/src/testing.ts` entry point exports `registerRuntimeAdapterContract(name, createFixture)`. A `RuntimeContractFixture` supplies the application adapter, its observed submissions and native IDs, observation-completion status, expected result/usage, controlled host actions, and cleanup. The actions cover accept, confirm-tool, reject, finish, main-result with background work, disconnect, mismatched-generation/dispatch stop evidence, and observed full stop. `finish` must emit duplicate usage under one ID so deduplication is exercised. A driver routes these actions through its controlled host/runtime boundary, not directly into engine state. Each case uses a fresh engine and temporary state; waits and cleanup are bounded. Drivers must remain offline and release every owned fixture resource in dispose.
+
+The package exports `./testing` and `./testing-host` separately; neither is imported by normal engine startup. Use [the registration example](./tests/contract/host-runtime.test.ts) as a starting point, replacing the deterministic fixture with a driver for the actual application boundary. Passing the supplied fixture suite verifies the engine and test harness, not another application's adapter. A negative subprocess test verifies that the suite rejects a deliberately incorrect main-turn/full-stop mapping.
+
+Acceptance must distinguish: (a) SDK source running under the target Node/Electron runtime; (b) deterministic lifecycle/failure-path acceptance; (c) the actual packaged application's permissions, UI, restart, and cleanup; (d) a separately authorized real-model run through the same host adapter. An earlier source-only probe in Electron's Node mode cannot establish (c) or (d).
+
 ## 6. Local Python wiring
 
 ```text

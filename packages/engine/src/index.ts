@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { Store } from './store.ts';
 import { OrchestrationError, fail } from './errors.ts';
 import { object, fields, string, integer, taskSpec, messageSpec, digest } from './validation.ts';
+import { readRuntimeCapabilities } from './runtime.ts';
 import type {
   Engine,
   EngineConfig,
@@ -13,6 +14,8 @@ import type {
   ApprovalRequest,
   MessageSnapshot,
   RuntimeAdapter,
+  RuntimeCapabilities,
+  EngineRuntimeInput,
   RuntimeEvent,
   UsageRecord,
   Json,
@@ -30,6 +33,7 @@ import type {
 export * from './types.ts';
 export { OrchestrationError } from './errors.ts';
 export { createFakeAdapter } from './fake.ts';
+export { readRuntimeCapabilities, requireEngineRuntimeInput } from './runtime.ts';
 
 const terminalTasks = new Set(['completed', 'failed', 'cancelled']);
 const now = () => new Date().toISOString();
@@ -166,7 +170,7 @@ class LocalEngine implements Engine {
       if (!adapter) fail('VALIDATION_ERROR', `No adapter for ${provider}`);
       if (options.model !== undefined) string(options.model, 'model', 256);
       const profile = options.permissionProfile ?? 'read-only';
-      if (!adapter.capabilities().permissionProfiles.includes(profile))
+      if (!readRuntimeCapabilities(adapter).permissionProfiles.includes(profile))
         fail('UNSUPPORTED_CAPABILITY', `Provider ${provider} cannot enforce ${profile}`);
     }
     this.config = config;
@@ -780,7 +784,7 @@ class LocalEngine implements Engine {
       const adapter = this.adapters.get(session.provider);
       if (!adapter)
         fail('UNSUPPORTED_CAPABILITY', 'The original runtime provider is not configured');
-      this.adapterBudget(adapter);
+      readRuntimeCapabilities(adapter);
     }
     this.saveSession(session, 'idle');
     if (task.status !== 'paused') return;
@@ -834,14 +838,11 @@ class LocalEngine implements Engine {
         const spec = taskSpec(p.spec);
         const adapter = this.adapters.get(spec.runtime.provider);
         if (!adapter) fail('VALIDATION_ERROR', 'Provider is not configured');
+        const capabilities = readRuntimeCapabilities(adapter);
         const configured = this.config.providers?.[spec.runtime.provider];
         if (configured?.model && configured.model !== spec.runtime.model)
           fail('VALIDATION_ERROR', 'Model does not match configured provider');
-        if (
-          !adapter
-            .capabilities()
-            .permissionProfiles.includes(configured?.permissionProfile ?? 'read-only')
-        )
+        if (!capabilities.permissionProfiles.includes(configured?.permissionProfile ?? 'read-only'))
           fail('UNSUPPORTED_CAPABILITY', 'Permission profile is unsupported');
         const op = this.operation(
           method,
@@ -850,7 +851,6 @@ class LocalEngine implements Engine {
           spec,
           (op) => {
             this.admitWork();
-            this.adapterBudget(adapter);
             const id = randomUUID(),
               sessionId = randomUUID(),
               time = now();
@@ -957,7 +957,7 @@ class LocalEngine implements Engine {
             if (session.status === 'outcome_unknown')
               fail('OUTCOME_UNKNOWN', 'Cannot confirm cancellation of an unknown dispatch');
             if (flight) {
-              if (!this.adapters.get(session.provider)!.capabilities().interrupt)
+              if (!readRuntimeCapabilities(this.adapters.get(session.provider)!).interrupt)
                 fail('UNSUPPORTED_CAPABILITY', 'Runtime cannot interrupt');
               for (const id of flight.controlIds) {
                 const previous = this.store.operation(id);
@@ -1152,10 +1152,10 @@ class LocalEngine implements Engine {
         if (p.provider !== undefined) {
           const adapter = this.adapters.get(string(p.provider, 'provider', 128));
           if (!adapter) fail('NOT_FOUND', 'Provider is not configured');
-          return adapter.capabilities();
+          return readRuntimeCapabilities(adapter);
         }
         return Object.fromEntries(
-          [...this.adapters].map(([key, adapter]) => [key, adapter.capabilities()]),
+          [...this.adapters].map(([key, adapter]) => [key, readRuntimeCapabilities(adapter)]),
         );
       }
       case 'host.shutdown':
@@ -1232,7 +1232,7 @@ class LocalEngine implements Engine {
         } else if (flight) {
           if (
             mode === 'interrupt' &&
-            !this.adapters.get(session.provider)!.capabilities().interrupt
+            !readRuntimeCapabilities(this.adapters.get(session.provider)!).interrupt
           )
             fail('UNSUPPORTED_CAPABILITY', 'Runtime cannot interrupt');
           op.status = 'persisted';
@@ -1721,32 +1721,24 @@ class LocalEngine implements Engine {
       }
     });
   }
-  private adapterBudget(adapter: RuntimeAdapter): {
-    version: 2;
-    acceptanceCapMs: number | null;
-    turnCapMs: number | null;
-  } {
-    const cap = adapter.capabilities().executionBudget;
-    if (!cap || typeof cap !== 'object' || Array.isArray(cap) || cap.version !== 2)
-      fail(
-        'UNSUPPORTED_CAPABILITY',
-        `Provider ${adapter.provider} requires executionBudget version 2`,
-      );
-    for (const k of ['acceptanceCapMs', 'turnCapMs'])
-      if (cap[k] !== null) integer(cap[k], k, 1, 86400000);
-    return cap as { version: 2; acceptanceCapMs: number | null; turnCapMs: number | null };
-  }
   private start(task: TaskSnapshot, session: SessionSnapshot): boolean {
     const adapter = this.adapters.get(session.provider);
+    let capabilities: RuntimeCapabilities;
     try {
       if (!adapter)
         fail('UNSUPPORTED_CAPABILITY', 'The original runtime provider is not configured');
-      this.adapterBudget(adapter);
+      capabilities = readRuntimeCapabilities(adapter);
+      const profile = this.config.providers?.[session.provider]?.permissionProfile ?? 'read-only';
+      if (!capabilities.permissionProfiles.includes(profile))
+        fail('UNSUPPORTED_CAPABILITY', `Provider ${session.provider} cannot enforce ${profile}`);
     } catch (error) {
-      if (!(error instanceof OrchestrationError) || error.code !== 'UNSUPPORTED_CAPABILITY')
+      if (
+        !(error instanceof OrchestrationError) ||
+        !['UNSUPPORTED_CAPABILITY', 'INVALID_RUNTIME_CONTRACT'].includes(error.code)
+      )
         throw error;
       this.store.transaction(() => {
-        this.saveTask(task, 'paused', `UNSUPPORTED_CAPABILITY: ${error.message}`);
+        this.saveTask(task, 'paused', `${error.code}: ${error.message}`);
         this.saveSession(session, 'paused');
         this.taskEvent(task);
       });
@@ -1761,7 +1753,7 @@ class LocalEngine implements Engine {
       });
       return false;
     }
-    if (session.providerSessionId && !adapter.capabilities().resume) {
+    if (session.providerSessionId && !capabilities.resume) {
       this.store.transaction(() => {
         this.saveTask(task, 'blocked', 'runtime_resume_unsupported');
         this.saveSession(session, 'paused');
@@ -1769,7 +1761,7 @@ class LocalEngine implements Engine {
       });
       return false;
     }
-    const cap = this.adapterBudget(adapter);
+    const cap = capabilities.executionBudget;
     const enteredMono = this.clock.monotonicNow(),
       enteredWall = this.clock.wallNow();
     const effectiveTurnMs = Math.min(this.timeouts.turnMs, cap.turnCapMs ?? Infinity);
@@ -1842,14 +1834,7 @@ class LocalEngine implements Engine {
         budget: budgetSummary,
         provider: adapter.provider,
         providerSessionId: session.providerSessionId,
-        terminalCoversExecution:
-          (
-            adapter.capabilities().executionEvidence as
-              | { version?: number; terminalCoversExecution?: boolean }
-              | undefined
-          )?.version === 1 &&
-          (adapter.capabilities().executionEvidence as { terminalCoversExecution?: boolean })
-            .terminalCoversExecution === true,
+        terminalCoversExecution: capabilities.executionEvidence?.terminalCoversExecution === true,
         executionLease: { version: 1, status: 'held', acquiredAt: budget.enteredAt },
         quarantined: false,
         mayHaveBeenSent: true,
@@ -1965,7 +1950,7 @@ class LocalEngine implements Engine {
   ): Promise<void> {
     let terminal: Extract<RuntimeEvent, { type: 'result' | 'interrupted' | 'error' }> | undefined;
     try {
-      const input = {
+      const input: EngineRuntimeInput = {
         taskId: flight.taskId,
         sessionId: flight.sessionId,
         dispatchId: flight.dispatchId,
