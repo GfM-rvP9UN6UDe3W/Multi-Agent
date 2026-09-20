@@ -4,6 +4,8 @@ import { pathToFileURL } from 'node:url';
 import { createEngine } from '../../engine/src/index.ts';
 import type { CloseOptions } from '../../engine/src/types.ts';
 import { connectOrchestrator } from '../../sdk-typescript/src/index.ts';
+import { doctor } from './doctor.ts';
+import { observeTask } from './observe.ts';
 import { engineConfig, loadConfig } from './config.ts';
 import { OWNER_EOF_TIMEOUT_MS, startStdioHost, startUnixHost } from './host.ts';
 
@@ -18,7 +20,7 @@ function flags(args: string[], allowed: string[]): Record<string, string | true>
       fail('INVALID_ARGUMENT', `Unknown argument: ${name}`);
     const key = name.slice(2);
     if (key in result) fail('INVALID_ARGUMENT', `Duplicate argument: ${name}`);
-    if (key === 'stdio') result[key] = true;
+    if (['stdio', 'interactive', 'follow'].includes(key)) result[key] = true;
     else {
       const value = args[++i];
       if (!value || value.startsWith('--')) fail('INVALID_ARGUMENT', `Missing value for ${name}`);
@@ -74,9 +76,15 @@ async function waitForHostSignals(
 
 export async function main(argv = process.argv.slice(2)): Promise<void> {
   const [command, ...args] = argv;
+  if (command === 'tool-bridge') {
+    if (args.length)
+      fail('INVALID_ARGUMENT', 'tool-bridge uses only its private inherited binding');
+    await (await import('../../engine/src/tool-bridge.ts')).runToolBridge();
+    return;
+  }
   if (command === '--help' || command === 'help') {
     process.stdout.write(
-      'agent-orch host --config FILE [--stdio | --socket PATH]\nagent-orch doctor --config FILE | --socket PATH\nagent-orch submit --socket PATH --task FILE [--idempotency-key KEY]\nagent-orch status --socket PATH --task TASK_ID\nagent-orch approve --socket PATH --approval ID --revision N --decision approve|deny [--idempotency-key KEY]\n',
+      'agent-orch host --config FILE [--stdio | --socket PATH]\nagent-orch doctor --config FILE | --socket PATH\nagent-orch submit --socket PATH --task FILE [--idempotency-key KEY]\nagent-orch status --socket PATH --task TASK_ID\nagent-orch run --socket PATH --task FILE [--interactive] [--follow] [--timeout-ms N] [--idempotency-key KEY]\nagent-orch attach --socket PATH --task TASK_ID [--interactive] [--follow] [--after-cursor N] [--timeout-ms N]\nagent-orch control --socket PATH --target FILE --action pause|resume|stop|compact|rotate [--mode drain|interrupt] [--idempotency-key KEY]\nagent-orch approve --socket PATH --approval ID --revision N --decision approve|deny [--idempotency-key KEY]\n',
     );
     return;
   }
@@ -112,11 +120,8 @@ export async function main(argv = process.argv.slice(2)): Promise<void> {
     }
     return;
   }
-  if (!['doctor', 'status', 'submit', 'approve'].includes(command))
-    fail(
-      'UNSUPPORTED_COMMAND',
-      `Command is not implemented in foundation 1.0: ${command ?? '(missing)'}`,
-    );
+  if (!['doctor', 'status', 'submit', 'approve', 'run', 'attach', 'control'].includes(command))
+    fail('UNSUPPORTED_COMMAND', `Unknown command: ${command ?? '(missing)'}`);
   const allowed =
     command === 'doctor'
       ? ['config', 'socket']
@@ -124,26 +129,85 @@ export async function main(argv = process.argv.slice(2)): Promise<void> {
         ? ['socket', 'task']
         : command === 'submit'
           ? ['socket', 'task', 'idempotency-key']
-          : ['socket', 'approval', 'revision', 'decision', 'idempotency-key'];
+          : command === 'run' || command === 'attach'
+            ? [
+                'socket',
+                'task',
+                'idempotency-key',
+                'interactive',
+                'follow',
+                'timeout-ms',
+                'after-cursor',
+              ]
+            : command === 'control'
+              ? ['socket', 'target', 'action', 'mode', 'idempotency-key']
+              : ['socket', 'approval', 'revision', 'decision', 'idempotency-key'];
   const options = flags(args, allowed);
   if (command === 'doctor' && options.config) {
     if (options.socket) fail('INVALID_ARGUMENT', 'doctor accepts either --config or --socket');
     const config = await loadConfig(required(options, 'config'));
-    print({
-      ok: true,
-      mode: 'configuration-only',
-      workspace: config.workspace,
-      stateDir: config.stateDir,
-      providers: Object.keys(config.providers),
-      runtimeAcceptance: 'not_run',
-    });
+    const result = await doctor(config);
+    print(result);
+    if (!result.ok) process.exitCode = 1;
     return;
   }
   const client = await connectOrchestrator({ socketPath: required(options, 'socket') });
   try {
     if (command === 'doctor') print({ ok: true, ...client.info, runtimeAcceptance: 'not_run' });
     else if (command === 'status') print(await client.tasks.get(required(options, 'task')));
-    else if (command === 'submit') {
+    else if (command === 'control') {
+      const target = JSON.parse(await readFile(required(options, 'target'), 'utf8'));
+      const action = required(options, 'action');
+      if (!['pause', 'resume', 'stop', 'compact', 'rotate'].includes(action))
+        fail('INVALID_ARGUMENT', 'Unsupported control action');
+      const mode = options.mode;
+      if (mode !== undefined && !['drain', 'interrupt'].includes(String(mode)))
+        fail('INVALID_ARGUMENT', 'Invalid control mode');
+      const mutation = {
+        idempotencyKey:
+          typeof options['idempotency-key'] === 'string' ? options['idempotency-key'] : undefined,
+      };
+      const operation =
+        action === 'compact'
+          ? await client.sessions.compact(target, mutation)
+          : action === 'rotate'
+            ? await client.sessions.rotate(target, mutation)
+            : await client.sessions.control(
+                target,
+                { action, ...(mode ? { mode: mode as 'drain' | 'interrupt' } : {}) },
+                mutation,
+              );
+      print(operation.initial);
+    } else if (command === 'run' || command === 'attach') {
+      const timeoutMs = Number(options['timeout-ms'] ?? 300000);
+      if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 86400000)
+        fail('INVALID_ARGUMENT', 'timeout-ms must be 1..86400000');
+      if (options.interactive && (!process.stdin.isTTY || !process.stdout.isTTY))
+        fail('INTERACTIVE_TERMINAL_REQUIRED', '--interactive requires a terminal');
+      let taskId = required(options, 'task');
+      if (command === 'run') {
+        const spec = JSON.parse(await readFile(taskId, 'utf8'));
+        const task = await client.tasks.create(spec, {
+          idempotencyKey:
+            typeof options['idempotency-key'] === 'string' ? options['idempotency-key'] : undefined,
+        });
+        print({ kind: 'task', task: task.initial });
+        taskId = task.id;
+      }
+      await observeTask(
+        client,
+        taskId,
+        {
+          interactive: options.interactive === true,
+          follow: options.follow === true,
+          timeoutMs,
+          ...(typeof options['after-cursor'] === 'string'
+            ? { afterCursor: options['after-cursor'] }
+            : {}),
+        },
+        print,
+      );
+    } else if (command === 'submit') {
       const spec = JSON.parse(await readFile(required(options, 'task'), 'utf8'));
       const task = await client.tasks.create(spec, {
         idempotencyKey:
@@ -175,7 +239,12 @@ export async function main(argv = process.argv.slice(2)): Promise<void> {
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   main().catch((error) => {
     process.stderr.write(
-      JSON.stringify({ code: error.code ?? 'CLI_ERROR', message: error.message }) + '\n',
+      JSON.stringify({
+        code: error.code ?? 'CLI_ERROR',
+        message: error.message,
+        ...(error.retryIdentity ? { retryIdentity: error.retryIdentity } : {}),
+        ...(error.details ? { details: error.details } : {}),
+      }) + '\n',
     );
     process.exitCode = 1;
   });

@@ -1,0 +1,65 @@
+name: Offline contracts and packages
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  contracts:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            node: 22.18.0
+            python: 3.11.13
+          - os: ubuntu-24.04
+            node: 24.14.0
+            python: 3.14.6
+          - os: macos-14
+            node: 22.18.0
+            python: 3.11.13
+          - os: macos-14
+            node: 24.14.0
+            python: 3.14.6
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - run: npm ci --ignore-scripts
+      - run: npm run check:generated && npm run typecheck && npm run format:check
+      - run: npm test && npm run test:python
+      - run: python -m pip install setuptools==80.9.0 wheel==0.45.1 build==1.2.2.post1 packaging==25.0 pyproject_hooks==1.2.0
+      - run: npm run build:packages
+      - run: python -m build --no-isolation --sdist --wheel --outdir dist/release python
+      - name: Clean offline npm, wheel and sdist installation
+        run: PACKAGE_BUILD_PYTHON="$(command -v python)" npm run test:packages
+      - run: node scripts/capacity-benchmark.ts 1000,10000 100 > dist/capacity.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: offline-${{ matrix.os }}-node-${{ matrix.node }}-python-${{ matrix.python }}
+          path: dist/
+  pinned-native-protocol:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-14]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24.14.0
+      - run: npm ci --ignore-scripts
+      - name: Install exact native development dependencies (no login or model calls)
+        run: npm install --ignore-scripts --no-save --package-lock=false @anthropic-ai/claude-agent-sdk@0.3.274 @openai/codex@0.153.4
+      - run: node scripts/check-native-protocol.mjs

@@ -15,19 +15,15 @@ import {
   type InitializeResult,
 } from '../../packages/sdk-typescript/src/index.ts';
 import { UnixRpcClient } from '../../packages/sdk-typescript/src/transport.ts';
-import {
-  createEngine,
-  createFakeAdapter,
-  type TaskSnapshot,
-} from '../../packages/engine/src/index.ts';
+import { createEngine, createFakeAdapter, type TaskSnapshot } from '../fixtures/engine.ts';
 
 const info: InitializeResult = {
-  protocolVersion: '1.0',
+  protocolVersion: '2.0',
   engineVersion: 'fixture',
   schemaVersion: 2,
   instanceId: 'timeout-fixture',
   storeId: 'timeout-store',
-  capabilities: {},
+  capabilities: { storeNamespaces: { version: 1 } },
 };
 interface Request {
   id: number;
@@ -156,6 +152,7 @@ test('0004 AC-R03 timed-out mutations retain lookup identity and recover the per
   let engine: Awaited<ReturnType<typeof createEngine>>;
   let dropReceipt = true;
   const f = await fixture(t, {
+    initialize: false,
     handle(request) {
       void engine.call(request.method, request.params).then((result) => {
         if (request.method === 'tasks.create' && dropReceipt) dropReceipt = false;

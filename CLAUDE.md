@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 One Node orchestration engine with thin TypeScript and Python SDKs. The engine exclusively owns SQLite state, scheduling, deadlines, and adapter calls. The SDKs use the shared JSON-RPC contract; they do not implement another scheduler, open the database, or call models themselves.
 
-Implemented scope: SPEC-0001 foundation, SPEC-0003-A lifecycle, A2 execution isolation, SPEC-0004 scheduling/shutdown/TypeScript request-deadline/Claude cleanup fixes, SPEC-0005 client recovery guidance and wire-snapshot contract tests, SPEC-0006 typed host-runtime contracts and offline conformance, and SPEC-0007 embedded policy/options injection and durable usage replay. Storage schema 2, wire 1.0, event schemaVersion 1. SPEC-0003-B/C retention, GC, archival, and routing are not implemented. Git remote: `git@github.com:masonlee39/Multi-Agent.git`. No npm/PyPI packages are published.
+Implemented scope: SPEC-0001–0010, including B/C retention, archive rollover, routing, accounting and bundled-host delivery. Storage schema 3, wire 2.0, event schemaVersion 1. Native-model, actual sandbox, external-application and economic acceptance remain unverified. Git remote: `git@github.com:masonlee39/Multi-Agent.git`. The project is MIT-licensed. Local npm tarballs and Python wheel/sdist build; nothing is published. See SPEC-0009's completion matrix and SPEC-0010's bundle evidence.
 
 ## Common commands
 
@@ -68,7 +68,7 @@ Node 22.18+ / Python 3.11+; recorded verification used Node 24.14.0 and Python 3
 
 **Claude interruption.** SPEC-0008 advertises interrupt support and owns one open AsyncIterable user prompt plus partial-message observation. Defer Query.interrupt until matched main-turn activity; call once, keep observing, and classify only structured aborted_streaming/aborted_tools results as interrupted. Receipt, arbitrary error text, EOF, and process exit do not establish an interrupted terminal. Cleanup and extended-host stop proof remain separate. Late evidence cannot undo an expired control. Never change this into immediate SDK-controller abort on an engine cancellation request.
 
-`tests/contract/protocol-schema.test.ts` validates task, approval, message, usage, operation, and related snapshots from an actual Unix host. A Python subprocess reads the same state to verify field mappings and preservation of raw JSON. The helper supports the schema constraints currently used, rejects unsupported assertion keywords and invalid additionalProperties values, and treats format as annotation. It is not a production validator or complete JSON Schema implementation. Wire extensions require actual payload checks and negative cases, not just assertions that definition names exist.
+`tests/contract/protocol-schema.test.ts` validates task, approval, message, usage, operation, and related snapshots from an actual Unix host. A Python subprocess reads the same state to verify field mappings and preservation of raw JSON. The helper supports the schema constraints currently used, rejects unsupported assertion keywords and invalid additionalProperties values, and treats format as annotation. The same audited subset is now a production validator in TS/Python, with generated wire types; it is not a complete JSON Schema implementation. Wire extensions require actual payload checks and negative cases, not just assertions that definition names exist.
 
 **Relative cross-package imports.** Use paths such as `../../engine/src/types.ts`, not `@agent-orch/*`. npm workspaces create links, but current source imports use relative paths.
 
@@ -78,9 +78,9 @@ SPEC-0007 adds `adapter-claude/src/options.ts` for typed native options, reserve
 
 - **TDD is required:** specification and numbered criteria, tests with an observed RED, implementation, then RED/GREEN evidence in docs/tdd. Test names reference acceptance IDs such as AC04 or 0003-A05. Regression coverage for already-correct behavior does not need fabricated RED evidence.
 - **Erasable TypeScript only:** no enum, namespace, or parameter properties. With verbatimModuleSyntax, use `import type`; imports include `.ts` extensions.
-- **No third-party runtime dependencies:** Python uses the standard library. The optional Claude Agent SDK peer loads dynamically only inside execute.
-- **Treat unknown conservatively:** no automatic outcome resolution, resend, retry, or unsupported lease release. Missing usage stays null; do not estimate costs.
-- **Reject unsupported capabilities explicitly:** currently sessions.open/fork, compact/rotate/stop, automatic verification, and verificationRules. Do not simulate success.
+- **Runtime dependencies:** Python uses the standard library. Claude SDK and Zod are optional peers loaded by selected native execution/MCP/inspection paths, or supplied through host callbacks. An injected query must never implicitly select another SDK for MCP/inspection.
+- **Treat unknown conservatively:** no automatic outcome resolution, resend, retry, or unsupported lease release. Missing usage stays null; registered-price cost estimates must preserve unknown coverage and must not be presented as invoices.
+- **Reject unsupported capabilities explicitly:** session operations and checks are implemented, but each still requires its exact declared runtime capability/evidence. Never simulate a native fork or compact boundary.
 - **No credentials or real models in ordinary tests:** temporary workspace/stateDir, explicit fake provider, and no default fake configuration. Unix-socket EPERM requires a permitted environment and a rerun, not a passing result.
 - Commit, push, and package publication require the user's authorization.
 - Write documentation, examples, and source comments in English. Keep intentional multilingual fixtures used to test Unicode behavior.
@@ -95,12 +95,13 @@ Read the relevant specification before changing behavior. Resolve implementation
 | `docs/specs/0002-runtime-adapters.md` | Claude/Codex adapter boundaries and acceptance evidence |
 | `docs/specs/0003-a-lifecycle.md` | Durable deadlines and owner reconciliation; A2 supersedes its 300-second turn default |
 | `docs/specs/0003-a2-execution-isolation.md` | **Current authority:** A/Q/R, 1,800-second budget, leases, evidence, and conflicts |
-| `docs/specs/0003-policy-retention-deadlines.md` | Phased plan; B/C criteria are not implemented |
-| `docs/specs/0003-b-archive.md` | Archive and namespace transition, not implemented |
+| `docs/specs/0003-policy-retention-deadlines.md` | Lifecycle, retention and declared-routing contracts; implementation evidence in SPEC-0009 |
+| `docs/specs/0003-b-archive.md` | Archive and namespace transition; implementation evidence in SPEC-0009 |
 | `docs/specs/0004-runtime-reliability.md` | Historical scheduling scans, signal shutdown, TS request deadlines, and Claude exit/cleanup evidence |
 | `docs/specs/0005-wire-contract.md` | Client cleanup recovery, real wire snapshots, cross-language mapping, and test-validator boundaries |
 | `docs/specs/0006-host-runtime-contract.md` | Typed adapter capabilities, runtime/input preflight, existing-host offline conformance, and process recovery |
+| `docs/specs/0009-complete-design.md` | Current wire 2.0/schema 3 feature completion, packages and acceptance matrix |
 | `docs/tdd/*.md` | Observed RED/GREEN evidence for each increment |
 | `schemas/protocol.schema.json` | Normative wire data definitions |
 
-AGENT_ORCHESTRATION_DESIGN.md and SDK_USAGE_AND_WIRING.md describe the full product and planned integration. Their auth, executable, MCP bridge, and gateway examples are **not implemented interfaces**; do not present them as current capabilities.
+AGENT_ORCHESTRATION_DESIGN.md describes product intent and release gates; SDK_USAGE_AND_WIRING.md documents the current implementation. There is no generic auth/gateway JSON abstraction. Do not confuse configured CI, offline native transports, optional native features, or package artifacts with real-model, sandbox or release acceptance.

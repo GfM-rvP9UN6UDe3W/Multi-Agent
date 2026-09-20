@@ -18,10 +18,23 @@ class AcceptanceSpec:
 
 
 @dataclass(frozen=True)
+class CheckAcceptanceSpec:
+    rule_refs: list[dict[str, str]]
+    mode: str = "checks"
+    max_repairs: int = 0
+
+
+@dataclass(frozen=True)
 class TaskSpec:
     goal: str
     runtime: RuntimeSpec
-    acceptance: AcceptanceSpec
+    acceptance: AcceptanceSpec | CheckAcceptanceSpec
+    dependency_task_ids: list[str] = field(default_factory=list)
+    parent_task_id: str | None = None
+    write_scope: str | None = None
+    context_plan: dict[str, Any] | None = None
+    budget: dict[str, Any] | None = None
+    context_estimate: dict[str, Any] | None = None
 
 
 @dataclass(frozen=True)
@@ -51,6 +64,26 @@ class LifecycleTimeouts:
 
 
 _WIRE_TO_PYTHON = {
+    "maxCost": "max_cost", "reservePerDispatch": "reserve_per_dispatch", "contextEstimate": "context_estimate",
+    "outputReserveTokens": "output_reserve_tokens", "toolReserveTokens": "tool_reserve_tokens",
+    "costOwnerTaskId": "cost_owner_task_id", "billingId": "billing_id", "pricingVersion": "pricing_version",
+    "settlementIncomplete": "settlement_incomplete", "unknownRecords": "unknown_records", "recordCount": "record_count",
+    "keepHistoryTokens": "keep_history_tokens", "compactHistoryTokens": "compact_history_tokens", "growthTokens": "growth_tokens",
+    "retainedPrefixTokens": "retained_prefix_tokens", "intervalsMs": "intervals_ms",
+    "replyToMessageId": "reply_to_message_id", "hopCount": "hop_count",
+    "providerTurnId": "provider_turn_id", "requestId": "request_id", "toolName": "tool_name",
+    "requestDigest": "request_digest", "runtimeApprovals": "runtime_approvals", "ttlMs": "ttl_ms",
+    "sessionLifecycle": "session_lifecycle",
+    "contextPlan": "context_plan", "requestedMode": "requested_mode", "candidateSessionId": "candidate_session_id",
+    "contextRefs": "context_refs", "artifactRef": "artifact_ref", "snapshotRef": "snapshot_ref",
+    "fallbackModes": "fallback_modes", "maxQueueWaitMs": "max_queue_wait_ms", "enqueuedAt": "enqueued_at",
+    "reasonCode": "reason_code", "submittedAt": "submitted_at", "taskIds": "task_ids",
+    "permissionProfile": "permission_profile",
+    "dependencyTaskIds": "dependency_task_ids", "parentTaskId": "parent_task_id",
+    "rootTaskId": "root_task_id", "writeScope": "write_scope", "writePaths": "write_paths",
+    "ruleRefs": "rule_refs", "maxRepairs": "max_repairs", "verificationRules": "verification_rules",
+    "verificationAttempts": "verification_attempts", "cwdRelative": "cwd_relative",
+    "maxOutputBytes": "max_output_bytes", "baselinePaths": "baseline_paths",
     "taskId": "task_id", "sessionId": "session_id", "approvalId": "approval_id",
     "operationId": "operation_id", "messageId": "message_id", "eventId": "event_id",
     "dispatchId": "dispatch_id", "storeId": "store_id", "instanceId": "instance_id",
@@ -62,6 +95,14 @@ _WIRE_TO_PYTHON = {
     "expectedGeneration": "expected_generation", "expectedRevision": "expected_revision",
     "expectedDispatchId": "expected_dispatch_id", "expectedState": "expected_state",
     "toSessionId": "to_session_id", "fromSessionId": "from_session_id",
+    "backupId": "backup_id", "rolloverId": "rollover_id", "oldStoreId": "old_store_id", "newStoreId": "new_store_id",
+    "archiveId": "archive_id", "manifestDigest": "manifest_digest",
+    "snapshotId": "snapshot_id", "nextOffset": "next_offset", "retentionFloorCursor": "retention_floor_cursor",
+    "quotaBytes": "quota_bytes", "minFreeBytes": "min_free_bytes", "emergencyBytes": "emergency_bytes",
+    "maxRecords": "max_records", "settlementReserveRecords": "settlement_reserve_records",
+    "maxSettlementPerTarget": "max_settlement_per_target", "eventDays": "event_days", "detailDays": "detail_days", "usageDays": "usage_days",
+    "retryIdentity": "retry_identity", "requestDigest": "request_digest",
+    "digestVersion": "digest_version", "expectedStoreId": "expected_store_id", "storeNamespaces": "store_namespaces",
     "schemaVersion": "schema_version", "protocolVersion": "protocol_version",
     "engineVersion": "engine_version", "sdkVersion": "sdk_version",
     "afterCursor": "after_cursor", "timeoutMs": "timeout_ms",
@@ -89,7 +130,7 @@ _WIRE_TO_PYTHON = {
 _PYTHON_TO_WIRE = {value: key for key, value in _WIRE_TO_PYTHON.items()}
 _OBJECT_FIELDS = {"spec", "runtime", "acceptance", "target", "data", "error", "capabilities",
                   "lifecycle", "resolution", "evidence", "timeouts", "executionIsolation",
-                  "execution", "lease", "budget"}
+                  "execution", "lease", "budget", "routing", "contextPlan", "sessionLifecycle", "retryIdentity", "storeNamespaces"}
 _OBJECT_LIST_FIELDS = {"records", "events", "occupants", "conflicts"}
 
 
@@ -143,6 +184,8 @@ def snapshot(fields: Mapping[str, Any]) -> Snapshot:
 def to_wire(value: Any) -> Any:
     if isinstance(value, ReconcileEvidence):
         value = {key: item for key, item in asdict(value).items() if key != "result" or item is not None}
+    elif isinstance(value, TaskSpec):
+        value = {key: item for key, item in asdict(value).items() if item is not None}
     elif is_dataclass(value) and not isinstance(value, type):
         value = asdict(value)
     if isinstance(value, Mapping):

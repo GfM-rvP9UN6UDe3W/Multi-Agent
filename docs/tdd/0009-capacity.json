@@ -1,0 +1,100 @@
+{
+  "environment": {
+    "platform": "darwin",
+    "release": "25.6.0",
+    "arch": "arm64",
+    "node": "v24.14.0",
+    "cpus": 18,
+    "cpuModel": "Apple M5 Pro",
+    "physicalMemoryBytes": 68719476736
+  },
+  "limits": "Bounded single-process local measurements; SQLite BEGIN timing is not multi-writer throughput, and no million-record or 10-GiB claim is made",
+  "rows": [
+    {
+      "historyTasks": 1000,
+      "historyRecords": 3000,
+      "fixtureTasks": 100,
+      "seedMs": 83.04679100000001,
+      "elapsedMs": 4626.408417,
+      "dispatchesPerSecond": 21.615039353755353,
+      "eventsPerSecond": 259.38047224506425,
+      "admissionP95Ms": 5.124333000000661,
+      "sqliteBeginP95Ms": 0.003584000000046217,
+      "eventLoopP95Ms": 50.364415,
+      "peakObservedRssBytes": 129744896,
+      "walBytes": 4317792,
+      "databaseBytes": 5763072,
+      "storageBytes": 10352380,
+      "storageRecords": 3403,
+      "snapshotFirstPageMs": 4.3168329999998605,
+      "snapshotPageItems": 128,
+      "gc": [
+        {
+          "records": 172,
+          "bytes": 30348,
+          "durationMs": 50.45891699999993,
+          "retentionFloorCursor": "0",
+          "elapsedMs": 51.29370900000049
+        },
+        {
+          "records": 195,
+          "bytes": 34905,
+          "durationMs": 50.509250000000065,
+          "retentionFloorCursor": "0",
+          "elapsedMs": 50.96787500000028
+        },
+        {
+          "records": 180,
+          "bytes": 32220,
+          "durationMs": 50.37945800000034,
+          "retentionFloorCursor": "0",
+          "elapsedMs": 50.80274999999983
+        }
+      ],
+      "modelCalls": 0
+    },
+    {
+      "historyTasks": 10000,
+      "historyRecords": 30000,
+      "fixtureTasks": 100,
+      "seedMs": 776.9701249999998,
+      "elapsedMs": 4757.8625,
+      "dispatchesPerSecond": 21.017841520220475,
+      "eventsPerSecond": 252.21409824264572,
+      "admissionP95Ms": 8.439749999999549,
+      "sqliteBeginP95Ms": 0.0029160000003685127,
+      "eventLoopP95Ms": 57.409535,
+      "peakObservedRssBytes": 147898368,
+      "walBytes": 9430712,
+      "databaseBytes": 31371264,
+      "storageBytes": 41073492,
+      "storageRecords": 30403,
+      "snapshotFirstPageMs": 40.64420799999971,
+      "snapshotPageItems": 128,
+      "gc": [
+        {
+          "records": 46,
+          "bytes": 8010,
+          "durationMs": 51.80104100000062,
+          "retentionFloorCursor": "0",
+          "elapsedMs": 52.45008299999972
+        },
+        {
+          "records": 47,
+          "bytes": 8225,
+          "durationMs": 51.2137500000008,
+          "retentionFloorCursor": "0",
+          "elapsedMs": 51.681666999998924
+        },
+        {
+          "records": 41,
+          "bytes": 7311,
+          "durationMs": 51.17145899999923,
+          "retentionFloorCursor": "0",
+          "elapsedMs": 51.695458000000144
+        }
+      ],
+      "modelCalls": 0
+    }
+  ]
+}

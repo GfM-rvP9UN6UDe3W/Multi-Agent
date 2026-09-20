@@ -1,3 +1,4 @@
+import { requestDigest } from '../../packages/engine/src/identity.ts';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtemp, mkdir, realpath, rm, writeFile } from 'node:fs/promises';
@@ -31,12 +32,12 @@ const evidence = {
 };
 const lifecycleCapability = { version: 1, reconcile: 'owner-attestation', durableDeadlines: true };
 const info = {
-  protocolVersion: '1.0',
+  protocolVersion: '2.0',
   engineVersion: 'test',
   schemaVersion: 1,
   instanceId: 'fixture',
   storeId: 'fixture-store',
-  capabilities: {},
+  capabilities: { storeNamespaces: { version: 1 } },
 };
 
 test('0003-A TS reconcile rejects missing or incompatible lifecycle capability before sending', async () => {
@@ -55,7 +56,13 @@ test('0003-A TS reconcile rejects missing or incompatible lifecycle capability b
         },
         disconnect() {},
       },
-      { ...info, capabilities: lifecycle === undefined ? {} : { lifecycle } },
+      {
+        ...info,
+        capabilities:
+          lifecycle === undefined
+            ? { storeNamespaces: { version: 1 } }
+            : { storeNamespaces: { version: 1 }, lifecycle },
+      },
       true,
     );
     await assert.rejects(async () => client.sessions.reconcile(target, evidence), {
@@ -95,7 +102,7 @@ test('0003-A TS reconcile forwards exact target/evidence/key and exposes lifecyc
       },
       disconnect() {},
     },
-    { ...info, capabilities: { lifecycle: lifecycleCapability } },
+    { ...info, capabilities: { storeNamespaces: { version: 1 }, lifecycle: lifecycleCapability } },
     true,
   );
   const handle = await client.sessions.reconcile(target, evidence, {
@@ -104,7 +111,13 @@ test('0003-A TS reconcile forwards exact target/evidence/key and exposes lifecyc
   assert.ok(handle instanceof OperationHandle);
   assert.deepEqual(calls[0], {
     method: 'sessions.reconcile',
-    params: { target, evidence, idempotencyKey: 'owner-review-1' },
+    params: {
+      target,
+      evidence,
+      idempotencyKey: 'owner-review-1',
+      expectedStoreId: info.storeId,
+      requestDigest: requestDigest('sessions.reconcile', { target, evidence }),
+    },
   });
   assert.equal(handle.initial.lifecycle?.deadlineAt, '2026-09-19T00:01:00.000Z');
   assert.equal((await handle.wait({ timeoutMs: 100 })).id, operation.id);

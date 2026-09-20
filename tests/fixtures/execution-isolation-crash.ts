@@ -1,4 +1,4 @@
-import { createEngine } from '../../packages/engine/src/index.ts';
+import { createEngine } from './engine.ts';
 import { Store } from '../../packages/engine/src/store.ts';
 import type {
   RuntimeAdapter,

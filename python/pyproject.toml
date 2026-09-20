@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=68"]
+requires = ["setuptools>=77.0.3"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -9,9 +9,11 @@ description = "Async Python client for the local agent orchestration engine"
 requires-python = ">=3.11"
 dependencies = []
 readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
 
 [tool.setuptools.packages.find]
 where = ["src"]
 
 [tool.setuptools.package-data]
-agent_orch = ["py.typed"]
+agent_orch = ["py.typed", "protocol.schema.json"]

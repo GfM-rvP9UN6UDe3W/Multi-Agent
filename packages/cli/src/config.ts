@@ -1,6 +1,7 @@
 import { readFile, realpath, stat } from 'node:fs/promises';
 import { isAbsolute, relative, sep } from 'node:path';
 import type { EngineConfig, RuntimeAdapter } from '../../engine/src/types.ts';
+import { normalizeRules, workspacePath } from '../../engine/src/verification.ts';
 
 export interface HostConfig {
   configVersion?: 1;
@@ -17,8 +18,18 @@ export interface HostConfig {
   limits?: EngineConfig['limits'];
   timeouts?: EngineConfig['timeouts'];
   approvalTtlMs?: number;
+  runtimeApprovals?: EngineConfig['runtimeApprovals'];
+  messages?: EngineConfig['messages'];
+  pricing?: EngineConfig['pricing'];
+  budget?: EngineConfig['budget'];
+  contextLimits?: EngineConfig['contextLimits'];
   shutdown?: { mode?: 'drain' | 'interrupt'; timeoutMs?: number };
-  verificationRules?: unknown[];
+  verificationRules?: EngineConfig['verificationRules'];
+  writeScopes?: EngineConfig['writeScopes'];
+  allowCrossRootReuse?: boolean;
+  tools?: EngineConfig['tools'];
+  storage?: EngineConfig['storage'];
+  stores?: EngineConfig['stores'];
 }
 function invalid(message: string): never {
   throw Object.assign(new Error(message), { code: 'INVALID_CONFIG' });
@@ -49,8 +60,18 @@ export async function loadConfig(configPath: string): Promise<HostConfig> {
       'limits',
       'timeouts',
       'approvalTtlMs',
+      'runtimeApprovals',
+      'messages',
+      'pricing',
+      'budget',
+      'contextLimits',
       'shutdown',
       'verificationRules',
+      'writeScopes',
+      'allowCrossRootReuse',
+      'tools',
+      'storage',
+      'stores',
     ],
     'config',
   );
@@ -193,22 +214,48 @@ export async function loadConfig(configPath: string): Promise<HostConfig> {
     )
       invalid('transport.socketPath must be absolute');
   }
-  if (
-    parsed.verificationRules !== undefined &&
-    (!Array.isArray(parsed.verificationRules) || parsed.verificationRules.length)
-  )
-    invalid('Automated verificationRules are not implemented in foundation 1.0');
+  try {
+    if (parsed.allowCrossRootReuse !== undefined && typeof parsed.allowCrossRootReuse !== 'boolean')
+      invalid('allowCrossRootReuse must be a boolean');
+    normalizeRules(
+      parsed.workspace as string,
+      parsed.verificationRules as EngineConfig['verificationRules'],
+    );
+    if (parsed.writeScopes !== undefined) {
+      if (!object(parsed.writeScopes)) invalid('writeScopes must be an object');
+      for (const paths of Object.values(parsed.writeScopes)) {
+        if (
+          !Array.isArray(paths) ||
+          !paths.length ||
+          paths.length > 100 ||
+          paths.some((path) => typeof path !== 'string')
+        )
+          invalid('Invalid write scope paths');
+        for (const path of paths) workspacePath(parsed.workspace as string, path);
+      }
+    }
+  } catch (error) {
+    invalid((error as Error).message);
+  }
   if (parsed.limits !== undefined) {
     if (!object(parsed.limits)) invalid('limits must be an object');
     fields(
       parsed.limits,
-      ['maxActiveSessions', 'maxTurnsPerTask', 'maxQuarantinedDispatches'],
+      [
+        'maxActiveSessions',
+        'maxTurnsPerTask',
+        'maxQuarantinedDispatches',
+        'maxLogicalSessions',
+        'maxQueuedTasks',
+      ],
       'limits',
     );
     const bounds: Record<string, number> = {
       maxActiveSessions: 2,
       maxTurnsPerTask: 1000,
       maxQuarantinedDispatches: 1024,
+      maxLogicalSessions: 100000,
+      maxQueuedTasks: 10000,
     };
     for (const [key, value] of Object.entries(parsed.limits))
       if (!Number.isSafeInteger(value) || (value as number) < 1 || (value as number) > bounds[key])
@@ -218,6 +265,61 @@ export async function loadConfig(configPath: string): Promise<HostConfig> {
       ((parsed.limits.maxActiveSessions ?? 2) as number)
     )
       invalid('limits.maxQuarantinedDispatches must be at least maxActiveSessions');
+  }
+  if (parsed.tools !== undefined) {
+    if (!object(parsed.tools)) invalid('tools must be an object');
+    fields(
+      parsed.tools,
+      ['enabled', 'maxDepth', 'maxChildren', 'maxCallsPerDispatch', 'maxRepeatedCalls'],
+      'tools',
+    );
+    if (parsed.tools.enabled !== undefined && typeof parsed.tools.enabled !== 'boolean')
+      invalid('tools.enabled must be boolean');
+    for (const [key, max] of Object.entries({
+      maxDepth: 16,
+      maxChildren: 1000,
+      maxCallsPerDispatch: 10000,
+      maxRepeatedCalls: 100,
+    })) {
+      const value = parsed.tools[key];
+      if (
+        value !== undefined &&
+        (!Number.isSafeInteger(value) || (value as number) < 1 || (value as number) > max)
+      )
+        invalid(`Invalid tools.${key}`);
+    }
+  }
+  if (parsed.runtimeApprovals !== undefined) {
+    if (!object(parsed.runtimeApprovals)) invalid('runtimeApprovals must be an object');
+    fields(parsed.runtimeApprovals, ['enabled', 'ttlMs'], 'runtimeApprovals');
+    if (
+      parsed.runtimeApprovals.enabled !== undefined &&
+      typeof parsed.runtimeApprovals.enabled !== 'boolean'
+    )
+      invalid('runtimeApprovals.enabled must be boolean');
+    if (
+      parsed.runtimeApprovals.ttlMs !== undefined &&
+      (!Number.isSafeInteger(parsed.runtimeApprovals.ttlMs) ||
+        (parsed.runtimeApprovals.ttlMs as number) < 1 ||
+        (parsed.runtimeApprovals.ttlMs as number) > 86400000)
+    )
+      invalid('runtimeApprovals.ttlMs must be 1..86400000');
+  }
+  if (parsed.messages !== undefined) {
+    if (!object(parsed.messages)) invalid('messages must be an object');
+    fields(parsed.messages, ['ttlMs', 'maxHops', 'maxPerMinute'], 'messages');
+    for (const [key, max] of [
+      ['ttlMs', 604800000],
+      ['maxHops', 128],
+      ['maxPerMinute', 10000],
+    ] as const) {
+      const value = parsed.messages[key];
+      if (
+        value !== undefined &&
+        (!Number.isSafeInteger(value) || (value as number) < 1 || (value as number) > max)
+      )
+        invalid(`Invalid messages.${key}`);
+    }
   }
   if (
     parsed.approvalTtlMs !== undefined &&
@@ -286,5 +388,16 @@ export async function engineConfig(config: HostConfig): Promise<EngineConfig> {
     limits: config.limits,
     timeouts: config.timeouts,
     approvalTtlMs: config.approvalTtlMs,
+    runtimeApprovals: config.runtimeApprovals,
+    messages: config.messages,
+    pricing: config.pricing,
+    budget: config.budget,
+    contextLimits: config.contextLimits,
+    verificationRules: config.verificationRules,
+    writeScopes: config.writeScopes,
+    allowCrossRootReuse: config.allowCrossRootReuse,
+    tools: config.tools,
+    storage: config.storage,
+    stores: config.stores,
   };
 }

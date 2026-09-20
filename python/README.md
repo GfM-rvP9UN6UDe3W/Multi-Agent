@@ -1,7 +1,7 @@
-# Python SDK — foundation 1.0
+# Python SDK — wire 2.0
 
 This source package implements the async Python side of [SPEC-0001](../docs/specs/0001-foundation.md)
-and the lifecycle and execution-isolation extensions in
+and the later completion surface in [SPEC-0009](../docs/specs/0009-complete-design.md), building on
 [SPEC-0003-A](../docs/specs/0003-a-lifecycle.md) and
 [SPEC-0003-A2](../docs/specs/0003-a2-execution-isolation.md).
 It uses only the Python standard library at runtime and supports Python 3.11+.
@@ -317,13 +317,9 @@ from unperformed real-model acceptance.
 
 ## Host upgrade and adapter compatibility
 
-Wire protocol version remains `1.0`; the current database and initialize handshake use
-schema version 2 (`orch.info.schema_version`). Before upgrading a schema 1 store, the
-host creates `stateDir/store-schema1-<uuid>.sqlite` and verifies its integrity and store
-identity. A backup/migration failure prevents host startup. Old engines that require
-schema 1 cannot open the upgraded database. Existing persisted deadlines are never
-refreshed by migration; old unknown dispatches without release evidence remain held and
-quarantined. Raising limits or restarting does not automatically re-execute them.
+Wire protocol is `2.0`; database schema is 3 (`orch.info.schema_version`). The host verifies a legacy recovery database and a full bundle of retained artifacts/managed native history before migrating schema 1/2. Migration failure prevents startup. Old wire 1.0 clients are rejected. Existing deadlines and unknown work are not refreshed or replayed.
+
+Mutation receipts and transport errors expose `retry_identity` with immutable store/method/scope/key/digest. Save it before reconnecting. `await orch.refresh()` intentionally observes a new active namespace; `await orch.retry(identity, original_params)` retains the original namespace and rejects a changed payload. Read old receipts with `archives.lookup` after rollover, not a new-key resubmission.
 
 Node adapters must advertise `executionBudget={version:2, acceptanceCapMs:..., turnCapMs:...}`.
 Each cap is either `null` for no explicit provider cap or an integer from 1 through
@@ -352,14 +348,10 @@ It cannot serialize Claude native callbacks or `observeExecutionStop` into JSON 
 Stock CLI providers remain read-only; serializable Codex `networkAccess`/`webSearch`
 settings are supported. Native tool approval remains separate from engine task acceptance.
 
-Implemented namespaces: `tasks.create/get/resume/cancel`, `sessions.get/control/reconcile`,
-`scheduler.get/get_conflict/resolve_conflict`, `messages.send/get`,
-`approvals.get/decide`, `operations.get/lookup`, `usage.get/get_record`,
-`capabilities`, `events`, and owner/connection lifecycle.
+Implemented namespaces include tasks, session open/fork/compact/rotate/stop/inspect/control/reconcile, scheduler, messages, approvals, operations, usage, costs, context estimates, storage policy/GC/pins/backups, leased state snapshots, stores rollover/import, read-only archives, capabilities/events and owner/connection lifecycle. Owner-only administration is rejected over ordinary Unix connections.
 
-`sessions.open/fork`, compact/rotate/stop controls, and automatic verification return
-`UNSUPPORTED_CAPABILITY` in this increment. Session pause/resume requires all five target
-fields from a fresh snapshot. Provider/model and permissions remain host configuration.
-An absent usage field stays unknown/null; the client does not invent prices or token totals.
-Retention/GC, tombstones, `state.snapshot`, `contextPlan` and automatic policy selection
-remain planned SPEC-0003-B/C work. The SDK does not automatically clear unknown outcomes.
+`TaskSpec` accepts dependencies, `context_plan`, `write_scope`, budgets and context estimates; `CheckAcceptanceSpec` selects owner-registered verification rules. Task acceptance and runtime permission approval have different `purpose` values. Consumers must inspect the purpose and exact target before deciding. Provider options, native callbacks and permissions remain host configuration.
+
+Generated `agent_orch.wire_types` uses camelCase wire field names. Public dataclasses/methods use snake_case. `validate_wire(definition, payload)` validates raw wire JSON against the shipped audited schema subset. Operation results, cost reports and raw native observations intentionally preserve their wire JSON keys.
+
+Build a wheel/sdist with the root README commands and install a local wheel using `python -m pip install --no-index --no-deps /absolute/path/agent_orch-0.1.0-py3-none-any.whl`. A local owner additionally needs the Node host and selected adapter; the Python package never downloads or implements an engine. See the [current wiring guide](../SDK_USAGE_AND_WIRING.md), [completion matrix](../docs/specs/0009-complete-design.md#completion-matrix), and [native acceptance boundary](../docs/acceptance/README.md).

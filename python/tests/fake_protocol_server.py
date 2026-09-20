@@ -45,7 +45,7 @@ class Fixture:
         if method == "initialize":
             if self.mode == "die":
                 raise EOFError()
-            capabilities = {"fake": {"resume": True, "interrupt": True}}
+            capabilities = {"storeNamespaces": {"version": 1}, "fake": {"resume": True, "interrupt": True}}
             if self.mode.startswith("lifecycle"):
                 lifecycle = {"version": 1, "reconcile": "owner-attestation", "durableDeadlines": True}
                 overrides = {
@@ -69,7 +69,7 @@ class Fixture:
                     "isolation-number-release": {"resourceRelease": 1},
                 }
                 capabilities["executionIsolation"] = {**isolation, **overrides.get(self.mode, {})}
-            return {"protocolVersion": "99.0" if self.mode == "mismatch" else "1.0",
+            return {"protocolVersion": "99.0" if self.mode == "mismatch" else "2.0",
                     "engineVersion": "0.1.0", "schemaVersion": 1,
                     "instanceId": "fixture-instance", "storeId": "fixture-store",
                     "capabilities": capabilities}
@@ -144,6 +144,9 @@ class Fixture:
                 raise ValueError("NOT_FOUND")
             return self.conflict
         if method == "scheduler.resolveConflict":
+            if p.pop("expectedStoreId", None) != "fixture-store":
+                raise ValueError("STORE_NAMESPACE_MISMATCH")
+            p.pop("requestDigest", None)
             if self.mode == "isolation-drop":
                 raise EOFError()
             key = p["idempotencyKey"]

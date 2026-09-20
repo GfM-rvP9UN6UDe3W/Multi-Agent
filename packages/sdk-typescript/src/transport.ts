@@ -1,3 +1,4 @@
+import type { RetryIdentity } from '../../engine/src/identity.ts';
 import { createConnection, type Socket } from 'node:net';
 
 export const MAX_FRAME_BYTES = 1024 * 1024;
@@ -6,6 +7,7 @@ export const DEFAULT_REQUEST_TIMEOUT_MS = 30_000;
 export class OrchestratorError extends Error {
   readonly code: string;
   readonly data: Record<string, unknown>;
+  retryIdentity?: RetryIdentity;
   operationId?: string;
   method?: string;
   scope?: string;
@@ -16,6 +18,8 @@ export class OrchestratorError extends Error {
     this.name = 'OrchestratorError';
     this.code = code;
     this.data = data;
+    if (data.retryIdentity && typeof data.retryIdentity === 'object')
+      this.retryIdentity = data.retryIdentity as RetryIdentity;
     if (typeof data.operationId === 'string') this.operationId = data.operationId;
     if (typeof data.method === 'string') this.method = data.method;
     if (typeof data.scope === 'string') this.scope = data.scope;

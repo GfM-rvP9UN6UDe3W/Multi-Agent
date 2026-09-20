@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtemp, mkdir, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { createEngine } from '../../packages/engine/src/index.ts';
+import { createEngine } from '../fixtures/engine.ts';
 import { createFakeAdapter } from '../../packages/engine/src/fake.ts';
 import type {
   Engine,
@@ -17,6 +17,22 @@ import type {
   MessageSnapshot,
 } from '../../packages/engine/src/types.ts';
 
+function approvalClock() {
+  let wall = Date.now();
+  return {
+    advance(ms: number) {
+      wall += ms;
+    },
+    clock: {
+      wallNow: () => wall,
+      monotonicNow: () => performance.now(),
+      setTimer(callback: () => void, delay: number) {
+        const timer = setTimeout(callback, delay);
+        return () => clearTimeout(timer);
+      },
+    },
+  };
+}
 const spec = {
   goal: 'Inspect the fixture',
   runtime: { provider: 'fake', model: 'test' },
@@ -163,7 +179,7 @@ test('AC03 accepts only configured provider, model and supported acceptance', as
         spec: { ...spec, acceptance: { mode: 'checks', criteria: [] } },
         idempotencyKey: 'x',
       }),
-      code('UNSUPPORTED_CAPABILITY'),
+      code('VALIDATION_ERROR'),
     );
   } finally {
     await f.cleanup();
@@ -210,14 +226,15 @@ test('AC04 runtime output requires an explicit current human decision', async ()
 });
 
 test('AC04 denied and expired approvals never complete the task', async () => {
-  const f = await fixture({ approvalTtlMs: 20 });
+  const clock = approvalClock();
+  const f = await fixture({ approvalTtlMs: 20, clock: clock.clock });
   try {
     const created = await create(f.engine);
     const waiting = await until(
       () => task(f.engine, created.id),
       (t) => t.status === 'waiting_approval',
     );
-    await new Promise((r) => setTimeout(r, 30));
+    clock.advance(30);
     await assert.rejects(
       call(f.engine, 'approvals.decide', {
         approvalId: waiting.approvalId,
@@ -726,10 +743,12 @@ test('AC09 acceptance cannot bypass an explicit paused session to deliver queued
 });
 
 test('AC04 session resume reissues expired acceptance without rerunning completed work', async () => {
+  const clock = approvalClock();
   let calls = 0;
   const base = createFakeAdapter();
   const f = await fixture({
     approvalTtlMs: 50,
+    clock: clock.clock,
     adapters: [
       {
         ...base,
@@ -746,7 +765,7 @@ test('AC04 session resume reissues expired acceptance without rerunning complete
       () => task(f.engine, t.id),
       (t) => t.status === 'waiting_approval',
     );
-    await new Promise((r) => setTimeout(r, 70));
+    clock.advance(70);
     const s = await session(f.engine, t.sessionId);
     assert.equal(s.status, 'paused');
     const target = {

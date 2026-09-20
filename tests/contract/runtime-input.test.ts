@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { requireEngineRuntimeInput as requireInput } from '../../packages/engine/src/index.ts';
+import { requireEngineRuntimeInput as requireInput } from '../fixtures/engine.ts';
 import type { ExecutionBudget, RuntimeInput } from '../../packages/engine/src/types.ts';
 
 function input() {

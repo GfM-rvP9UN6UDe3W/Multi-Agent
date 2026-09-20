@@ -7,7 +7,7 @@ import {
   createClaudeAdapter,
   type ClaudeAdapterConfig,
 } from '../../packages/adapter-claude/src/index.ts';
-import { createEngine } from '../../packages/engine/src/index.ts';
+import { createEngine } from '../fixtures/engine.ts';
 import type {
   EventPage,
   RuntimeEvent,
@@ -311,7 +311,7 @@ for (const proof of [true, false, 'late', 'missing', 'throws'] as const) {
     });
     const adapter = makeAdapter({
       options: { systemPrompt: 'host extensions' },
-      cleanupTimeoutMs: 30,
+      cleanupTimeoutMs: 300,
       ...(proof === 'missing'
         ? {}
         : {

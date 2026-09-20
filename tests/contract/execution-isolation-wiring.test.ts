@@ -1,3 +1,4 @@
+import { requestDigest } from '../../packages/engine/src/identity.ts';
 import test from 'node:test';
 import { once } from 'node:events';
 import assert from 'node:assert/strict';
@@ -16,12 +17,12 @@ const capability = {
   budgetVersion: 2,
 };
 const info = {
-  protocolVersion: '1.0',
+  protocolVersion: '2.0',
   engineVersion: 'fixture',
   schemaVersion: 2,
   instanceId: 'fixture',
   storeId: 'store',
-  capabilities: {},
+  capabilities: { storeNamespaces: { version: 1 } },
 };
 const evidence = {
   source: 'owner_attestation' as const,
@@ -87,7 +88,13 @@ test('A2 TS scheduler methods reject every incompatible capability before sendin
         },
         disconnect() {},
       },
-      { ...info, capabilities: executionIsolation === undefined ? {} : { executionIsolation } },
+      {
+        ...info,
+        capabilities:
+          executionIsolation === undefined
+            ? { storeNamespaces: { version: 1 } }
+            : { storeNamespaces: { version: 1 }, executionIsolation },
+      },
       true,
     );
     for (const call of [
@@ -127,7 +134,7 @@ test('A2 TS scheduler reads exact wire shapes and resolves with conflict-scoped 
       },
       disconnect() {},
     },
-    { ...info, capabilities: { executionIsolation: capability } },
+    { ...info, capabilities: { storeNamespaces: { version: 1 }, executionIsolation: capability } },
     true,
   );
   assert.deepEqual(await client.scheduler.get(), scheduler);
@@ -144,7 +151,18 @@ test('A2 TS scheduler reads exact wire shapes and resolves with conflict-scoped 
     { method: 'scheduler.getConflict', params: { conflictId: 'conflict' } },
     {
       method: 'scheduler.resolveConflict',
-      params: { conflictId: 'conflict', expectedRevision: 2, evidence, idempotencyKey: 'review' },
+      params: {
+        conflictId: 'conflict',
+        expectedRevision: 2,
+        evidence,
+        idempotencyKey: 'review',
+        expectedStoreId: info.storeId,
+        requestDigest: requestDigest('scheduler.resolveConflict', {
+          conflictId: 'conflict',
+          expectedRevision: 2,
+          evidence,
+        }),
+      },
     },
   ]);
 });
@@ -157,7 +175,7 @@ test('A2 TS lost conflict resolution receipt retains the method scope and busine
       },
       disconnect() {},
     },
-    { ...info, capabilities: { executionIsolation: capability } },
+    { ...info, capabilities: { storeNamespaces: { version: 1 }, executionIsolation: capability } },
     true,
   );
   await assert.rejects(

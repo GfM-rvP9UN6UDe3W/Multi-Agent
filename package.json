@@ -2,6 +2,7 @@
   "name": "agent-orch-workspace",
   "version": "0.1.0",
   "private": true,
+  "license": "MIT",
   "type": "module",
   "engines": {
     "node": ">=22.18.0"
@@ -10,15 +11,24 @@
     "packages/*"
   ],
   "scripts": {
-    "test": "node --test tests/engine/*.test.ts tests/contract/*.test.ts",
+    "test": "node --test --test-concurrency=4 tests/engine/*.test.ts tests/contract/*.test.ts",
     "test:python": "PYTHONPATH=python/src python3 -m unittest discover -s python/tests -v",
     "typecheck": "tsc --noEmit",
     "cli": "node packages/cli/src/main.ts",
-    "format:check": "prettier --check \"packages/**/*.ts\" \"tests/**/*.ts\" \"examples/typescript/*.ts\" \"schemas/*.json\" package.json tsconfig.json"
+    "format:check": "prettier --check \"packages/**/*.ts\" \"tests/**/*.{ts,mjs}\" \"examples/typescript/*.ts\" \"schemas/*.json\" \"scripts/*.{ts,mjs}\" package.json tsconfig.json",
+    "generate:protocol": "node scripts/generate-protocol.mjs",
+    "check:generated": "node scripts/generate-protocol.mjs --check",
+    "build:packages": "node scripts/build-packages.mjs",
+    "test:packages": "node scripts/package-smoke.mjs",
+    "benchmark:capacity": "node scripts/capacity-benchmark.ts",
+    "native:prepare": "node scripts/native-acceptance.mjs prepare"
   },
   "devDependencies": {
+    "@anthropic-ai/claude-agent-sdk": "0.3.274",
     "@types/node": "24.13.6",
+    "esbuild": "0.28.2",
     "prettier": "3.6.2",
-    "typescript": "5.9.3"
+    "typescript": "5.9.3",
+    "zod": "4.6.5"
   }
 }

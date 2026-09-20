@@ -31,6 +31,7 @@ try {
   for (let totalTasks = 1; totalTasks <= Math.max(...checkpoints); totalTasks++) {
     const start = performance.now();
     const created = (await host.call('tasks.create', {
+      expectedStoreId: host.storeId,
       spec: {
         goal: 'offline benchmark',
         runtime: { provider: 'fake', model: 'test' },

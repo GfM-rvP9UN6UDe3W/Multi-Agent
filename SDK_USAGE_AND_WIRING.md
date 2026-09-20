@@ -1,291 +1,90 @@
 # Multi-agent orchestration SDK usage and detailed wiring
 
-Updated: 2026-09-20. Companion: [design document](./AGENT_ORCHESTRATION_DESIGN.md).
-
-This guide defines the installation, wiring, and usage experience for the complete first-version target. **The foundation and SPEC-0003-A/A2 SDKs, CLI, configuration parser, lifecycle, and execution isolation are implemented and verified with offline fixtures. Current interfaces are defined by [README](./README.md), [SPEC-0001](./docs/specs/0001-foundation.md), [SPEC-0003-A](./docs/specs/0003-a-lifecycle.md), [SPEC-0003-A2](./docs/specs/0003-a2-execution-isolation.md), and source examples. The complete flow below is not yet implemented, and packages are unpublished.** `@agent-orch/*`, `agent-orch`, and `agent_orch` are provisional names. Future APIs, auth/executable settings, and commands below are not current runnable instructions. Sections 11.4–11.5 describe implemented owner attestation and diagnostics. Upstream facts link to sources; real-model acceptance remains pending.
-
-This complements the design with shared configuration, client connection entry points, restricted MCP callbacks, approval-event fields, and CLI arguments. Implementation must codify them together in schema, API reference, and contract tests rather than let each SDK infer its own behavior.
-
-The 2026-09-19 review added routing responsibility, retention/GC, control deadlines, and cost ownership; see design sections 4.5, 5.1, 5.4, 6.1, 9.1, 12.1 and [SPEC-0003](./docs/specs/0003-policy-retention-deadlines.md). A/A2 deadlines, leases, quarantine, and owner attestation are implemented. B/C routing, retention/GC, and accounting remain pending; their proposed parameters cannot enable them. Read examples with these rules:
-
-- Future contextPlan is declared by the application/existing primary session. The host validates authorization, dependencies, versions, and resources rather than infer profitable forks from prose. No silent extra sessions without declared fallback.
-- SDK wait timeout, execution/control deadlines, and cleanup budgets are separate. Unconfirmed work stays unknown; never change keys and resend after timeout. Continue incomplete close with the original operationId.
-- Proposed retention: events at least 30 days, terminal operation/message details at least 90 days, protected references overriding age, tombstones lasting with the store. Expired details never permit old-key replay; future GC cursor expiry uses consistent snapshots. GC/state.snapshot do not exist yet.
-- Future reused sessions bind each dispatch to one cost owner; D pays for reading preceding history. Busy-session waits are bounded rather than indefinite for cache preservation.
-- Durable deadlines and owner-attestation sessions.reconcile are available. Automatic upstream history inspection, fork/compact/rotate, state.snapshot, GC, and automatic routing remain unimplemented.
+Updated 2026-09-21 for SPEC-0010. This guide describes implemented interfaces. All packages remain unpublished; use the local artifacts or source checkout. The five npm packages are **ESM-only**; direct require is not exported. A Claude consumer installs SDK + engine + adapter-claude. See [the local RC and CJS/ESM bundled-host contract](docs/acceptance/bundled-host.md). Offline process/transport/storage acceptance is recorded separately from real-model, sandbox, external-host and release acceptance in the [completion matrix](docs/specs/0009-complete-design.md#completion-matrix).
 
 ## 1. Choose an integration mode
 
-| Application | Mode | Scheduler owner | Can tasks outlive the application? |
-| --- | --- | --- | --- |
-| TS/Node backend or desktop main process | Embedded SDK | Your Node process | Not guaranteed; close before exit and explicitly resume after restart |
-| Python script, notebook, async backend | Local Python SDK | SDK-spawned Node child | Not guaranteed; closes with the Python owner |
-| Multiple clients or work that must outlive client connections | Existing host | Independent local host process | Yes while host/runtime remain alive |
+| Mode | Owner | Runtime and storage |
+| --- | --- | --- |
+| Embedded TypeScript | `createOrchestrator(config)` | Same Node process; caller injects optional adapters |
+| Managed Python | `await Orchestrator.local(engine_command=[...])` | Python owns one Node stdio host |
+| Shared local host | CLI `host`, clients `connectOrchestrator` / `Orchestrator.connect` | One host owns SQLite and adapters; connected clients cannot administer the owner |
 
-One state directory permits one engine owner. TS/Python sharing tasks should connect to the same host, not independently open the same database in embedded/local modes.
-
-For first integration, use one language, one runtime, and a direct model route. Complete section 12 acceptance before adding the second runtime, multiple clients, or a gateway. This is an integration sequence; both SDKs/adapters remain in first-release scope.
+Use exactly one writer for a state directory. Python is a client, not a second scheduler. An application's existing execution pipeline can be supplied as a RuntimeAdapter; see section 5.1.
 
 ## 2. Overall wiring
 
 ```mermaid
-flowchart TB
-  TS["TypeScript application"] -->|"A1 in-process API"| E["Shared orchestration engine"]
-  PY["Python application"] --> PS["Python SDK"]
-  PS -->|"A2 stdio: managed child"| H["Node.js orchestration host"]
-  CLIENT["TS SDK / Python SDK / CLI"] -->|"A3 local Unix socket"| H
-  H --> E
-  E --> DB["SQLite + event log + artifacts"]
-  E --> CA["Claude Adapter"]
-  E --> CX["Codex Adapter"]
-  CA -->|"B1 official SDK API"| CS["Claude Agent SDK / runtime"]
-  CX -->|"B2 dedicated stdio JSON-RPC"| AS["Codex App Server"]
-  CS -.->|"C1 in-process MCP callback"| TOOLS["Host bridge: authorization, deduplication, durable mailbox"]
-  AS -.->|"C2 MCP stdio"| MB["Restricted MCP bridge child"]
-  MB -.->|"C3 private local connection"| TOOLS
-  TOOLS --> E
-  CS -->|"D1 Anthropic protocol"| AN["Anthropic model service"]
-  AS -->|"D2 Responses protocol"| OA["OpenAI model service"]
-  CS -->|"D3 optional; acceptance required"| GA["Gateway Anthropic route"]
-  AS -->|"D4 optional; acceptance required"| GO["Gateway Responses route"]
-  GA --> AN
-  GO --> OA
+flowchart LR
+  TS[Embedded TS owner] --> Engine
+  PY[Python owner] -->|stdio| Host
+  Clients[TS / Python / CLI clients] -->|Unix socket| Host
+  Host --> Engine[Shared Node engine]
+  Engine --> Store[SQLite and private artifacts]
+  Engine --> Adapter[Selected host or native adapter]
+  Adapter --> Runtime[Owned native runtime]
+  Runtime -->|Four private tools| Engine
+  Engine -->|Approvals and events| Clients
 ```
 
-Choose either direct or gateway routing; never send one request down both. The engine is the same implementation in embedded/hosted deployments.
-
-### 2.1 Protocol, ownership, and proof for each connection
-
-| ID | Sender → recipient | Transport / content | Established by | Connection acceptance |
-| --- | --- | --- | --- | --- |
-| A1 | TS SDK → engine | In-process async calls | createOrchestrator | Initialization returns an instance; tasks persist |
-| A2 | Python SDK → host | Child stdin/stdout, project JSON-RPC | Orchestrator.local | Version handshake, matching state directory/instanceId |
-| A3 | SDK/CLI → host | Unix socket, project JSON-RPC | connect / CLI | Handshake, authorization, event replay |
-| B1 | Claude adapter → SDK | query, input stream, native events | Claude adapter | Auditable session ID, tool catalog, real result |
-| B2 | Codex adapter → App Server | Separate stdio, Codex JSON-RPC | Codex adapter | Initialize, create/resume thread, receive turn events |
-| C1 | Claude tool call → host | SDK in-process MCP server | Claude adapter | Call enters host authorization/message accounting |
-| C2 | Codex → MCP bridge | MCP stdio | Managed Codex runtime | Fixed tool discovery and valid call receipts |
-| C3 | Bridge → host tool entry | Private Unix socket + session capability credential | Engine creates; bridge connects | Only bound agent identity accesses authorized tools |
-| D1/D2 | Runtime → model service | HTTPS streaming protocol | Official runtime | Complete model turn, tool roundtrip, usage |
-| D3/D4 | Runtime → gateway | Provider protocol/gateway authentication | Runtime instance configuration | Same complete-turn acceptance through gateway |
-
-A2/B2/C2 are separate pipes and must not share stdout. A3/C3 also have different authority: business clients read authorized tasks; agent bridges access fixed tools, never host shutdown or human approval.
-
-### 2.2 Addresses and ports
-
-| Component | Address source | TCP port? |
-| --- | --- | --- |
-| Embedded TS engine | None | No |
-| Managed Python host | SDK-owned stdin/stdout handles | No |
-| Standalone host | transport.socketPath | No; Unix socket |
-| Agent callback | Engine-created private socket | No; Unix socket |
-| Codex App Server | Adapter-owned stdio | No |
-| MCP bridge | Codex-owned stdio | No |
-| Direct model / gateway | Runtime HTTPS configuration | Outbound, usually 443 |
-
-No per-agent HTTP ports in v1. The host routes logical IDs, so mailboxes survive pause/runtime exit. Preflight socketPath against the actual OS length limit; deeply nested stateDir paths may be unsuitable.
+Wire protocol 2.0 uses JSON-RPC 2.0 in UTF-8 JSONL frames. stdout is protocol-only for stdio hosts. The limits are 1 MiB per frame, 64 pending requests per connection, 32 connections, 256 host-wide pending requests, 8 MiB aggregate pending input and 8 MiB queued output per connection. No public TCP listener is provided. Trusted same-OS-user access is not an authenticated multi-tenant boundary.
 
 ## 3. Installation and directories
 
-### 3.1 Prerequisites
-
-| Mode | Node.js | Project npm packages | Project Python package | Official runtime |
-| --- | --- | --- | --- | --- |
-| Embedded TS | Required | SDK + selected adapter | Not required | Prepare selected runtime |
-| Local Python | Required | CLI/host + selected adapter | Required | In host environment |
-| Connected TS/Python | Host requires Node; TS client also does | Host CLI/adapter; TS client SDK | Python client requires it | In host environment |
-
-Current implementation requires Node.js 22.18+ and Python 3.11+, targeting macOS/Linux. Release support depends on the verified matrix. Python local mode uses Node; it does not require either provider's Python SDK.
-
-Post-publication templates follow. **These project packages are currently unpublished; do not run this as installation acceptance.** Set versions to actual releases, never download unknown same-named packages using placeholders.
+Node.js 22.18+ is required; Python needs 3.11+. Development source uses Node type stripping. Distribution tarballs contain emitted JS and declarations because installed node_modules cannot depend on source stripping.
 
 ```sh
-# TypeScript with Claude; use only after selecting an actual published version.
-npm install --save-exact "@agent-orch/sdk@${ORCH_VERSION:?Set an actual published version first}" "@agent-orch/adapter-claude@${ORCH_VERSION}"
-
-# Local Python's Node host: use a fixed tool directory, not transient npx downloads.
-npm install --prefix "${ORCH_TOOL_DIR:?Set a fixed installation directory first}" --save-exact "@agent-orch/cli@${ORCH_VERSION:?Set an actual published version first}" "@agent-orch/adapter-claude@${ORCH_VERSION}"
-
-# Python client.
-python3 -m venv .venv
-.venv/bin/python -m pip install "agent-orch==${ORCH_VERSION:?Set an actual published version first}"
+npm ci --ignore-scripts
+npm run check:generated
+npm run typecheck
+npm run build:packages
+# Run in an isolated Python build environment with setuptools/wheel/build installed.
+python -m build --no-isolation --sdist --wheel --outdir dist/release python
+PACKAGE_BUILD_PYTHON="$(command -v python)" npm run test:packages
 ```
 
-For Codex, substitute @agent-orch/adapter-codex; install both only if using both. The CLI host must resolve its adapters from its tool installation, not depend on a coincidentally correct cwd or another project's node_modules.
+Install the engine and SDK tarballs together with the chosen adapter. An embedded Claude consumer needs `@agent-orch/sdk`, `@agent-orch/engine` and `@agent-orch/adapter-claude`; add `@agent-orch/cli` only for a standalone/managed host. Keep the npm package versions aligned, currently `0.1.0-rc.1` for the local RC. Claude's optional SDK and Zod 4 peers and Codex's native executable are separate runtime dependencies; ordinary startup does not download them. Host-injected Claude query owns dependency selection: provide matching MCP/inspection callbacks as described in the [bundled-host guide](docs/acceptance/bundled-host.md). Python installs the unchanged wheel with `python -m pip install --no-index --no-deps /absolute/release/agent_orch-0.1.0-py3-none-any.whl`.
 
-Adapters declare compatible upstream SDK dependencies. Preflight the Codex executable path/version explicitly. Prepare Claude SDK/runtime packaging for the selected version; any CLI on PATH is not automatically a verified runtime.
-
-### 3.2 Separate three directory classes
-
-```text
-workspace/                    Target project within the agent's permitted access
-tools/                        Fixed SDK/CLI/adapter installation
-state/                        Private engine state; never the agent workspace
-  store.sqlite                Tasks, messages, controls, events, usage
-  artifacts/                  Logs, results, evidence, content digests
-  runtime/                    Instance runtime configuration/session references
-  run/                        Local sockets and ownership records
-  logs/                       Redacted host diagnostics
-```
-
-Use absolute paths. Keep state, credentials, and tool installation outside the business workspace and agent access. Do not grant model file access to host configuration/capability credentials. A single-OS-user boundary is not strong isolation against arbitrary malicious local code.
-
-Do not delete state as routine troubleshooting. A different stateDir creates separate history; a changed workspace requires verifying the session's code baseline.
+Keep workspace, private state, and application/native credentials separate. The workspace and private directories must be canonical existing paths as required by CLI validation; state is outside the workspace. If using archive rollover, controlDir/storesRoot/archiveRoot must be private canonical outside-workspace directories, exclusively owned by this host. Do not use another application's state or history for fixture tests.
 
 ## 4. One configuration connects the components
 
-### 4.1 Proposed orchestrator configuration
-
-This proposed orchestrator.json is **project configuration, not native Claude/Codex configuration**. Adapters map it to supported upstream options. Replace /absolute/... and angle-bracket placeholders only when integrating implemented support.
+This is runnable with explicit fake data after replacing the paths:
 
 ```json
 {
   "configVersion": 1,
-  "workspace": "/absolute/path/to/project",
-  "stateDir": "/absolute/path/to/private-state",
-  "transport": {
-    "mode": "unix",
-    "socketPath": "/absolute/path/to/private-state/run/host.sock"
-  },
-  "providers": {
-    "claude": {
-      "adapter": "@agent-orch/adapter-claude",
-      "model": "<CLAUDE_MODEL_ID>",
-      "auth": {
-        "mode": "env",
-        "apiKeyEnv": "ANTHROPIC_API_KEY"
-      },
-      "permissionProfile": "read-only"
-    },
-    "codex": {
-      "adapter": "@agent-orch/adapter-codex",
-      "executable": "/absolute/path/to/codex",
-      "model": "<CODEX_MODEL_ID>",
-      "auth": {
-        "mode": "runtime"
-      },
-      "permissionProfile": "read-only"
-    }
-  },
-  "limits": {
-    "maxActiveSessions": 2,
-    "maxTurnsPerTask": 20
-  },
-  "shutdown": {
-    "mode": "drain",
-    "timeoutMs": 30000
-  },
-  "verificationRules": []
+  "workspace": "/absolute/workspace",
+  "stateDir": "/absolute/private/state",
+  "transport": { "mode": "unix", "socketPath": "/absolute/private/state/host.sock" },
+  "providers": { "fake": { "model": "fixture", "permissionProfile": "read-only" } },
+  "limits": { "maxActiveSessions": 2, "maxTurnsPerTask": 20, "maxQuarantinedDispatches": 32 },
+  "tools": { "enabled": true, "maxDepth": 4, "maxChildren": 32, "maxCallsPerDispatch": 100, "maxRepeatedCalls": 6 },
+  "runtimeApprovals": { "enabled": true, "ttlMs": 30000 }
 }
 ```
 
-Remove unused providers for single-runtime use. Configuring two does not invoke both for a task; TaskSpec.runtime.provider selects one.
+Host options also include verificationRules, registered writeScopes, pricing, budget, contextLimits, messageLimits, storage and stores. Read the typed [EngineConfig](packages/engine/src/types.ts) and validated [CLI config](packages/cli/src/config.ts) before adding fields. JSON providers remain read-only; native options, write profiles and callbacks use embedded TS. There is no generic auth/executable/gateway object. Native credentials and model endpoints belong to the selected runtime or an application-owned adapter, and are not stored in task specifications.
 
-| Field | Owner | Rules |
-| --- | --- | --- |
-| workspace / stateDir | Host owner | Absolute paths, access, ownership, single-instance lock |
-| transport | Host owner | Standalone host; --stdio overrides transport and opens no business socket |
-| providers.*.adapter | Installer | Load only installed/allowed modules, never arbitrary model-specified modules |
-| providers.*.model | Application developer | Exact model ID; no invented window/pricing for unknown models |
-| providers.*.auth | Host owner | Credential source only, never the secret itself |
-| permissionProfile | Application developer | Project policy name mapped to actual enforcement, not just a prompt |
-| limits | Application developer | Central engine enforcement, not separate per-SDK concurrency accounting |
-| verificationRules | Host owner | Preregistered/versioned commands; no ad hoc agent commands |
-
-Read-only mechanisms differ by provider. Unverified permission mapping must fail initialization, not fall back to full access. Code-writing support requires an explicitly selected, verified write policy and allowed directories; embedded adapters implement this mapping under SPEC-0007, while the JSON CLI remains read-only. See section 5.2 for host policy and native acceptance limits.
-
-JSON does not expand environment variables, ~, or placeholders automatically. Use absolute paths. Only dedicated credential fields such as apiKeyEnv read environment values. Explicit stdio may override transport; otherwise conflicting duplicate initialization fields fail instead of silently changing workspace/stateDir.
-
-### 4.2 Where credentials belong
-
-| Material | Read by | Never place in |
-| --- | --- | --- |
-| Anthropic API key | Host-launched Claude runtime environment | TaskSpec, messages, system prompts, events |
-| Codex account session | Managed runtime's supported authentication storage | Python messages or custom gateway headers |
-| Custom model-provider key | Runtime's designated environment variable | Plain CLI arguments or Git JSON/TOML |
-| Agent callback capability | Restricted bridge / host tool entry | Model tool parameters or ordinary business-client config |
-
-auth.mode=runtime means supported runtime authentication/storage, not automatic inheritance of desktop login into an isolated environment. Report login requirements and use supported user authentication; never silently copy the entire user configuration directory.
-
-The target local business socket uses file permissions/OS peer identity within a trusted same-user boundary for policy-authorized tasks/approvals. It does not strongly isolate arbitrary apps of the same user. Shutdown additionally needs owner authority, normally held by the starter/managed administration path. Agents use separate C3 credentials and cannot promote themselves through tool parameters.
+`doctor --config FILE` checks Node/SQLite, path access and the selected native dependency version without login or model calls. `doctor --socket PATH` proves the existing host handshake only. Neither proves authentication, tool sandboxing, model availability or task completion.
 
 ## 5. Embedded TypeScript wiring
 
-```text
-Your Node.js process
-  ├─ Application logic
-  ├─ TypeScript SDK → engine → SQLite / event log
-  ├─ Claude adapter → official SDK → managed runtime
-  └─ Codex adapter → separate App Server child
-```
-
-Install SDK/adapter, read configuration, construct the adapter/engine explicitly, create tasks, consume events/approvals, await accepted results, and close owned resources. SDKs do not manage your web server's signals/exit.
-
-This draft business function illustrates human acceptance. Section 11.2 owns outer configuration/construction/close. approvalUi.review is a caller-provided async UI that presents target/evidence, returns approve/deny/defer, and honors cancellation. It stays client-side, never serialized. Terminal users may choose proposed CLI attach in section 7.
+Source entry points are under packages; installed imports use `@agent-orch/sdk`, `@agent-orch/engine/fake`, and the selected `@agent-orch/adapter-*` package. The complete [local example](examples/typescript/local.ts) creates a task, collects explicit fixture approval, handles shutdown and preserves supplied state. The [hosted example](examples/typescript/hosted.ts) tests an existing-runtime seam without a model.
 
 ```ts
-import { readFile } from "node:fs/promises";
-import { createOrchestrator, type ApprovalRequest } from "@agent-orch/sdk";
-import { createClaudeAdapter } from "@agent-orch/adapter-claude";
+import { createOrchestrator } from '@agent-orch/sdk';
+import { createFakeAdapter } from '@agent-orch/engine/fake';
 
-type ApprovalUI = {
-  review(request: ApprovalRequest, options: { signal: AbortSignal }): Promise<"approve" | "deny" | "defer">;
-};
-
-export async function runDemo(
-  orch: Awaited<ReturnType<typeof createOrchestrator>>,
-  model: string,
-  approvalUi: ApprovalUI,
-) {
-  const task = await orch.tasks.create({
-    goal: "Inspect the project root read-only, list key files and their roles, and provide evidence for human acceptance.",
-    runtime: { provider: "claude", model },
-    acceptance: { mode: "human", criteria: ["Matches the actual files", "No files modified"] },
-  }, { idempotencyKey: "read-only-demo-001" });
-
-  // Initial task subscription replays retained events, including early approval requests.
-  for await (const event of orch.events({ taskId: task.id })) {
-    console.log(event.type);
-    if (event.type === "approval.requested") {
-      const request = await orch.approvals.get(event.data.approvalId);
-      if (request.status !== "pending" || request.revision !== event.data.revision) continue;
-      const remainingMs = Math.min(60_000, Date.parse(request.expiresAt) - Date.now());
-      if (remainingMs <= 0) continue;
-      const signal = AbortSignal.timeout(remainingMs);
-      let choice: "approve" | "deny" | "defer";
-      try {
-        choice = await approvalUi.review(request, { signal });
-      } catch (error) {
-        if (!signal.aborted) throw error;
-        return await orch.tasks.get(task.id); // Return pending state for caller recovery.
-      }
-      if (choice === "defer") return await orch.tasks.get(task.id);
-      try {
-        await orch.approvals.decide(request.approvalId, {
-          choice, expectedRevision: request.revision,
-        }, {}); // SDK generates and retains this decision's key across transport retries.
-      } catch (error) {
-        if ((error as { code?: string }).code !== "STALE_TARGET") throw error;
-        // Another client decided/expired the request while UI was open; consume current state.
-      }
-    }
-    if (["task.paused", "task.blocked"].includes(event.type)) {
-      const snapshot = await orch.tasks.get(task.id);
-      if (["paused", "blocked"].includes(snapshot.status)) {
-        console.log("Task needs caller action", snapshot.status, snapshot.reason);
-        return snapshot; // Check current state before acting on history; outer scope closes.
-      }
-    }
-    if (["task.completed", "task.failed", "task.cancelled"].includes(event.type)) break;
-  }
-
-  const result = await task.wait();
-  console.log(result.status, result.artifactRefs);
-  return result; // Check status; a returned value is not automatically success.
-}
+const orch = await createOrchestrator({
+  workspace: '/absolute/workspace',
+  stateDir: '/absolute/private/state',
+  adapters: [createFakeAdapter()],
+  tools: { enabled: true },
+});
 ```
 
-A read-only goal does not replace permissionProfile. Fixed keys allow retry recovery; genuinely new work needs a new business key. Paused/blocked paths return state for caller handling, so return may be TaskSnapshot or terminal TaskResult; see section 10.
+Creating an orchestrator is not submitting a task. Await task state and acceptance; save IDs and immutable retry identities. Close embedded owners explicitly. `SHUTDOWN_INCOMPLETE` retains the client and operationId for continuation. A connected client's close only disconnects.
 
 ### 5.1 Integrating an existing application's runtime
 
@@ -299,7 +98,7 @@ Follow [design sections 7.3–7.5](./AGENT_ORCHESTRATION_DESIGN.md#73-current-ap
 4. Keep resource observation alive for owned child/background work after the main turn ends. Never declare terminal coverage simply because the host emitted a completed UI turn. Stop acknowledgements and no remaining in-memory handle are insufficient evidence.
 5. Use stable identifiers and a durable projection checkpoint for host persistence. Recover a missing receipt with the original dispatch identity; do not replay uncertain work. Engine restart retains unresolved executions for owner reconciliation.
 
-The [SPEC-0006](./docs/specs/0006-host-runtime-contract.md) implementation covers the typed contract, runtime validation, reusable offline acceptance, and a deterministic example. It does not implement a concrete Axion bridge, durable cross-store journal, authenticated multi-tenant API, MCP bridge, package publication, or application hot update. The host journal and event projection above are requirements for the concrete integration, not current configuration fields.
+The [SPEC-0006](./docs/specs/0006-host-runtime-contract.md) implementation covers the typed contract, runtime validation, reusable offline acceptance, and a deterministic example. It does not implement a concrete Axion bridge, durable cross-store journal, authenticated multi-tenant API, package publication, or application hot update. The host journal and event projection above are requirements for the concrete integration, not current configuration fields.
 
 `readRuntimeCapabilities(adapter)` returns a validated, detached, recursively frozen snapshot. `RuntimeBudgetCapabilities` requires version 2 and explicit nulls for unspecified caps; `RuntimeEvidenceCapabilities` names version 1 coverage. Inside a hosted adapter, call `requireEngineRuntimeInput(input)` before host submission to obtain `EngineRuntimeInput`. It preserves the original identity, signal, budget functions, and evidence callback; it is not authentication or proof of host enforcement. Ordinary standalone provider calls retain their optional `RuntimeInput` engine fields.
 
@@ -357,7 +156,7 @@ Extensions run before submission and consume the original acceptance/turn budget
 
 Claude defaults to Read/Glob/Grep; write mode adds Edit/Write/Bash. Its built-in `PreToolUse` guard coexists with host hooks and blocks read-only mutation, engine-state access, outside-workspace edits including resolved symlinks, explicitly background Bash, and unsandboxed Bash. Write mode forces native sandbox availability, disables unsandboxed fallback, and restricts explicit writable roots. Host hooks/settings additionally enforce application-specific protected directories and custom/MCP authorization. `settingSources` selects native settings files; it does not replace guards, supplied settings, or confirmation policy. Symlink races, SDK scratch paths, native hook precedence, and actual OS enforcement still require native-runtime acceptance.
 
-Supplying `canUseTool` without an explicit allow list/mode selects `allowedTools: []` and `permissionMode: default`. Explicit choices are preserved. Native tool confirmation and engine task-result approval are separate; no generic tool-confirmation wire/UI protocol is added. Claude interruption follows the terminal and stop-proof contract below.
+Supplying `canUseTool` without an explicit allow list/mode selects `allowedTools: []` and `permissionMode: default`. Explicit choices are preserved. Native tool confirmation and engine task-result approval are separate. SPEC-0009 adds opt-in `runtime_permission` requests through the existing approval event/decision API; the consuming application supplies its UI. Claude interruption follows the terminal and stop-proof contract below.
 
 Codex accepts `permissionProfile`, `networkAccess` (default false), and `webSearch` (`disabled` by default, or `cached`/`live`). Search is independent from command network access. New/resumed threads and every turn receive the selected sandbox policy. Workspace-write uses the canonical workspace as its explicit writable root and excludes general temporary roots. Managed-home feature/MCP restrictions remain. JSON CLI supports network/search, but write and host callbacks remain embedded-only.
 
@@ -377,7 +176,7 @@ for await (const event of orch.events({ storeId: savedStoreId, afterCursor: save
 
 The full [offline example](./examples/typescript/usage-forwarding.ts) implements the outbox/checkpoint transaction and destination deduplication. It reopens both databases, resumes a saved cursor, replays older events, and simulates a lost acknowledgment. Run `node examples/typescript/usage-forwarding.ts`; two delivery attempts produce one ledger row. Replace the fixture destination with an API honoring `(storeId, record.id)` idempotency. A failed delivery leaves the outbox pending. Larger streams must continue bounded pages until caught up. Do not count native usage both in the host and in this projection.
 
-`reportUsage` plus iterator replay emits one atomic row/event per `dispatchId:usageId`; conflicting content rejects. Failed or late matching Claude results preserve usage despite cleanup uncertainty; mismatched sessions are excluded. Missing fields remain null. Python exposes `usage.get_record` and maps `usageRecordId` to `usage_record_id`, preserving raw provider keys. Wrong store/cursor pairs reject. Protocol stays 1.0/schema 2; older hosts may lack the additive method.
+`reportUsage` plus iterator replay emits one atomic row/event per `dispatchId:usageId`; conflicting content rejects. Failed or late matching Claude results preserve usage despite cleanup uncertainty; mismatched sessions are excluded. Missing fields remain null. Python exposes `usage.get_record` and maps `usageRecordId` to `usage_record_id`, preserving raw provider keys. Wrong store/cursor pairs reject. The current host requires wire 2.0/schema 3 and namespace-bound mutations.
 
 These guarantees cover observations that reached the engine. Historical rows are not backfilled, unreported crash-time usage cannot be recovered, and turn aggregates do not prove per-native-request accounting. `usage.get(taskId).completeness` retains its prior record-field meaning, not exhaustive upstream coverage. There is no distributed transaction with Work Nexus. Real host integration, native audit completeness, native permissions, and model acceptance remain separate; no Axion files are changed by this increment.
 
@@ -415,477 +214,90 @@ Python uses the same `sessions.control` / `messages.send` / `tasks.resume` flow 
 
 ## 6. Local Python wiring
 
-```text
-Python process
-  └─ agent_orch.Orchestrator.local
-       ├─ stdin  → Node host receives project JSON-RPC
-       ├─ stdout ← Node host responses/events
-       └─ stderr ← Redacted host logs, consumed separately
-
-Node host
-  └─ Shared orchestration engine → shared Claude/Codex adapters
-```
-
-Python must spawn with an argument array, not a shell string, and continuously drain stdout/stderr even when callers pause event consumption. Provide credentials through an explicit host environment policy; never log environment values.
-
-The proposed local API accepts structured workspace/state_dir settings or engine_command with --config. With file configuration, verify workspace/stateDir against the handshake summary instead of supplying conflicting path overrides.
-
-This matches the TS example. Known event envelope/data fields use typed snake_case; arbitrary artifact keys are untouched. approval_ui.review is a cancellable caller-provided async coroutine returning approve/deny/defer. Do not block with input() or disguise an uncancellable background input thread as async UI.
+Run `PYTHONPATH=python/src python3 examples/python/fake_roundtrip.py` from the checkout for a complete owned-host example, including known-fixture review and shutdown. Installed Python still needs the Node CLI and selected adapter in a stable tool directory.
 
 ```python
-import asyncio
-import json
-from datetime import datetime, timezone
-from pathlib import Path
-from agent_orch import Orchestrator, TaskSpec, RuntimeSpec, AcceptanceSpec
+from agent_orch import Orchestrator, RuntimeSpec, TaskSpec, CheckAcceptanceSpec
 
-
-async def run_demo(orch, model: str, approval_ui):
-    task = await orch.tasks.create(
-        TaskSpec(
-            goal="Inspect the project root read-only, list key files and their roles, and provide evidence for human acceptance.",
-            runtime=RuntimeSpec(provider="claude", model=model),
-            acceptance=AcceptanceSpec(
-                mode="human", criteria=["Matches the actual files", "No files modified"]
-            ),
-        ),
-        idempotency_key="read-only-demo-001",
-    )
-    async for event in orch.events(task_id=task.id):
-        print(event.type)
-        if event.type == "approval.requested":
-            request = await orch.approvals.get(event.data.approval_id)
-            if request.status != "pending" or request.revision != event.data.revision:
-                continue
-            expires = datetime.fromisoformat(request.expires_at.replace("Z", "+00:00"))
-            remaining = min(60.0, (expires - datetime.now(timezone.utc)).total_seconds())
-            if remaining <= 0:
-                continue
-            try:
-                choice = await asyncio.wait_for(approval_ui.review(request), timeout=remaining)
-            except TimeoutError:
-                return await orch.tasks.get(task.id)
-            if choice == "defer":
-                return await orch.tasks.get(task.id)
-            try:
-                await orch.approvals.decide(
-                    request.approval_id,
-                    {"choice": choice, "expected_revision": request.revision},
-                )
-            except Exception as error:
-                if getattr(error, "code", None) != "STALE_TARGET":
-                    raise
-        if event.type in {"task.paused", "task.blocked"}:
-            snapshot = await orch.tasks.get(task.id)
-            if snapshot.status in {"paused", "blocked"}:
-                print("Task needs caller action", snapshot.status, snapshot.reason)
-                return snapshot
-        if event.type in {"task.completed", "task.failed", "task.cancelled"}:
-            break
-    result = await task.wait()
-    print(result.status, result.artifact_refs)
-    return result
+orch = await Orchestrator.local(engine_command=[
+    "/absolute/node", "/absolute/agent-orch-cli/dist/main.js",
+    "host", "--stdio", "--config", "/absolute/host.json",
+])
+try:
+    task = await orch.tasks.create(TaskSpec(
+        goal="Perform the configured work",
+        runtime=RuntimeSpec("fake", "fixture"),
+        acceptance=CheckAcceptanceSpec(rule_refs=[{"id": "host-check", "version": "1"}]),
+    ), idempotency_key="saved-business-key")
+    result = await task.wait(timeout=30)
+finally:
+    await orch.close(timeout=5)
 ```
 
-Scripts call asyncio.run(main(...)) using section 11.2's wrapper so shutdown exceptions are handled first. Notebooks/services with a running loop await the wrapper directly; never nest asyncio.run. Coroutine cancellation does not cancel submitted tasks.
+This checks example requires a registered host-check rule in host.json. A wait timeout stops only observation. Preserve shutdown errors and original business exceptions as shown in [Python README](python/README.md); do not delete state or kill shared processes after an incomplete close. Snake_case public fields map to camelCase wire fields; operation results and raw native JSON preserve wire keys.
 
-## 7. Standalone host: TS, Python, and CLI share tasks
-
-Use this when tasks must outlive client connections. Set ORCH_ENGINE_BIN, ORCH_CONFIG, ORCH_SOCKET, and ORCH_TASK_FILE to verified absolute paths; prepare the selected authentication source before host startup. Proposed --task JSON:
-
-```json
-{
-  "goal": "Inspect the project read-only and provide key files with evidence",
-  "runtime": { "provider": "claude", "model": "<CLAUDE_MODEL_ID>" },
-  "acceptance": { "mode": "human", "criteria": ["List matches actual files", "No files modified"] }
-}
-```
-
-The following CLI arguments describe the proposed project contract:
+## 7. Standalone host and CLI
 
 ```sh
-# Before first startup: offline dependency/configuration checks, no model turn.
-"$ORCH_ENGINE_BIN" doctor --config "$ORCH_CONFIG"
-
-# Terminal A: keep the foreground host alive; use real absolute paths.
-"$ORCH_ENGINE_BIN" host --config "$ORCH_CONFIG"
-
-# Terminal B: read-only preflight, no model calls.
-"$ORCH_ENGINE_BIN" doctor --socket "$ORCH_SOCKET"
-
-# Submit the task file; receipt means persisted, not completed.
-"$ORCH_ENGINE_BIN" submit --socket "$ORCH_SOCKET" --task "$ORCH_TASK_FILE" --idempotency-key "issue-123-attempt-1"
-
-# ORCH_TASK_ID must come from the submission receipt.
-"$ORCH_ENGINE_BIN" status --socket "$ORCH_SOCKET" --task "$ORCH_TASK_ID"
-"$ORCH_ENGINE_BIN" attach --socket "$ORCH_SOCKET" --task "$ORCH_TASK_ID"
+node packages/cli/src/main.ts doctor --config /absolute/host.json
+node packages/cli/src/main.ts host --config /absolute/host.json
+# In another terminal:
+node packages/cli/src/main.ts run --socket /absolute/private/state/host.sock --task /absolute/task.json
+node packages/cli/src/main.ts attach --socket /absolute/private/state/host.sock --task TASK_ID
+node packages/cli/src/main.ts control --socket /absolute/private/state/host.sock --target /absolute/target.json --action pause --mode drain
 ```
 
-Proposed doctor --config checks offline before startup; doctor --socket queries a running host. Neither calls models. host --stdio and Unix-host modes are exclusive. Python normally starts stdio; manual launch waits for protocol frames, not interactive commands. attach consumes events and presents approvals only with an interactive terminal/authority; disconnect does not cancel tasks.
+`submit` persists without observing; `status` reads a task; `approve` requires the approval ID, current revision and explicit approve/deny. `run`/`attach` detach on approval, blocked or paused by default; `--follow` keeps observing, `--interactive` requires TTY input for a decision, and `--timeout-ms` limits local observation. Ctrl-C detaches without cancelling shared work. `control` freezes all five session target fields, and compact/rotate/stop return durable operations.
 
-Proposed TypeScript connection:
+The host handles SIGINT/SIGTERM with configured shutdown mode/time. Incomplete cleanup retains the control endpoint and operationId; another signal continues the same mode. Stdio parent EOF separately triggers bounded interrupt cleanup. No command approves automatically, enables fake implicitly, or invokes another management model.
 
-```ts
-import { connectOrchestrator } from "@agent-orch/sdk";
+## 8. Private tools, routing and verification
 
-const orch = await connectOrchestrator({ socketPath: socketPath });
-try {
-  const snapshot = await orch.tasks.get(taskId);
-  console.log(snapshot.status);
-} finally {
-  await orch.close(); // Disconnect this client only.
-}
-```
+Owner-enabled tools have exactly four names: work_delegate, work_send, work_read, work_control. Claude uses SDK createSdkMcpServer/tool; Codex runs a private stdio MCP bridge. Its temporary Unix endpoint/token binds the original task/session/dispatch/generation, is inherited privately and revokes when the turn ends. Tool arguments cannot supply a trusted actor, escalate policy, control siblings/parents, approve work, register commands, administer storage or shut down the host. The model sees one fixed catalog with an outer request object.
 
-Proposed Python connection:
+work_delegate validates declared independence and inherited/narrowed provider/model/profile/write scope. Task dependencies wait without consuming execution slots and wake only after required acceptance. Reuse is serial, requires compatible context/root/profile/workspace, and has a finite persisted queue deadline. Only declared fallbackModes may create a different candidate. Continue/parallel_tools are in-turn intents, not hidden child tasks. Context references must name existing bounded digest-verified artifacts.
 
-```python
-async with Orchestrator.connect(socket_path=socket_path) as orch:
-    snapshot = await orch.tasks.get(task_id)
-    print(snapshot.status)
-```
+Logical session opening makes no native/model call. Fork captures a completed source checkpoint; first use must return a distinct native identity. Compact executes a maintenance turn and requires an actual compact boundary; a method acknowledgment is insufficient. Rotate requires a quiet settled session, archives generation evidence and clears the native binding. Stop closes scheduling independently of business cancellation. Inspect performs bounded read-only native history lookup and returns unknown execution; it never settles work automatically.
 
-Connected clients do not set provider keys, workspace, or stateDir; the host owns them. Check storeId/instanceId/permissions/protocol in handshake to avoid a different task database. V1 connections are same-machine only; replacing a socket path with a URL does not enable remote deployment.
+Checks use owner-registered verificationRules with ID/version/argv/canonical cwd/time/output/profile/success criteria. The task freezes their digest at admission. Checks run after runtime stop, capture baseline hashes and output, and require all checks and dependencies to pass. Failed checks consume a finite repair/turn budget. Unconfirmed verifier cleanup retains execution/write ownership until explicit owner evidence. Registered commands run as the local user; baseline checks detect mutation afterward and are not an OS sandbox.
 
-## 8. Runtime and agent callback wiring
+Task acceptance mode human uses purpose task_acceptance. `runtimeApprovals.enabled` routes native permission requests as purpose runtime_permission with exact dispatch/tool digest and expiry. The consumer must distinguish them; no consumer, cancellation, expiry or stale target grants permission. The four owner-enabled orchestration tools are preapproved by native MCP and remain subject to engine authorization and limits. Native permission-hook coverage still requires real-runtime acceptance.
 
-### 8.1 Claude path
+## 9. Usage, costs and context estimates
 
-In the full design, the adapter performs these steps while applications select providers and use the public SDK:
+Usage belongs to the original dispatch/task/root even when a native session is reused. Callback/yield replay deduplicates observations by dispatch and source ID. Late records remain on the original owner. Missing fields and ambiguous cumulative scope remain unknown; overlapping total/cached token buckets are not billed twice.
 
-1. Bind logical ownerScope/session/generation/tool authorization.
-2. Wrap fixed tools with official tool()/createSdkMcpServer() and inject through query mcpServers.
-3. Bind caller identity in closures; do not trust model-provided fromSessionId. Parameters supply only target/business payload.
-4. Open managed streaming input, persist the returned session ID, and append batches only at safe boundaries.
-5. Route callbacks through shared host authorization/idempotency/transaction persistence and return durable receipts, not temporary peer-process messages.
-6. Record native events through the adapter; permission requests use approvals, never managing-agent self-approval.
+Owner pricing identifies provider, model, currency, version and decimal per-million-token rates. Costs use exact decimal arithmetic; costs.get supports direct/tree/host_overhead, and owner-only recordOverhead deduplicates a supplied billingId. Reservations are committed before dispatch and include concurrent held reservations. Confirmed complete usage settles unused reserve; missing usage retains reserve. These are scheduling estimates, not upstream invoices or hard provider-side spend caps.
 
-Claude's in-process MCP server is an object, not an executable for Codex command. Tool names include the MCP prefix. allowedTools is preapproval, not an authorization/tool-exposure boundary. [Claude custom tools](https://code.claude.com/docs/en/agent-sdk/custom-tools)
+context.estimate reports per-request keep/compact scenarios for continued cache hits, TTL rebuilds, partial retained prefixes and history growth. Compaction is counted once; unknown intervals/metrics yield explicit ranges or unknown. No automatic economic routing or compaction optimization is enabled without measured native capability/benefit evidence.
 
-Preserve startup dependencies when wiring environments. TS SDK options.env uses replacement semantics; deliberately retain PATH, needed system variables, and selected credentials before adding provider settings. Do not supply only ANTHROPIC_BASE_URL or pass every provider's secrets to every runtime. [SDK configuration](https://code.claude.com/docs/en/agent-sdk/configuration)
+## 10. Namespace, retention and archives
 
-### 8.2 Codex path
+Every mutation uses expectedStoreId. TS receipts/errors expose retryIdentity; Python exposes retry_identity. Preserve `(storeId, method, scope, idempotencyKey, digestVersion, requestDigest)` with the original request. SDK retry reuses this identity and rejects changed payloads. `refresh()` intentionally observes the current active namespace; it never rewrites an old retry. An old key sent into a new store must fail before mutation.
 
-Control requests and tool callbacks use separate connections:
+Read operations.lookup in the original store. After rollover, use archives.lookup with the original storeId/method/scope/key and optional requestDigest. Expired details produce OPERATION_HISTORY_EXPIRED while lifetime tombstones preserve deduplication. ARCHIVE_UNAVAILABLE, ARCHIVE_CORRUPT and ARCHIVE_NOT_FOUND are distinct and are never proof of non-execution.
 
-```mermaid
-sequenceDiagram
-  participant E as Engine / Codex adapter
-  participant A as Codex App Server
-  participant B as MCP bridge child
-  participant T as Restricted host tool entry
-  E->>A: Dedicated stdio: initialize → initialized
-  E->>A: thread/start or thread/resume with MCP binding
-  A->>B: Start stdio MCP server; discover fixed tools
-  B->>T: Private socket; verify session capability
-  A-->>E: Thread initialization and actual tool capabilities
-  E->>A: turn/start
-  A->>B: MCP tools/call：work_send
-  B->>T: Tool name, request ID, bound identity, business parameters
-  T-->>B: Durable message receipt
-  B-->>A: MCP tool result
-  A-->>E: Native item/turn/usage events
-```
+Save event cursor with storeId. CURSOR_EXPIRED requires state.snapshot: retain its snapshotId/cursor, read bounded pages using nextOffset, rebuild visible state, release the lease and resume events exclusively after the captured cursor. The snapshot is fixed, lasts at most 60 seconds, and does not reconstruct deleted audit history. Expiry requires a new snapshot rather than mixing pages.
 
-The proposed design isolates App Server workers/bridge bindings for different tool identities/permissions, preventing shared MCP configuration from assigning one identity to multiple logical sessions. Future process reuse needs verified per-thread identity injection/detection; model-supplied session IDs do not identify callers.
+Owner storage APIs expose status/configure/collect/pin/unpin/backup. Protected references override retention. GC operates in bounded batches; inspect oversizedArtifacts and pressure instead of assuming one call removes all eligible data. Policy changes are audited and do not initiate destructive rollover automatically. Full/I/O errors stop admission and release emergency reserve for bounded recovery; degraded public close releases owned resources and reports STORAGE_DEGRADED_CLOSED with durableReceipt=false if it could not save a shutdown receipt.
 
-Native Codex MCP stdio example below is **written only to adapter-managed instance configuration or supported explicit runtime overrides**. Do not modify user-global ~/.codex/config.toml. Engine-generated command/capability-file/socket values never come from model parameters.
+stores.rollover requires configured controlDir/storesRoot/archiveRoot and a fully settled old store. It verifies a complete archive, prepares a fresh identity, retires/fences the old writer, commits the active manifest and then activates the new writer. Restart resumes the same durable switch. Old state remains preserved. Unfinished tasks, unknowns, resources, approvals/messages/outbox, operations, conflicts, GC and leases block rollover with IDs.
 
-```toml
-[mcp_servers.orchestration]
-command = "/absolute/path/to/agent-orch"
-args = ["tool-bridge", "--stdio"]
-env = { ORCH_BRIDGE_SOCKET = "/absolute/path/to/private-state/run/bridge.sock", ORCH_BRIDGE_CREDENTIAL_FILE = "/absolute/path/to/private-state/runtime/worker-1/bridge-capability" }
-required = true
-enabled_tools = ["work_delegate", "work_send", "work_read", "work_control"]
-```
-
-tool-bridge is a planned project command. command/args/env/required/enabled_tools are Codex MCP settings. Validate against the locked version; a file existing does not prove MCP loaded. [Codex MCP](https://developers.openai.com/codex/mcp)
-
-The bridge translates MCP and makes restricted host calls; it has no SQLite write permission or independent scheduler. The host binds actor/generation/grants to credentials and rejects stale calls after generation changes, worker closure, or revocation. Enforcement depends on runtime/file boundaries; a token readable by arbitrary same-user shell is not a strong sandbox.
-
-Keep the tool catalog stable. required=true aims to stop execution when orchestration tools fail to load. Inspect actual discovery and make a real tool call into the correct ledger. A no-native-subagent prompt is insufficient; restrict native delegation/shell spawn under the main design.
-
-### 8.3 Four tools, one engine
-
-| Tool | Input | Host action | Immediate receipt |
-| --- | --- | --- | --- |
-| work_delegate | Bounded task, dependencies, target/session constraints | Authorize/budget, create and queue | taskId + persisted |
-| work_send | Logical target, generation, result, artifact references | Atomic messages + outbox | messageId + persisted |
-| work_read | Task/session/artifact reference | One authorized snapshot read | Current state, no model call |
-| work_control | Generation/turn and pause/resume/compact/rotate/stop | Control operation through session lock | operationId; query outcome later |
-
-Public SDKs and MCP tools share engine handlers, with narrower tool authority. Tool text/booleans cannot establish human approval.
-
-## 9. Direct model access and optional gateways
-
-### 9.1 Configure three separate connection types
-
-| Connection | Example | Scope |
-| --- | --- | --- |
-| SDK → local host | Unix socket / stdio | Orchestration tasks/events, not model HTTP |
-| Runtime → MCP bridge | MCP stdio | Tools, not a model API proxy |
-| Runtime → model/gateway | Anthropic / Responses HTTPS endpoint | Model stream, tool protocol, usage, cache settings |
-
-HTTP_PROXY/HTTPS_PROXY network proxies differ from model API base URLs. Never put a host socket, MCP URL, or ChatGPT webpage into model base_url.
-
-### 9.2 Claude model connection
-
-Direct mode uses selected supported authentication/default endpoint. Gateways map ANTHROPIC_BASE_URL and required authentication into the runtime environment. Do not pass custom orchestrator JSON directly into official query options.
-
-A configurable base URL does not prove full gateway compatibility. Verify streams, tool calls/results, errors, cancellation, usage, and cache fields. Check tool search separately on third-party endpoints; do not force unsupported tool_reference behavior. [Claude environment variables](https://code.claude.com/docs/en/env-vars)
-
-### 9.3 Codex model connection
-
-Configure official account authentication separately from custom API providers. auth.mode=runtime requires actual managed-runtime login verification; custom providers use their own credentials. A ChatGPT subscription is not automatically valid for arbitrary gateways. [Codex authentication](https://developers.openai.com/codex/auth)
-
-The native configuration example uses placeholder address/provider/model. Place it in the managed instance's effective configuration layer, not only a project file assumed to be active.
-
-```toml
-model = "<VERIFIED_MODEL_ID>"
-model_provider = "orchestration_gateway"
-
-[model_providers.orchestration_gateway]
-name = "Project Responses Gateway"
-base_url = "https://gateway.example.invalid/v1"
-env_key = "ORCH_GATEWAY_API_KEY"
-wire_api = "responses"
-```
-
-env_key names an environment variable, not a secret. The gateway must support Responses and the selected model. Verify actual base_url/path behavior to avoid duplicate /v1. The design reference notes that project-level .codex/config.toml may ignore provider-routing keys; use a verified instance layer or supported override, without editing user-global configuration. For only the built-in OpenAI endpoint, check the supported openai_base_url route rather than requiring a custom provider. [Codex advanced configuration](https://developers.openai.com/codex/config-advanced)
-
-### 9.4 Gateway acceptance
-
-1. Verify authentication, model mapping, and actual protocol, beyond HTTP 200/401.
-2. Complete one actual request through final output/terminal without hidden duplicate-billing retries.
-3. Complete a tool call, result return, and subsequent model response.
-4. Route approval, cancellation, and errors to the correct task; disconnection is not completion.
-5. Compare raw usage with direct mode; missing cache read/write fields remain unknown.
-6. Preserve each provider protocol's required fields; cache metrics do not imply cross-provider cache sharing.
-
-These real-call checks consume model allowance and require a separate budget. SDK startup does not automatically spend on probing or cache warming.
-
-## 10. Messaging, approval, and control after task creation
-
-### 10.1 Reading receipts
-
-| State/result | Supported conclusion |
-| --- | --- |
-| persisted | Engine saved task/message/operation; recover by ID |
-| dispatching | Delivery underway or upstream acceptance unconfirmed |
-| runtime_accepted | Attributable native acceptance evidence exists |
-| Message completed | Input batch handled, not whole-task acceptance |
-| task.completed | Dependencies, deliverables, checks, and required approvals satisfied |
-| outcome_unknown | Execution outcome unconfirmed; no blind resend |
-
-### 10.2 A sends a message to B
-
-Read B's logical session snapshot for sessionId/generation before sending necessary content. Native provider session/thread IDs are not ordinary cross-agent business addresses.
-
-```ts
-const target = await orch.sessions.get(bSessionId);
-const receipt = await orch.messages.send({
-  taskId,
-  toSessionId: target.id,
-  expectedGeneration: target.generation,
-  kind: "finding",
-  summary: "Reproduction details are ready; see the referenced artifact.",
-  artifactRefs: [artifactId],
-}, { idempotencyKey: "finding-issue-123-v1" });
-console.log(receipt.messageId, receipt.status);
-```
-
-Authorized caller identity determines fromSessionId/actor. Ordinary mail queues while B generates, starts a turn when idle, or resumes the original session after process exit. A/B can run independently; sending does not automatically interrupt B.
-
-### 10.3 Human approval and task acceptance
-
-The host emits approval.requested. Target data includes approvalId, purpose, revision, target, summary, evidenceRefs, and expiresAt, mapped to snake_case in Python. runtime_permission and task_acceptance are distinct purposes.
-
-Durable stable events include task.completed/failed/cancelled/paused/blocked. Initial taskId subscriptions replay retained events. Read current state using event versions; do not reprompt/reapprove decided, expired, or superseded historical requests. The first example run sees new-task events; reopening via the same key must apply replay checks.
-
-UI shows full target/evidence, collects a human decision, then calls approvals.decide. Check pending through approvals.get first and submit expectedRevision. SDK retains a key per decision; different clients/decisions must not share one hard-coded key. On STALE_TARGET, read current state rather than applying to a new turn. Managing agents lack this authority.
-
-Caller UI provides actual human interaction, may independently consume events, and cancels displayed requests on expiry/task end while respecting deadlines. Event subscription calls no model. Web backends hold SDKs; browsers submit authenticated business decisions, never receive sockets/model keys.
-
-Treat paused/blocked after refusal as requiring action, not normal ongoing work. Show the reason, explicitly resume eligible work, or tasks.cancel and await a reconciled terminal. Event-wait timeout stops waiting only.
-
-### 10.4 Automatic acceptance (planned)
-
-Register rules in host configuration and reference fixed versions from TaskSpec. Example:
-
-```json
-{
-  "verificationRules": [
-    {
-      "id": "project-tests",
-      "version": "1",
-      "argv": ["/absolute/path/to/npm", "test", "--", "--runInBand"],
-      "cwdRelative": ".",
-      "timeoutMs": 120000,
-      "permissionProfile": "workspace-write",
-      "success": { "exitCode": 0 }
-    }
-  ]
-}
-```
-
-"argv" must be an existing authorized command for the target project; --runInBand is only illustrative, not universal. Use acceptance: { mode: "checks", ruleRefs: [{ id: "project-tests", version: "1" }] }. Run within configured cwd/permissions and bind results to artifact versions. Automatic acceptance is not automatic approval of extra runtime privileges. This mode remains unimplemented.
-
-### 10.5 Pause, resume, and unknown outcomes
-
-```ts
-const before = await orch.sessions.get(bSessionId);
-const pause = await orch.sessions.control({
-  sessionId: before.id,
-  expectedGeneration: before.generation,
-  expectedDispatchId: before.activeDispatchId,
-  expectedRevision: before.revision,
-  expectedState: before.status,
-}, { action: "pause", mode: "drain" }, { idempotencyKey: "pause-B-001" });
-
-const result = await pause.wait({ timeoutMs: 60_000 });
-console.log(result.status); // outcome_unknown is not paused.
-```
-
-Drain is the default soft pause, waiting for B's turn. Interrupt requests cancellation but still needs terminal/side-effect checks. Reread the snapshot before action=resume using its current revision; apply task-level resume semantics if the task is paused too. Future compact/rotate also return operations, not immediate completion.
-
-On lost receipts, operations.lookup uses original method/scope/key. Save SDK-generated keys exposed in errors. Never switch keys to repeat possibly successful file/external actions.
+storage.backup returns a registered backupId. stores.importBackup / stores.import_backup imports it under a fresh store identity, preserves provenance, and quarantines unfinished work with explicit reconciliation targets. It never restores credentials or replays tasks. Original native history outside managed runtime storage is not promised in a backup. No cross-store semantic deduplication is inferred.
 
 ## 11. Startup, shutdown, and recovery SOP
 
 ### 11.1 Startup order
 
-1. Check dependencies, versions, absolute paths, credential sources, and adapter resolution.
-2. Select one engine owner; inspect stateDir lock and old instance identity.
-3. Initialize database/schema and reconcile unfinished operations without automatic resend.
-4. Handshake the SDK protocol; keep stdout protocol-only and diagnostics separate.
-5. Establish selected runtime and, when implemented, fixed tool bridge; verify discovery/identity.
-6. After approval consumers are ready, explicitly submit new work or resume selected old tasks.
+Run offline doctor; select exactly one owner; let migration/file recovery complete; negotiate wire 2.0 and capabilities; attach event/approval consumers; explicitly submit or resume work. Native identity, authentication and sandbox checks are separate acceptance steps. Recovery never blindly sends an unfinished dispatch again.
 
 ### 11.2 Normal shutdown
 
-| Caller | Action | Expected result |
-| --- | --- | --- |
-| Embedded TS owner | orch.close({ mode: "drain", timeoutMs }) | Stop dispatch, await turns, persist, reclaim owned resources |
-| Python local owner | async-with exit or explicit close | Same drain, then close its spawned Node host |
-| Connected client | orch.close() / context exit | Disconnect only; standalone host continues |
-| Host administrator | host.shutdown | Close host; ordinary clients do not automatically have authority |
-
-Drain timeout returns SHUTDOWN_INCOMPLETE, not proof of stop. Retain exception handle/operationId/pipes and use shutdown.continue to wait longer or explicitly interrupt. Owner SDK close wraps this without requiring hand-built protocol frames.
-
-Use client.close({operationId,mode,timeoutMs}) / await client.close(operation_id=...,mode=...,timeout=...). An operationId maps to shutdown.continue; absent ID starts shutdown. SHUTDOWN_INCOMPLETE retains a valid client/operationId, which the SDK must not destroy early.
-
-Draft TS outer wrapper, in the same module as section 5:
-
-```ts
-type Orchestrator = Awaited<ReturnType<typeof createOrchestrator>>;
-type ShutdownUI = {
-  choose(error: { operationId: string }): Promise<"drain" | "interrupt">;
-};
-
-async function closeOwner(orch: Orchestrator, shutdownUi: ShutdownUI) {
-  let client = orch;
-  let operationId: string | undefined;
-  let mode: "drain" | "interrupt" = "drain";
-  while (true) {
-    try {
-      await client.close({ operationId, mode, timeoutMs: 30_000 });
-      return;
-    } catch (error) {
-      if (!error || typeof error !== "object" ||
-          !("code" in error) || error.code !== "SHUTDOWN_INCOMPLETE") throw error;
-      const pending = error as { code: string; operationId: string; client: Orchestrator };
-      client = pending.client;
-      operationId = pending.operationId;
-      mode = await shutdownUi.choose(pending); // Async choice or preauthorized caller policy.
-    }
-  }
-}
-
-async function runWithShutdownHandling(
-  configFile: string, approvalUi: ApprovalUI, shutdownUi: ShutdownUI,
-) {
-  const config = JSON.parse(await readFile(configFile, "utf8"));
-  // This config enables only Claude; substitute Codex under section 8 when needed.
-  const orch = await createOrchestrator({
-    ...config,
-    adapters: [createClaudeAdapter(config.providers.claude)],
-  });
-  let result!: Awaited<ReturnType<typeof runDemo>>;
-  let businessFailed = false;
-  let businessError: unknown;
-  try {
-    result = await runDemo(orch, config.providers.claude.model, approvalUi);
-  } catch (error) {
-    businessFailed = true;
-    businessError = error;
-  }
-  try {
-    await closeOwner(orch, shutdownUi);
-  } catch (closeError) {
-    if (businessFailed) {
-      throw new AggregateError([businessError, closeError], "Business work and shutdown both failed");
-    }
-    throw closeError;
-  }
-  if (businessFailed) throw businessError;
-  return result;
-}
-```
-
-Draft Python wrapper, keeping recovery inside the live event loop:
-
-```python
-from agent_orch import ShutdownIncomplete
-
-
-async def main(config_file, engine_executable, approval_ui, shutdown_ui):
-    config_path = Path(config_file).resolve()
-    config = json.loads(config_path.read_text(encoding="utf-8"))
-    business_error = None
-    result = None
-    try:
-        try:
-            # engine_executable is this project's CLI absolute path, not the codex executable.
-            async with Orchestrator.local(
-                engine_command=[engine_executable, "host", "--stdio", "--config", str(config_path)],
-                close_timeout=30.0,
-            ) as orch:
-                try:
-                    result = await run_demo(orch, config["providers"]["claude"]["model"], approval_ui)
-                except BaseException as error:
-                    business_error = error  # Preserve CancelledError too; rethrow after close.
-        except ShutdownIncomplete as error:
-            pending = error
-            while True:
-                mode = await shutdown_ui.choose(pending)  # Async drain/interrupt choice.
-                try:
-                    await pending.client.close(
-                        operation_id=pending.operation_id, mode=mode, timeout=30.0
-                    )
-                    break
-                except ShutdownIncomplete as next_error:
-                    pending = next_error
-    except BaseException as close_error:
-        if business_error is not None:
-            raise business_error from close_error  # Preserve both errors and cancellation semantics.
-        raise
-    if business_error is not None:
-        raise business_error
-    return result
-```
-
-Both wrappers preserve business outcome separately from shutdown. After closing, return the original result or rethrow the original error/cancellation; shutdown timeout must not swallow it. If both fail, preserve both. Task success still depends on status/acceptance; query saved taskId for updates. Callers own UI availability. Explicit human drain may continue waiting; ordinary errors, repeated cleanup cancellation, or crashes follow recovery below rather than infinite automatic interrupt retries.
-
-Handle Python close exceptions before event-loop exit. On caller crash/EOF, the host can only make a bounded attempt to stop owned processes and persist unknown state; it cannot promise to reverse external effects. Do not delete socket/stateDir before stopping processes.
+Use `orch.close({mode:'drain',timeoutMs:30000})` for an embedded owner or `await orch.close(mode="drain",timeout=30)` for Python. Drain does not escalate automatically. If SHUTDOWN_INCOMPLETE occurs, retain its live client and operationId and explicitly continue or request interrupt. Preserve the original business result/error/cancellation while handling cleanup. Connected clients simply disconnect. Public close after a latched storage failure may report STORAGE_DEGRADED_CLOSED after releasing resources, because no durable shutdown receipt can be promised.
 
 ### 11.3 Restart recovery
 
-Reuse original stateDir, correct workspace baseline, and compatible runtime configuration. Check taskId, logical/native session IDs, and unfinished operations; select tasks explicitly for resume.
-
-If only the client disconnected and the host lives, reconnect/replay afterCursor without a second host. Persist cursor with storeId. For current CURSOR_EXPIRED, verify identity/cursor and read task/session/approval snapshots without silently skipping state gaps. Unified state.snapshot and post-GC resume are pending B work.
-
-If side-effect execution is unprovable, keep outcome_unknown and stop ordinary delivery. Restoring conversation is neither cache recovery nor undo/replay of shell actions.
+Reconnect to a live host instead of starting a second writer. Reuse canonical workspace/state paths and correct runtime configuration. Unknown execution remains blocked with original native/dispatch IDs. Read-only sessions.inspect may add evidence but never proves non-execution from missing history. Resume only after the relevant explicit owner resolution. Do not restore an old database over live state, discard tombstones or reset keys to bypass uncertainty.
 
 ### 11.4 Implemented owner attestation
 
@@ -1039,53 +451,14 @@ async def resolve_reviewed_conflict(owner, conflict_id, evidence, idempotency_ke
 
 Resolve by durable conflictId even if activeDispatchId cleared. Reject stale revision, active handles, or insufficient proof. Resolve every conflict, then satisfy normal capacity/close gates before dispatch. This does not rewrite business outcomes, original unknown, or acceptance history. Idempotency uses method=scheduler.resolveConflict, scope=conflictId. Recover lost receipts by original-key lookup; do not substitute a new revision under that key.
 
-### 11.6 A2 upgrade and custom adapters
+## 12. Layered acceptance
 
-Storage schema is 2; wire remains 1.0 and event schemaVersion 1. Before schema1 migration, create `stateDir/store-schema1-<uuid>.sqlite` and verify integrity/storeId/workspace, then migrate transactionally. Failure stops startup before model calls. Legacy unknown without leases recovers held+quarantined, without renewed deadlines. Old hosts refuse schema2. Backups do not reconcile later external effects and cannot simply be restored for replay. Full B archive/namespace/deduplication recovery remains pending.
-
-Custom Node adapters must implement executionBudget={version:2,acceptanceCapMs,turnCapMs}, integers only for explicit caps and null otherwise. Consume RuntimeInput remaining monotonic acceptance/total time; do not start a full new turn clock after acceptance. Missing/incompatible capability fails before new-task persistence/dispatch, avoiding hidden old 300-second behavior. Report stop/cleanup by original dispatch/session/generation and sequence. Declaring terminal coverage is not real-world proof; missing stop evidence retains leases. Built-in fake/Claude/Codex pass offline fixtures; actual runtime versions/identity/model results need separate acceptance.
-
-## 12. Layered acceptance: prove each connection
-
-| Layer | Action | Required evidence | Still does not prove |
-| --- | --- | --- | --- |
-| 1 Environment | doctor | Path/version/module/configuration/permission checks | Model/tools usable |
-| 2 SDK → host | Initialize/read-only query | Matching instanceId/storeId/protocolVersion | Model turn started |
-| 3 Persistence | Create test work, disconnect, query | Same task/key, auditable state | Runtime acceptance |
-| 4 Official runtime | Budgeted read-only task | Actual session/thread, terminal, final artifact | All mail/control/cache paths |
-| 5 Tool callback | A sends necessary result to B | Correct actor/messageId and persisted→accepted→processed events | Exactly-once arbitrary shell effects |
-| 6 Human approval | Request/display/decide/continue | Auditable approvalId/revision/target/actor | Model self-approval |
-| 7 Control | Drain/resume, then controlled interrupt | Native terminal/checkpoint/result checks | Resuming unsaved internal reasoning |
-| 8 Acceptance | Preregistered checks or human review | verificationId, artifact version, task.completed | Fixed cost reduction |
-| 9 Economics | Repeated equivalent work, cache/usage capture | Raw metrics/scope/pricing/missing markers | Guaranteed hits for identical prefixes |
-
-Record TS×Claude, TS×Codex, Python×Claude, and Python×Codex separately. Shared engine tests do not replace actual client wiring. Also test mixed clients on one standalone host, replay, and single-instance protection.
-
-No model acceptance above ran during this guide's creation. At release, record exact commands/versions/logs/pass/fail/unknown. Draft interfaces and fake results are not real completion evidence.
-
-## 13. Common wiring failures
-
-| Symptom | Check first | Response |
+| Evidence | What it establishes | Still required |
 | --- | --- | --- |
-| Python ENGINE_NOT_FOUND | Node path and project CLI in engine_command | Fix installation/argv; do not substitute codex binary |
-| PROTOCOL_MISMATCH | npm/PyPI/host versions and ranges | Use a verified combination; never skip handshake |
-| HOST_ALREADY_RUNNING | stateDir instance/process/lock | Connect to it, or verify stopped before startup |
-| Invalid stdio JSON | Logs, shell greetings, another protocol on stdout | Separate A2/B2/C2 pipes; logs on stderr |
-| Claude runtime/command missing | options.env replaced required environment | Build a complete, deliberately filtered environment |
-| Codex cannot discover work_send | Effective MCP config, bridge startup, required errors | Inspect actual catalog and bridge logs |
-| Tool UNAUTHORIZED | Actor/generation/capability bound to current worker | Reestablish valid binding; model cannot choose another actor |
-| Mail persisted but B silent | running/paused/approval/compacting/unknown state | Queue, approve, or reconcile appropriately; no endless wakeups |
-| Persistent waiting_approval | Approver running and target still valid | Present/handle request or await authorized actor |
-| Gateway configured but direct route used | Ignored project-level Codex routing settings | Use effective managed configuration and verify destination |
-| Gateway output works, tools fail | Complete streaming tool/result protocol | Accept tool roundtrip before enabling route |
-| Missing usage/cache | Runtime exposure, gateway fields, metric scope | Keep unknown, never fabricate zero/hit rate |
-| Tool processes survive close | Client vs session vs host closed; ownership | Reconcile owned resources/effects, never kill unrelated processes |
-| Worse cache behavior | TTL/model/permission/tools/paths/prefix changes | Inspect actual usage, not model-cache heartbeat assumptions |
+| Full Node/Python suites | Engine, wire, actual local IPC, owned process and storage-fault behavior | Real upstream execution |
+| Installed pinned native SDK / generated CLI types | Actual offline MCP/permission transport and versioned API shape | Real model, history and sandbox behavior |
+| Clean package installation | Emitted npm packages and wheel/sdist run in fresh offline environments | Publication/license/release operation |
+| Local capacity report | Bounded measurements on the recorded host and data size | Unexecuted OS/runtime matrix cells and production sizing |
+| Opt-in native plan | Explicit version, identity source, spending estimate and evidence preparation | Separate authorization and real execution |
 
-Retain redacted engine/adapter/runtime versions, instanceId, taskId, sessionId, operationId, dispatchId, generation, cursor, and error code. Never log API keys, callback credentials, or complete environments.
-
-## 14. Documentation and implementation delivery
-
-Before release, replace proposals with actual package names, tested installation commands, runnable bilingual examples, schema, and version matrix. Tests cover configuration, examples, CLI arguments, MCP identity, approval/close, and all four language/runtime pairings.
-
-Changes to connect/local arguments, event data, configuration loading, or bridge wiring require synchronized design/guide/contracts. Official references establish upstream mechanisms; project adapters/gateways need their own execution evidence.
+Follow [native acceptance instructions](docs/acceptance/README.md). A source/runtime probe is not packaged-application acceptance. A protocol response or main-turn result is not complete process/resource stop. A fixed price estimate is not a measured cost benefit. No Axion implementation, external ledger integration, credentials or paid model requests are part of the offline suite.

@@ -7,13 +7,14 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
+from .identity import request_digest
 from .errors import OrchestrationError, ShutdownIncomplete, unsupported
 from .transport import RpcTransport
 from .types import ReconcileEvidence, Snapshot, TaskSpec, snapshot, to_wire
 
 
 SDK_VERSION = "0.1.0"
-PROTOCOL_VERSION = "1.0"
+PROTOCOL_VERSION = "2.0"
 _TASK_TERMINAL = {"completed", "failed", "cancelled"}
 _OPERATION_TERMINAL = {"completed", "noop", "rejected", "failed", "outcome_unknown"}
 
@@ -31,6 +32,15 @@ class TaskHandle(Snapshot):
     def __init__(self, client: "Orchestrator", value: Snapshot):
         super().__init__(value)
         self._client = client
+
+    async def get(self) -> Snapshot:
+        return await self._client.tasks.get(self.id)
+
+    async def cancel(self, *, idempotency_key: str | None = None):
+        return await self._client.tasks.cancel(self.id, idempotency_key=idempotency_key)
+
+    async def resume(self, *, idempotency_key: str | None = None):
+        return await self._client.tasks.resume(self.id, idempotency_key=idempotency_key)
 
     async def wait(self, *, timeout: float | None = None) -> Snapshot:
         return await self._client._wait(lambda: self._client.tasks.get(self.id), _TASK_TERMINAL, timeout)
@@ -52,9 +62,6 @@ class _Tasks:
 
     async def create(self, spec: TaskSpec | Mapping[str, Any], *, idempotency_key: str | None = None) -> TaskHandle:
         wire = to_wire(spec)
-        if isinstance(wire, dict) and isinstance(wire.get("acceptance"), dict):
-            if wire["acceptance"].get("mode") != "human":
-                raise unsupported("automatic verification")
         return TaskHandle(self._client, await self._client._mutate("tasks.create", {"spec": wire}, idempotency_key))
 
     async def get(self, task_id: str) -> Snapshot:
@@ -74,9 +81,12 @@ class _Sessions:
     async def get(self, session_id: str) -> Snapshot:
         return await self._client._call("sessions.get", {"sessionId": session_id})
 
+    async def inspect(self, session_id: str, *, timeout_ms: int = 5000, limit: int = 16) -> Snapshot:
+        return await self._client._call("sessions.inspect", {"sessionId": session_id, "timeoutMs": timeout_ms, "limit": limit})
+
     async def control(self, target: Mapping[str, Any], command: Mapping[str, Any], *,
                       idempotency_key: str | None = None) -> OperationHandle:
-        if command.get("action") not in {"pause", "resume"}:
+        if command.get("action") not in {"pause", "resume", "stop"}:
             raise unsupported(str(command.get("action", "session control")))
         return OperationHandle(self._client, await self._client._mutate(
             "sessions.control", {"target": to_wire(target), "command": to_wire(command)}, idempotency_key))
@@ -95,11 +105,28 @@ class _Sessions:
         return OperationHandle(self._client, await self._client._mutate(
             "sessions.reconcile", {"target": to_wire(target), "evidence": to_wire(evidence)}, idempotency_key))
 
-    async def open(self, *args: Any, **kwargs: Any) -> OperationHandle:
-        raise unsupported("sessions.open")
+    async def open(self, spec: Mapping[str, Any], *, idempotency_key: str | None = None) -> Snapshot:
+        await self._client.start()
+        capability = self._client.info.capabilities.get("session_lifecycle", {})
+        if not isinstance(capability, Mapping) or capability.get("open") is not True:
+            raise unsupported("sessions.open")
+        return await self._client._mutate("sessions.open", {"spec": to_wire(spec)}, idempotency_key)
 
-    async def fork(self, *args: Any, **kwargs: Any) -> OperationHandle:
-        raise unsupported("sessions.fork")
+    async def fork(self, target: Mapping[str, Any], snapshot_ref: str | None = None, *, idempotency_key: str | None = None) -> Snapshot:
+        await self._client.start()
+        capability = self._client.info.capabilities.get("session_lifecycle", {})
+        if not isinstance(capability, Mapping) or capability.get("fork") is not True:
+            raise unsupported("sessions.fork")
+        return await self._client._mutate("sessions.fork", {"target": to_wire(target), "snapshotRef": snapshot_ref}, idempotency_key)
+
+    async def compact(self, target: Mapping[str, Any], *, idempotency_key: str | None = None) -> OperationHandle:
+        return OperationHandle(self._client, await self._client._mutate("sessions.compact", {"target": to_wire(target)}, idempotency_key))
+
+    async def rotate(self, target: Mapping[str, Any], *, idempotency_key: str | None = None) -> OperationHandle:
+        return OperationHandle(self._client, await self._client._mutate("sessions.rotate", {"target": to_wire(target)}, idempotency_key))
+
+    async def stop(self, target: Mapping[str, Any], *, mode: str = "drain", idempotency_key: str | None = None) -> OperationHandle:
+        return await self.control(target, {"action": "stop", "mode": mode}, idempotency_key=idempotency_key)
 
 
 class _Scheduler:
@@ -184,6 +211,85 @@ class _Usage:
         return await self._client._call("usage.getRecord", {"usageRecordId": usage_record_id})
 
 
+class _Costs:
+    def __init__(self, client: "Orchestrator"):
+        self._client = client
+
+    async def get(self, task_id: str | None = None, *, scope: str = "direct") -> Snapshot:
+        return await self._client._call("costs.get", {"scope": scope, **({"taskId": task_id} if task_id else {})})
+
+    async def record_overhead(self, record: Mapping[str, Any], *, idempotency_key: str | None = None) -> OperationHandle:
+        return OperationHandle(self._client, await self._client._mutate("costs.recordOverhead", to_wire(record), idempotency_key))
+
+
+class _Context:
+    def __init__(self, client: "Orchestrator"):
+        self._client = client
+
+    async def estimate(self, assumptions: Mapping[str, Any]) -> Snapshot:
+        return await self._client._call("context.estimate", to_wire(assumptions))
+
+
+class Stores:
+    def __init__(self, client):
+        self._client = client
+
+    async def rollover(self, *, idempotency_key=None):
+        return await self._client._mutate("stores.rollover", {}, idempotency_key)
+
+    async def import_backup(self, backup_id, *, idempotency_key=None):
+        return await self._client._mutate("stores.import", {"backupId": backup_id}, idempotency_key)
+
+    async def rollover_status(self, rollover_id):
+        return await self._client._call("rollovers.get", {"rolloverId": rollover_id})
+
+
+class Archives:
+    def __init__(self, client):
+        self._client = client
+
+    async def lookup(self, *, store_id, method, scope, idempotency_key, request_digest=None):
+        return await self._client._call("archives.lookup", {"storeId": store_id, "method": method, "scope": scope,
+            "idempotencyKey": idempotency_key, **({"requestDigest": request_digest} if request_digest is not None else {})})
+
+    async def read_artifact(self, *, store_id, artifact_ref, max_bytes=65536):
+        return await self._client._call("archives.readArtifact", {"storeId": store_id, "artifactRef": artifact_ref, "maxBytes": max_bytes})
+
+
+class Storage:
+    def __init__(self, client):
+        self._client = client
+
+    async def backup(self, *, idempotency_key=None):
+        return await self._client._mutate("storage.backup", {}, idempotency_key)
+
+    async def status(self):
+        return await self._client._call("storage.status", {})
+
+    async def configure(self, policy, *, idempotency_key=None):
+        return OperationHandle(self._client, await self._client._mutate("storage.configure", {"policy": to_wire(policy)}, idempotency_key))
+
+    async def collect(self, *, idempotency_key=None):
+        return OperationHandle(self._client, await self._client._mutate("storage.gc", {}, idempotency_key))
+
+    async def pin(self, ref, reason, *, idempotency_key=None):
+        return OperationHandle(self._client, await self._client._mutate("storage.pin", {"ref": ref, "reason": reason}, idempotency_key))
+
+    async def unpin(self, ref, *, idempotency_key=None):
+        return OperationHandle(self._client, await self._client._mutate("storage.unpin", {"ref": ref}, idempotency_key))
+
+
+class State:
+    def __init__(self, client):
+        self._client = client
+
+    async def snapshot(self, *, snapshot_id=None, offset=0, limit=64):
+        return await self._client._call("state.snapshot", {"offset": offset, "limit": limit, **({"snapshotId": snapshot_id} if snapshot_id is not None else {})})
+
+    async def release_snapshot(self, snapshot_id):
+        return await self._client._call("state.releaseSnapshot", {"snapshotId": snapshot_id})
+
+
 class Orchestrator:
     def __init__(self, *, engine_command: Sequence[str] | None = None, socket_path: str | None = None,
                  close_timeout: float = 30.0, request_timeout: float = 30.0,
@@ -200,6 +306,11 @@ class Orchestrator:
         self._closed = False
         self._shutdown_operation_id: str | None = None
         self.info: Snapshot | None = None
+        self._identities: dict[tuple[str, str, str], dict[str, Any]] = {}
+        self.stores = Stores(self)
+        self.archives = Archives(self)
+        self.storage = Storage(self)
+        self.state = State(self)
         self.tasks = _Tasks(self)
         self.sessions = _Sessions(self)
         self.scheduler = _Scheduler(self)
@@ -207,6 +318,8 @@ class Orchestrator:
         self.operations = _Operations(self)
         self.approvals = _Approvals(self)
         self.usage = _Usage(self)
+        self.costs = _Costs(self)
+        self.context = _Context(self)
 
     @classmethod
     def local(cls, *, engine_command: Sequence[str], **options: Any) -> "Orchestrator":
@@ -277,9 +390,11 @@ class Orchestrator:
                 result = await self._transport.request("initialize", {
                     "protocolVersion": PROTOCOL_VERSION, "sdkVersion": SDK_VERSION})
                 if not isinstance(result, dict) or result.get("protocolVersion") != PROTOCOL_VERSION:
-                    raise OrchestrationError("PROTOCOL_MISMATCH", "Engine protocol must be 1.0")
+                    raise OrchestrationError("PROTOCOL_MISMATCH", "Engine protocol must be 2.0")
                 if not all(isinstance(result.get(key), str) and result[key] for key in ("instanceId", "storeId")):
                     raise OrchestrationError("PROTOCOL_ERROR", "Handshake is missing instance/store identity")
+                if type(result.get("capabilities", {}).get("storeNamespaces", {}).get("version")) is not int or result["capabilities"]["storeNamespaces"]["version"] != 1:
+                    raise OrchestrationError("UNSUPPORTED_CAPABILITY", "Host must support namespace-bound writes")
                 self.info = snapshot(result)
             except BaseException as startup_error:
                 cleanup = asyncio.create_task(self._cleanup_failed_start(opening),
@@ -321,14 +436,14 @@ class Orchestrator:
             raise OrchestrationError("PROTOCOL_ERROR", f"{method} returned a non-object result")
         return snapshot(result)
 
-    async def _mutate(self, method: str, params: dict[str, Any], key: str | None) -> Snapshot:
+    async def _mutate(self, method: str, params: dict[str, Any], key: str | None, *, retry_identity: dict[str, Any] | None = None) -> Snapshot:
         if key is not None and (not isinstance(key, str) or not key):
             raise OrchestrationError("VALIDATION_ERROR", "idempotency_key must be a nonempty string")
         key = key or str(uuid4())
         scope = "local"
         if method in {"tasks.resume", "tasks.cancel"}:
             scope = params.get("taskId")
-        elif method in {"sessions.control", "sessions.reconcile"}:
+        elif method in {"sessions.control", "sessions.reconcile", "sessions.fork", "sessions.compact", "sessions.rotate"}:
             target = params.get("target")
             scope = target.get("sessionId") if isinstance(target, Mapping) else None
         elif method == "messages.send":
@@ -338,21 +453,54 @@ class Orchestrator:
             scope = params.get("approvalId")
         elif method == "scheduler.resolveConflict":
             scope = params.get("conflictId")
+        elif method == "costs.recordOverhead":
+            scope = "host"
+        await self.start()
+        identity_key = (method, scope, key)
+        identity = dict(retry_identity) if retry_identity is not None else self._identities.get(identity_key) or {
+            "storeId": self.info.store_id, "method": method, "scope": scope,
+            "idempotencyKey": key, "digestVersion": 1, "requestDigest": request_digest(method, params)}
+        self._identities[identity_key] = dict(identity)
+        key = identity["idempotencyKey"]
         try:
-            result = await self._call(method, {**params, "idempotencyKey": key})
-            # Task snapshots do not carry the key on the wire; keep it on the receipt.
-            return Snapshot({"method": method, "scope": scope, **result, "idempotency_key": key})
+            if (identity["method"] != method or identity["scope"] != scope or identity["digestVersion"] != 1
+                    or identity["requestDigest"] != request_digest(method, params)):
+                raise OrchestrationError("IDEMPOTENCY_CONFLICT", "Retry identity or payload changed")
+            result = await self._call(method, {**params, "idempotencyKey": key,
+                "expectedStoreId": identity["storeId"], "requestDigest": identity["requestDigest"]})
+            if method in {"stores.rollover", "stores.import"} and result.status == "completed":
+                await self.refresh()
+            # Keep the original immutable identity on every receipt.
+            return Snapshot({"method": method, "scope": scope, **result, "idempotency_key": key, "retry_identity": snapshot(identity)})
         except OrchestrationError as error:
+            error.retry_identity = dict(identity)
+            if isinstance(error, OrchestrationError):
+                error.data["retryIdentity"] = dict(identity)
             error.idempotency_key = key
             error.method = method
             error.scope = scope
             raise
         except asyncio.CancelledError as error:
             # Preserve cancellation semantics while retaining recovery information.
+            error.retry_identity = dict(identity)
+            if isinstance(error, OrchestrationError):
+                error.data["retryIdentity"] = dict(identity)
             error.idempotency_key = key
             error.method = method
             error.scope = scope
             raise
+
+    async def refresh(self) -> Snapshot:
+        info = await self._call("initialize", {"protocolVersion": PROTOCOL_VERSION, "sdkVersion": SDK_VERSION})
+        if info.protocol_version != PROTOCOL_VERSION or info.capabilities.store_namespaces.version != 1:
+            raise OrchestrationError("PROTOCOL_MISMATCH", "Refreshed host lacks namespace support")
+        self.info = info
+        return info
+
+    async def retry(self, identity: Mapping[str, Any], params: Mapping[str, Any]) -> Snapshot:
+        """Retry the exact original wire payload without rebinding its store."""
+        wire = to_wire(dict(identity))
+        return await self._mutate(wire["method"], dict(params), wire["idempotencyKey"], retry_identity=wire)
 
     async def _wait(self, get_snapshot: Any, terminal: set[str], timeout: float | None) -> Snapshot:
         if timeout is not None:
@@ -425,7 +573,7 @@ class Orchestrator:
                 raise OrchestrationError("VALIDATION_ERROR", "close mode must be drain or interrupt")
             duration = self._close_timeout if timeout is None else _duration(timeout, "timeout", zero=True)
             operation_id = operation_id or self._shutdown_operation_id
-            params: dict[str, Any] = {"mode": mode, "timeoutMs": math.ceil(duration * 1000)}
+            params: dict[str, Any] = {"mode": mode, "timeoutMs": math.ceil(duration * 1000), "expectedStoreId": self.info.store_id}
             method = "host.shutdown"
             if operation_id is not None:
                 method = "host.shutdown.continue"
@@ -436,6 +584,11 @@ class Orchestrator:
             except ShutdownIncomplete as error:
                 error.client = self
                 self._shutdown_operation_id = error.operation_id
+                raise
+            except OrchestrationError as error:
+                if (error.code == "STORAGE_DEGRADED_CLOSED" and error.data.get("status") == "closed"
+                        and error.data.get("durableReceipt") is False):
+                    await self._disconnect_locked(terminate_owned=True)
                 raise
             if result.status != "closed":
                 raise OrchestrationError("PROTOCOL_ERROR", "Host did not confirm completed shutdown")

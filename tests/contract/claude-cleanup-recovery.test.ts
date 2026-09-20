@@ -10,7 +10,7 @@ import {
   createClaudeAdapter,
   type ClaudeQueryRequest,
 } from '../../packages/adapter-claude/src/index.ts';
-import { createEngine, createFakeAdapter } from '../../packages/engine/src/index.ts';
+import { createEngine, createFakeAdapter } from '../fixtures/engine.ts';
 import { startUnixHost } from '../../packages/cli/src/host.ts';
 import {
   connectOrchestrator,

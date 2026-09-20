@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { test, type TestContext } from 'node:test';
 import { createClaudeAdapter } from '../../packages/adapter-claude/src/index.ts';
-import { createEngine, createFakeAdapter } from '../../packages/engine/src/index.ts';
+import { createEngine, createFakeAdapter } from '../fixtures/engine.ts';
 import type {
   Engine,
   EventPage,

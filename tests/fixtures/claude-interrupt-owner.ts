@@ -1,5 +1,5 @@
 import { createInterface } from 'node:readline';
-import { createEngine } from '../../packages/engine/src/index.ts';
+import { createEngine } from './engine.ts';
 import { createClaudeAdapter } from '../../packages/adapter-claude/src/index.ts';
 import { startUnixHost } from '../../packages/cli/src/host.ts';
 import { offlineInterruptQuery } from './claude-interrupt-runtime.ts';

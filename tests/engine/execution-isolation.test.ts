@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { once } from 'node:events';
 import { DatabaseSync } from 'node:sqlite';
-import { createEngine } from '../../packages/engine/src/index.ts';
+import { createEngine } from '../fixtures/engine.ts';
 import type {
   Engine,
   EngineClock,
@@ -551,7 +551,7 @@ test('A2-09 schema1 upgrade creates verified recovery backup and conservatively 
     await upgraded.close();
     upgraded = undefined;
     const future = new DatabaseSync(join(f.config.stateDir, 'store.sqlite'));
-    future.prepare('UPDATE metadata SET value=? WHERE key=?').run('3', 'schemaVersion');
+    future.prepare('UPDATE metadata SET value=? WHERE key=?').run('999', 'schemaVersion');
     future.close();
     await assert.rejects(createEngine(f.config), { code: 'SCHEMA_MISMATCH' });
   } finally {

@@ -75,7 +75,7 @@ test(
     );
     const client = await connectOrchestrator({ socketPath });
     t.after(() => client.close());
-    assert.equal(client.info.schemaVersion, 2);
+    assert.equal(client.info.schemaVersion, 3);
     const task = await client.tasks.create(
       {
         goal: 'offline execution-isolation wire fixture',

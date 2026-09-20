@@ -1,3 +1,4 @@
+import { MUTATIONS } from '../../packages/engine/src/identity.ts';
 import test, { type TestContext } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
@@ -54,6 +55,7 @@ async function eventually<T>(read: () => Promise<T>, ready: (value: T) => boolea
 class Wire {
   private output: Writable;
   private sequence = 0;
+  private storeId?: string;
   private buffer = '';
   private pending = new Map<
     number,
@@ -83,6 +85,7 @@ class Wire {
     });
   }
   call<T>(method: string, params: Record<string, unknown> = {}): Promise<T> {
+    if (MUTATIONS.has(method)) params = { expectedStoreId: this.storeId, ...params };
     const id = ++this.sequence;
     return new Promise<T>((resolve, reject) => {
       const timer = setTimeout(() => {
@@ -92,6 +95,7 @@ class Wire {
       this.pending.set(id, {
         resolve: (value) => {
           clearTimeout(timer);
+          if (method === 'initialize') this.storeId = (value as any).storeId;
           resolve(value as T);
         },
         reject: (error) => {
@@ -172,7 +176,7 @@ async function stdioFixture(t: TestContext) {
   const child = await fixture(t, 'stdio');
   const wire = new Wire(child.proc.stdin, child.proc.stdout);
   const info = await wire.call<{ capabilities: Record<string, unknown> }>('initialize', {
-    protocolVersion: '1.0',
+    protocolVersion: '2.0',
     sdkVersion: 'lifecycle-wire-test',
   });
   assert.deepEqual(info.capabilities.lifecycle, lifecycleCapability);
@@ -316,7 +320,8 @@ test(
         timeoutMs: 2000,
       },
     );
-    assert.deepEqual(result, { status: 'closed', operationId });
+    assert.equal((result as any).status, 'closed');
+    assert.equal((result as any).operationId, operationId);
     await f.exited;
     assert.equal(f.proc.exitCode, 0, f.stderr());
   },
@@ -438,7 +443,7 @@ for (const stalledAt of ['initialize', 'turn-start']) {
           stderr += chunk;
         });
         const wire = new Wire(proc.stdin, proc.stdout);
-        await wire.call('initialize', { protocolVersion: '1.0', sdkVersion: 'owner-eof-fixture' });
+        await wire.call('initialize', { protocolVersion: '2.0', sdkVersion: 'owner-eof-fixture' });
         return { proc, wire, exited, stderr: () => stderr };
       };
       const owner = await startOwner();

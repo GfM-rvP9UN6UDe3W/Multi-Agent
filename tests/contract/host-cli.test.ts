@@ -128,14 +128,14 @@ test(
     await client.close();
     const online = await command(['doctor', '--socket', socketPath]);
     assert.equal(online.code, 0, online.stderr);
-    assert.equal(JSON.parse(online.stdout).protocolVersion, '1.0');
+    assert.equal(JSON.parse(online.stdout).protocolVersion, '2.0');
     assert.equal(stdout, '', 'Socket host must keep stdout clean');
   },
 );
 
 test('CLI rejects unsupported commands, implicit fake, arbitrary adapter module and unknown flags', async (t) => {
   const { config, configPath } = await fixture(t);
-  const unknown = await command(['attach']);
+  const unknown = await command(['not-a-command']);
   assert.equal(unknown.code, 1);
   assert.match(unknown.stderr, /UNSUPPORTED_COMMAND/);
   assert.equal(unknown.stdout, '');
@@ -178,4 +178,131 @@ test('doctor rejects limits and deadlines that the engine cannot accept', async 
     assert.equal(result.code, 1, JSON.stringify(invalid));
     assert.match(result.stderr, /INVALID_CONFIG/);
   }
+});
+
+test(
+  'AC-F14 CLI run/attach/control preserve approval and exact targets on a shared host',
+  { timeout: 15000 },
+  async (t) => {
+    const { root, configPath } = await fixture(t);
+    const socketPath = join(root, 'control.sock');
+    const proc = spawn(process.execPath, [
+      cli,
+      'host',
+      '--config',
+      configPath,
+      '--socket',
+      socketPath,
+    ]);
+    t.after(() => stop(proc));
+    await new Promise<void>((resolve, reject) => {
+      proc.stderr.on('data', (b) => {
+        if (String(b).includes('listening on')) resolve();
+      });
+      proc.once('exit', (code) => reject(new Error(`host ${code}`)));
+    });
+    const taskPath = join(root, 'run.json');
+    await writeFile(
+      taskPath,
+      JSON.stringify({
+        goal: 'run fixture',
+        runtime: { provider: 'fake', model: 'fake-model' },
+        acceptance: { mode: 'human', criteria: ['review'] },
+      }),
+    );
+    const run = await command([
+      'run',
+      '--socket',
+      socketPath,
+      '--task',
+      taskPath,
+      '--idempotency-key',
+      'run-K',
+      '--timeout-ms',
+      '3000',
+    ]);
+    assert.equal(run.code, 0, run.stderr);
+    const records = run.stdout
+      .trim()
+      .split('\n')
+      .map((line) => JSON.parse(line));
+    const created = records.find((row) => row.kind === 'task').task;
+    assert.equal(records.at(-1).task.status, 'waiting_approval');
+    const attached = await command([
+      'attach',
+      '--socket',
+      socketPath,
+      '--task',
+      created.id,
+      '--timeout-ms',
+      '3000',
+    ]);
+    assert.equal(attached.code, 0, attached.stderr);
+    assert.match(attached.stdout, /waiting_approval/);
+    const client = await connectOrchestrator({ socketPath });
+    try {
+      const task = await client.tasks.get(created.id),
+        session = await client.sessions.get(task.sessionId);
+      const target = {
+        sessionId: session.id,
+        expectedGeneration: session.generation,
+        expectedRevision: session.revision,
+        expectedDispatchId: session.activeDispatchId,
+        expectedState: session.status,
+      };
+      const targetPath = join(root, 'target.json');
+      await writeFile(targetPath, JSON.stringify(target));
+      const control = await command([
+        'control',
+        '--socket',
+        socketPath,
+        '--target',
+        targetPath,
+        '--action',
+        'pause',
+        '--mode',
+        'drain',
+        '--idempotency-key',
+        'pause-K',
+      ]);
+      assert.equal(control.code, 0, control.stderr);
+      assert.equal((await client.sessions.get(task.sessionId)).status, 'paused');
+      assert.equal((await client.tasks.get(created.id)).status, 'waiting_approval');
+      const stale = await command([
+        'control',
+        '--socket',
+        socketPath,
+        '--target',
+        targetPath,
+        '--action',
+        'resume',
+        '--idempotency-key',
+        'stale-K',
+      ]);
+      assert.equal(stale.code, 1);
+      assert.match(stale.stderr, /STALE_TARGET/);
+      assert.equal((await client.approvals.get(task.approvalId!)).status, 'pending');
+    } finally {
+      await client.close();
+    }
+  },
+);
+
+test('AC-F14 doctor checks actual offline dependencies without opening state or calling models', async (t) => {
+  const { config, configPath } = await fixture(t);
+  const good = await command(['doctor', '--config', configPath]);
+  assert.equal(good.code, 0, good.stderr);
+  assert.equal(JSON.parse(good.stdout).mode, 'offline-preflight');
+  assert.ok(JSON.parse(good.stdout).checks.some((row: any) => row.name === 'sqlite' && row.ok));
+  await writeFile(
+    configPath,
+    JSON.stringify({
+      ...config,
+      providers: { codex: { model: 'fixture', command: '/nonexistent/agent-orch-codex' } },
+    }),
+  );
+  const missing = await command(['doctor', '--config', configPath]);
+  assert.equal(missing.code, 1);
+  assert.match(missing.stdout, /RUNTIME_UNAVAILABLE/);
+  assert.deepEqual(await readdir(config.stateDir), []);
 });

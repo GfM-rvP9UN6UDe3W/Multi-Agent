@@ -5,7 +5,7 @@ import { once } from 'node:events';
 import { mkdtemp, mkdir, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { createEngine, createFakeAdapter } from '../../packages/engine/src/index.ts';
+import { createEngine, createFakeAdapter } from '../fixtures/engine.ts';
 import type { TaskSnapshot, RuntimeAdapter, EventPage } from '../../packages/engine/src/types.ts';
 
 test('AC08 SIGKILL releases owner lock but cannot replay an uncertain dispatch', async () => {

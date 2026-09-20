@@ -6,7 +6,7 @@ import { mkdir, mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createClaudeAdapter } from '../../packages/adapter-claude/src/index.ts';
-import { createEngine } from '../../packages/engine/src/index.ts';
+import { createEngine } from '../fixtures/engine.ts';
 import type {
   ExecutionEvidence,
   RuntimeEvent,

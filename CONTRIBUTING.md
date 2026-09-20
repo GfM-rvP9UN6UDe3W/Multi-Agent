@@ -19,4 +19,4 @@ Node executes TypeScript source through type stripping, and tests use `node:test
 
 Write repository documentation, examples, and source comments in English. Preserve intentional multilingual test data where it verifies Unicode behavior.
 
-No npm/PyPI package is published. Publication and license selection require separate decisions and are not part of ordinary development tasks.
+The project is licensed under MIT. Third-party dependencies retain their own licenses. No npm/PyPI package is published; publication requires separate authorization and is not part of ordinary development tasks.

@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
-import { createEngine, createFakeAdapter } from '../../packages/engine/src/index.ts';
+import { createEngine, createFakeAdapter } from '../fixtures/engine.ts';
 import type {
   RuntimeAdapter,
   RuntimeCapabilities,

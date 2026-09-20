@@ -12,6 +12,10 @@ import { randomUUID } from 'node:crypto';
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { observeRuntimeStop } from '../../engine/src/stop-observation.ts';
 import { buildClaudeOptions, copyClaudeOptions, validateClaudeOptions } from './options.ts';
+import { createClaudeMcpServer } from './mcp.ts';
+import { inspectClaudeSession } from './inspection.ts';
+export { createClaudeMcpServer, type ClaudeMcpDependencies } from './mcp.ts';
+export { inspectClaudeSession, type ClaudeInspectionDependencies } from './inspection.ts';
 import type {
   ClaudeAdapterConfig,
   ClaudeHostOptions,
@@ -61,7 +65,19 @@ function nativeTerminal(message: RecordValue, sessionId: string): RuntimeTermina
       outcome: 'failed',
     };
   return typeof message.result === 'string'
-    ? { type: 'result', text: message.result, providerSessionId: sessionId }
+    ? {
+        type: 'result',
+        text: message.result,
+        providerSessionId: sessionId,
+        ...([
+          'input_tokens',
+          'cache_read_input_tokens',
+          'cache_creation_input_tokens',
+          'output_tokens',
+        ].every((key) => nonnegativeInt(record(message.usage)?.[key]) !== null)
+          ? { usageComplete: true }
+          : {}),
+      }
     : { type: 'error', message: 'Claude success result lacks text', outcome: 'unknown' };
 }
 
@@ -157,8 +173,17 @@ async function withinDeadline<T>(
 }
 
 async function loadDefaultQuery(): Promise<ClaudeQueryFactory> {
-  const sdkName = '@anthropic-ai/claude-agent-sdk';
-  const sdk = (await import(sdkName)) as { query?: ClaudeQueryFactory };
+  let sdk: { query?: ClaudeQueryFactory };
+  try {
+    sdk = (await import('@anthropic-ai/claude-agent-sdk')) as unknown as {
+      query?: ClaudeQueryFactory;
+    };
+  } catch (cause) {
+    throw new Error(
+      'Claude query requires @anthropic-ai/claude-agent-sdk, or a host-provided config.query',
+      { cause },
+    );
+  }
   if (typeof sdk.query !== 'function') throw new Error('Claude Agent SDK query() is unavailable');
   return sdk.query;
 }
@@ -172,7 +197,13 @@ export function createClaudeAdapter<Extra extends object = object>(
       code: 'INVALID_ADAPTER_CONFIG',
     });
   if (config.options !== undefined) validateClaudeOptions(config.options);
-  for (const callback of [config.extendOptions, config.observeExecutionStop])
+  for (const callback of [
+    config.query,
+    config.extendOptions,
+    config.observeExecutionStop,
+    config.createMcpServer,
+    config.inspectSession,
+  ])
     if (callback !== undefined && typeof callback !== 'function')
       throw Object.assign(new Error('Invalid Claude host callback'), {
         code: 'INVALID_ADAPTER_CONFIG',
@@ -344,9 +375,10 @@ export function createClaudeAdapter<Extra extends object = object>(
       resume: true,
       interrupt: true,
       permissionProfiles: [profile],
-      fork: false,
-      compact: false,
-      toolBridge: false,
+      fork: true,
+      compact: true,
+      toolBridge: true,
+      inspect: true,
       executionBudget: {
         version: 2,
         acceptanceCapMs: config.requestTimeoutMs ?? null,
@@ -357,6 +389,19 @@ export function createClaudeAdapter<Extra extends object = object>(
         terminalCoversExecution: coversExecution || config.observeExecutionStop !== undefined,
       },
     }),
+    async inspect(input) {
+      if (config.query && !config.inspectSession)
+        return {
+          providerSessionId: input.providerSessionId,
+          execution: 'unknown',
+          records: [],
+          truncated: false,
+          status: 'unavailable',
+          detail:
+            'Host-provided query requires a matching config.inspectSession reader; no default SDK was loaded',
+        };
+      return (config.inspectSession ?? inspectClaudeSession)(input);
+    },
     async close(): Promise<void> {
       closed = true;
       const results = await Promise.all([...active].map(cleanup));
@@ -367,6 +412,8 @@ export function createClaudeAdapter<Extra extends object = object>(
       const startedAt = performance.now();
       let sequence = 0;
       let sessionId: string | null = input.providerSessionId;
+      let nativeCheckpoint: string | undefined;
+      let compactBoundary: Json | undefined;
       let matchedTerminal: RuntimeTerminalEvent | null = null;
       const report = (
         source: ExecutionEvidence['source'],
@@ -384,6 +431,7 @@ export function createClaudeAdapter<Extra extends object = object>(
           generation: input.generation ?? 1,
           provider: 'claude',
           providerSessionId: sessionId ?? input.providerSessionId,
+          ...(nativeCheckpoint ? { providerTurnId: nativeCheckpoint } : {}),
           source,
           observedAt: new Date().toISOString(),
           localResources,
@@ -432,6 +480,7 @@ export function createClaudeAdapter<Extra extends object = object>(
       }
       const controller = new AbortController();
       let submitted = false;
+      let toolsRevoked = false;
       let turnStarted = false;
       let interruptSent = false;
       let interruptRequestedAt: number | undefined;
@@ -468,7 +517,10 @@ export function createClaudeAdapter<Extra extends object = object>(
       async function* prompt(): AsyncIterable<ClaudeUserMessage> {
         yield {
           type: 'user',
-          message: { role: 'user', content: input.prompt },
+          message: {
+            role: 'user',
+            content: input.nativeAction === 'compact' ? '/compact' : input.prompt,
+          },
           parent_tool_use_id: null,
           session_id: input.providerSessionId ?? '',
           uuid: randomUUID(),
@@ -481,6 +533,13 @@ export function createClaudeAdapter<Extra extends object = object>(
           model: input.model,
           cwd: input.workspace,
           ...(input.providerSessionId ? { resume: input.providerSessionId } : {}),
+          ...(!input.providerSessionId && input.forkSource
+            ? {
+                resume: input.forkSource.providerSessionId,
+                forkSession: true,
+                resumeSessionAt: input.forkSource.nativeCheckpoint,
+              }
+            : {}),
           settingSources: [],
           tools: ['Read', 'Glob', 'Grep'],
           allowedTools: ['Read', 'Glob', 'Grep'],
@@ -599,7 +658,78 @@ export function createClaudeAdapter<Extra extends object = object>(
           validateClaudeOptions(extension);
           options = { ...options, ...extension };
         }
+        if (input.requestPermission) {
+          const hostPermission = (options as Record<string, unknown>).canUseTool;
+          options = {
+            ...options,
+            canUseTool: async (
+              name: string,
+              args: Record<string, unknown>,
+              native: Record<string, unknown>,
+            ) => {
+              const deny = {
+                behavior: 'deny',
+                message: 'Permission was not granted for this exact runtime action',
+              };
+              if (toolsRevoked || input.signal.aborted || typeof native.toolUseID !== 'string')
+                return deny;
+              if (typeof hostPermission === 'function') {
+                const answer = await hostPermission(name, args, native);
+                if (record(answer)?.behavior !== 'allow') return answer;
+              }
+              const allow = await input.requestPermission!({
+                requestId: native.toolUseID,
+                toolName: name,
+                permission: args as Json,
+                providerSessionId: sessionId ?? input.providerSessionId,
+                ...(nativeCheckpoint ? { providerTurnId: nativeCheckpoint } : {}),
+              });
+              return allow && !toolsRevoked && !input.signal.aborted
+                ? { behavior: 'allow', updatedInput: args }
+                : deny;
+            },
+          };
+        }
+        if (input.orchestrationTools) {
+          if (config.query && !config.createMcpServer)
+            throw new Error(
+              'Host-provided query requires matching config.createMcpServer when orchestration tools are enabled; no default SDK was loaded',
+            );
+          const host = options as Record<string, unknown>;
+          if (record(host.mcpServers)?.agent_orch !== undefined)
+            throw new Error('The agent_orch MCP server name is adapter-owned');
+          const bound = input.orchestrationTools;
+          const server = await withinDeadline(
+            Promise.resolve().then(() =>
+              (config.createMcpServer ?? createClaudeMcpServer)({
+                definitions: bound.definitions,
+                async call(name, args) {
+                  if (toolsRevoked || input.signal.aborted)
+                    throw Object.assign(new Error('Runtime tool binding has expired'), {
+                      code: 'STALE_GRANT',
+                    });
+                  return bound.call(name, args);
+                },
+              }),
+            ),
+            remainingAcceptance,
+            controller.signal,
+            'Claude MCP preparation',
+            !input.executionBudget,
+          );
+          options = { ...options, mcpServers: { ...record(host.mcpServers), agent_orch: server } };
+        }
         request.options = buildClaudeOptions(input, options, request.options);
+        if (input.orchestrationTools) {
+          request.options.allowedTools = [
+            ...new Set([
+              ...request.options.allowedTools,
+              ...input.orchestrationTools.definitions.map(
+                (tool) => `mcp__agent_orch__${tool.name}`,
+              ),
+            ]),
+          ];
+        }
         const factory =
           config.query ??
           (await withinDeadline(
@@ -685,6 +815,8 @@ export function createClaudeAdapter<Extra extends object = object>(
                 ? message.session_id
                 : null;
             if (observedId && !accepted && (!sessionId || observedId === sessionId)) {
+              if (observedId === input.forkSource?.providerSessionId && !input.providerSessionId)
+                throw new Error('Claude fork returned its source session identity');
               sessionId = observedId;
               accepted = true;
               yield { type: 'accepted', providerSessionId: observedId };
@@ -695,7 +827,20 @@ export function createClaudeAdapter<Extra extends object = object>(
               (message.type === 'assistant' || message.type === 'stream_event')
             ) {
               turnStarted = true;
+              if (message.type === 'assistant' && typeof message.uuid === 'string')
+                nativeCheckpoint = message.uuid;
               requestInterrupt();
+            }
+            if (
+              observedId === sessionId &&
+              message.type === 'system' &&
+              message.subtype === 'compact_boundary'
+            ) {
+              compactBoundary = {
+                uuid: typeof message.uuid === 'string' ? message.uuid : null,
+                metadata: (record(message.compact_metadata) ?? {}) as Json,
+              };
+              if (typeof message.uuid === 'string') nativeCheckpoint = message.uuid;
             }
             if (message.type !== 'result') continue;
             terminal = true;
@@ -709,7 +854,24 @@ export function createClaudeAdapter<Extra extends object = object>(
               ];
             } else {
               captureUsage(message);
-              pending = [nativeTerminal(message, sessionId)];
+              let final = nativeTerminal(message, sessionId);
+              if (final.type === 'result') {
+                if (input.nativeAction === 'compact' && !compactBoundary)
+                  final = {
+                    type: 'error',
+                    outcome: 'unknown',
+                    message: 'Claude compaction lacks a native compact boundary',
+                  };
+                else
+                  final = {
+                    ...final,
+                    ...(nativeCheckpoint ? { nativeCheckpoint } : {}),
+                    ...(input.nativeAction === 'compact'
+                      ? { compacted: { kind: 'boundary', evidence: compactBoundary! } }
+                      : {}),
+                  };
+              }
+              pending = [final];
             }
             if (sessionId && observedId === sessionId) {
               matchedTerminal =
@@ -753,6 +915,7 @@ export function createClaudeAdapter<Extra extends object = object>(
                 },
               ];
       } finally {
+        toolsRevoked = true;
         closeInput();
         input.signal.removeEventListener('abort', onAbort);
         if (handle) {

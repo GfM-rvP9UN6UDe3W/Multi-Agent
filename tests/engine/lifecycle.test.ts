@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { spawn } from 'node:child_process';
 import { once } from 'node:events';
 import { DatabaseSync } from 'node:sqlite';
-import { createEngine } from '../../packages/engine/src/index.ts';
+import { createEngine } from '../fixtures/engine.ts';
 import type {
   Engine,
   EngineClock,

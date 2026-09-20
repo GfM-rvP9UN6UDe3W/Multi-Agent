@@ -9,6 +9,7 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { dirname, isAbsolute, join, sep } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import type {
   ExecutionEvidence,
   Json,
@@ -20,6 +21,9 @@ import type {
   RuntimeUsageEvent,
 } from '../../engine/src/types.ts';
 import { observeRuntimeStop } from '../../engine/src/stop-observation.ts';
+import { workspacePath } from '../../engine/src/verification.ts';
+import { createToolBridge } from '../../engine/src/tool-bridge.ts';
+import { TOOL_NAMES } from '../../engine/src/tools.ts';
 
 type Message = Record<string, unknown>;
 function record(value: unknown): Message | null {
@@ -167,6 +171,10 @@ class AppServerConnection {
       throw new Error('Codex app-server connection is closed');
     this.child.stdin.write(JSON.stringify({ method, params }) + '\n');
   }
+  respond(id: unknown, result: Message): void {
+    if (this.shutdownRequested || this.exitConfirmed) return;
+    this.child.stdin.write(JSON.stringify({ jsonrpc: '2.0', id, result }) + '\n');
+  }
   async request(method: string, params?: Message, onSent?: () => void): Promise<Message> {
     if (this.remainingRequestMs() <= 0) throw new Error('Codex app-server response timed out');
     const id = this.send(method, params);
@@ -176,7 +184,7 @@ class AppServerConnection {
       if (remaining <= 0) throw new Error('Codex app-server response timed out');
       const message = await this.queue.next(this.remainingRequestMs);
       if (!message) throw new Error(this.protocolError ?? 'Codex app-server disconnected');
-      if (message.id !== id) {
+      if (message.method !== undefined || message.id !== id) {
         if (this.deferred.length >= MessageQueue.limit)
           throw new Error('Codex app-server queue limit exceeded');
         this.deferred.push(message);
@@ -292,7 +300,7 @@ function isolatedEnv(configured?: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   };
 }
 
-function defensiveArgs(args: string[], workspace: string): string[] {
+function defensiveArgs(args: string[], workspace: string, bridge = false): string[] {
   const untrustedProjects: string[] = [];
   for (let path = workspace; ; path = dirname(path)) {
     untrustedProjects.push('-c', `projects.${JSON.stringify(path)}.trust_level="untrusted"`);
@@ -325,7 +333,11 @@ function defensiveArgs(args: string[], workspace: string): string[] {
     '-c',
     'agents.enabled=false',
     '-c',
-    'mcp_servers={}',
+    bridge
+      ? `mcp_servers={agent_orch={command=${JSON.stringify(process.execPath)},args=[${JSON.stringify(fileURLToPath(new URL('../../engine/src/tool-bridge.ts', import.meta.url)))}],env_vars=["AGENT_ORCH_BRIDGE_TOKEN","AGENT_ORCH_BRIDGE_SOCKET"],enabled_tools=${JSON.stringify(TOOL_NAMES)},required=true}}`
+      : 'mcp_servers={}',
+    '-c',
+    'shell_environment_policy.exclude=["AGENT_ORCH_BRIDGE_*"]',
     '-c',
     'project_root_markers=[]',
     ...untrustedProjects,
@@ -366,9 +378,10 @@ export function createCodexAdapter(config: CodexAdapterConfig = {}): RuntimeAdap
       resume: true,
       interrupt: true,
       permissionProfiles: [profile],
-      fork: false,
-      compact: false,
-      toolBridge: false,
+      fork: true,
+      compact: true,
+      toolBridge: true,
+      inspect: true,
       executionBudget: { version: 2, acceptanceCapMs, turnCapMs },
       executionEvidence: {
         version: 1,
@@ -376,6 +389,79 @@ export function createCodexAdapter(config: CodexAdapterConfig = {}): RuntimeAdap
       },
     }),
     hasActiveResources: (sessionId) => prune(sessionId),
+    async inspect(input) {
+      if (stopping) throw new Error('Codex adapter is closing');
+      const started = performance.now();
+      const child = spawn(
+        config.command ?? 'codex',
+        defensiveArgs(config.args ?? ['app-server'], realpathSync(input.workspace)),
+        {
+          cwd: input.workspace,
+          env: {
+            ...isolatedEnv(config.env),
+            CODEX_HOME: managedHome(input.stateDir),
+            CODEX_SQLITE_HOME: managedHome(input.stateDir),
+          },
+          stdio: ['pipe', 'pipe', 'pipe'],
+        },
+      );
+      const connection = new AppServerConnection(
+        child,
+        {
+          remainingRequestMs: () =>
+            input.signal.aborted ? 0 : input.timeoutMs - (performance.now() - started),
+          closeTimeoutMs: timeout(config.closeTimeoutMs, 1000),
+        },
+        () => {},
+      );
+      const connections = owned.get(input.sessionId) ?? new Set<AppServerConnection>();
+      connections.add(connection);
+      owned.set(input.sessionId, connections);
+      const abort = () => {
+        void connection.close();
+      };
+      input.signal.addEventListener('abort', abort, { once: true });
+      try {
+        await connection.request('initialize', {
+          clientInfo: { name: 'agent_orch_inspect', version: '0.1.0' },
+        });
+        connection.notify('initialized');
+        const response = await connection.request('thread/read', {
+          threadId: input.providerSessionId,
+          includeTurns: true,
+        });
+        const thread = record(response.thread);
+        if (thread?.id !== input.providerSessionId)
+          return {
+            status: 'mismatch',
+            providerSessionId: input.providerSessionId,
+            records: [],
+            truncated: false,
+            execution: 'unknown',
+            detail: 'Native identity does not match original binding',
+          };
+        const turns = Array.isArray(thread.turns) ? thread.turns : [];
+        const records: Json[] = [];
+        let bytes = 0;
+        for (const turn of turns.slice(-input.limit)) {
+          bytes += Buffer.byteLength(JSON.stringify(turn));
+          if (bytes > 65536) break;
+          records.push(turn as Json);
+        }
+        return {
+          status: 'found',
+          providerSessionId: input.providerSessionId,
+          records,
+          truncated: records.length < turns.length,
+          execution: 'unknown',
+          detail: 'Read-only native thread history; no resume or model request was issued',
+        };
+      } finally {
+        input.signal.removeEventListener('abort', abort);
+        await connection.close();
+        prune(input.sessionId);
+      }
+    },
     async close() {
       stopping = true;
       const results = await Promise.allSettled(
@@ -398,6 +484,7 @@ export function createCodexAdapter(config: CodexAdapterConfig = {}): RuntimeAdap
       let turnSent = false;
       let threadId = input.providerSessionId;
       let turnId: string | null = null;
+      let compactBoundary: Json | undefined;
       let observedTerminal: RuntimeTerminalEvent | undefined;
       let hostStopped = false;
       const report = (
@@ -490,26 +577,37 @@ export function createCodexAdapter(config: CodexAdapterConfig = {}): RuntimeAdap
       }
       let home: string;
       let workspace: string;
+      let writePaths: string[];
       let child: ChildProcessWithoutNullStreams;
+      let bridge: Awaited<ReturnType<typeof createToolBridge>> | undefined;
       try {
         if (remainingAcceptanceMs() <= 0)
           throw new Error('Codex execution budget expired before startup');
         home = managedHome(input.stateDir);
         workspace = realpathSync(input.workspace);
+        writePaths = input.writePaths?.map((path) => workspacePath(workspace, path)) ?? [workspace];
+        if (input.orchestrationTools)
+          bridge = await createToolBridge(input.orchestrationTools, input.signal);
         child = spawn(
           config.command ?? 'codex',
           [
-            ...defensiveArgs(config.args ?? ['app-server'], workspace),
+            ...defensiveArgs(config.args ?? ['app-server'], workspace, !!bridge),
             '-c',
             `web_search="${webSearch}"`,
           ],
           {
             cwd: workspace,
-            env: { ...isolatedEnv(config.env), CODEX_HOME: home, CODEX_SQLITE_HOME: home },
+            env: {
+              ...isolatedEnv(config.env),
+              CODEX_HOME: home,
+              CODEX_SQLITE_HOME: home,
+              ...bridge?.env,
+            },
             stdio: ['pipe', 'pipe', 'pipe'],
           },
         );
       } catch (error) {
+        await bridge?.close();
         yield preSubmission({ type: 'error', message: errorMessage(error), outcome: 'failed' });
         return;
       }
@@ -536,6 +634,8 @@ export function createCodexAdapter(config: CodexAdapterConfig = {}): RuntimeAdap
       let answer = '';
       let sawUsage = false;
       const seenUsage = new Set<string>();
+      let previousUsageTotal: Message | null = null;
+      const permissionRequests = new Set<string>();
       const requestInterrupt = (): void => {
         if (!input.signal.aborted || !threadId || !turnId || interruptSent) return;
         interruptSent = true;
@@ -552,13 +652,23 @@ export function createCodexAdapter(config: CodexAdapterConfig = {}): RuntimeAdap
         });
         connection.notify('initialized');
         const thread = await connection.request(
-          input.providerSessionId ? 'thread/resume' : 'thread/start',
+          input.providerSessionId
+            ? 'thread/resume'
+            : input.forkSource
+              ? 'thread/fork'
+              : 'thread/start',
           {
             ...(input.providerSessionId ? { threadId: input.providerSessionId } : {}),
+            ...(!input.providerSessionId && input.forkSource
+              ? {
+                  threadId: input.forkSource.providerSessionId,
+                  lastTurnId: input.forkSource.nativeCheckpoint,
+                }
+              : {}),
             model: input.model,
             cwd: input.workspace,
             sandbox: profile,
-            approvalPolicy: 'never',
+            approvalPolicy: input.requestPermission ? 'on-request' : 'never',
           },
         );
         threadId =
@@ -566,35 +676,43 @@ export function createCodexAdapter(config: CodexAdapterConfig = {}): RuntimeAdap
             ? (record(thread.thread)!.id as string)
             : null;
         if (!threadId) throw new Error('Codex thread response lacks id');
+        if (!input.providerSessionId && threadId === input.forkSource?.providerSessionId)
+          throw new Error('Codex fork returned the source thread identity');
         if (input.signal.aborted) {
           yield { type: 'interrupted' };
           return;
         }
-        const turn = await connection.request(
-          'turn/start',
-          {
-            threadId,
-            input: [{ type: 'text', text: input.prompt }],
-            cwd: input.workspace,
-            approvalPolicy: 'never',
-            sandboxPolicy:
-              profile === 'read-only'
-                ? { type: 'readOnly', networkAccess }
-                : {
-                    type: 'workspaceWrite',
-                    writableRoots: [workspace],
-                    networkAccess,
-                    excludeTmpdirEnvVar: true,
-                    excludeSlashTmp: true,
-                  },
-          },
-          () => {
-            turnSent = true;
-          },
-        );
+        const turn =
+          input.nativeAction === 'compact'
+            ? await connection.request('thread/compact/start', { threadId }, () => {
+                turnSent = true;
+              })
+            : await connection.request(
+                'turn/start',
+                {
+                  threadId,
+                  input: [{ type: 'text', text: input.prompt }],
+                  cwd: input.workspace,
+                  approvalPolicy: input.requestPermission ? 'on-request' : 'never',
+                  sandboxPolicy:
+                    profile === 'read-only'
+                      ? { type: 'readOnly', networkAccess }
+                      : {
+                          type: 'workspaceWrite',
+                          writableRoots: writePaths,
+                          networkAccess,
+                          excludeTmpdirEnvVar: true,
+                          excludeSlashTmp: true,
+                        },
+                },
+                () => {
+                  turnSent = true;
+                },
+              );
         turnId =
           typeof record(turn.turn)?.id === 'string' ? (record(turn.turn)!.id as string) : null;
-        if (!turnId) throw new Error('Codex turn response lacks id');
+        if (!turnId && input.nativeAction !== 'compact')
+          throw new Error('Codex turn response lacks id');
         yield { type: 'accepted', providerSessionId: threadId };
         requestInterrupt();
         while (true) {
@@ -604,10 +722,61 @@ export function createCodexAdapter(config: CodexAdapterConfig = {}): RuntimeAdap
               connection.failure() ?? 'Codex app-server disconnected before turn completion',
             );
           const params = record(message.params);
+          if (message.id !== undefined && typeof message.method === 'string') {
+            const method = message.method;
+            const key = `${typeof message.id}:${message.id}`;
+            if (permissionRequests.has(key)) continue;
+            permissionRequests.add(key);
+            const supported = [
+              'item/commandExecution/requestApproval',
+              'item/fileChange/requestApproval',
+            ].includes(method);
+            if (
+              !supported ||
+              !params ||
+              params.threadId !== threadId ||
+              params.turnId !== turnId ||
+              !turnId ||
+              !input.requestPermission ||
+              (method === 'item/fileChange/requestApproval' && profile !== 'workspace-write')
+            ) {
+              connection.respond(message.id, { decision: 'decline' });
+              continue;
+            }
+            const capturedTurn = turnId;
+            void input
+              .requestPermission({
+                requestId: `${params.approvalId ?? params.itemId ?? key}:${key}`,
+                toolName: method,
+                permission: params as Json,
+                providerSessionId: threadId,
+                providerTurnId: capturedTurn,
+              })
+              .then(
+                (allow) =>
+                  connection.respond(message.id, {
+                    decision:
+                      allow && !terminal && !input.signal.aborted && turnId === capturedTurn
+                        ? 'accept'
+                        : 'decline',
+                  }),
+                () => connection.respond(message.id, { decision: 'decline' }),
+              );
+            continue;
+          }
           if (!params || params.threadId !== threadId) continue;
+          if (input.nativeAction === 'compact' && !turnId && message.method === 'turn/started') {
+            const started = record(params.turn);
+            if (typeof started?.id === 'string') {
+              turnId = started.id;
+              requestInterrupt();
+            }
+          }
+          if (!turnId) continue;
           if (params.turnId && params.turnId !== turnId) continue;
           if (message.method === 'item/completed') {
             const item = record(params.item);
+            if (item?.type === 'contextCompaction') compactBoundary = item as Json;
             if (item?.type === 'agentMessage' && typeof item.text === 'string') answer = item.text;
           } else if (message.method === 'thread/tokenUsage/updated') {
             const tokenUsage = record(params.tokenUsage);
@@ -619,17 +788,35 @@ export function createCodexAdapter(config: CodexAdapterConfig = {}): RuntimeAdap
             seenUsage.add(signature);
             sawUsage = true;
             const totalCount = nonnegativeInt(total?.totalTokens);
+            const tokenDelta = (key: string): number | null => {
+              if (!total) return null;
+              if (!previousUsageTotal) return nonnegativeInt(last[key]);
+              const current = nonnegativeInt(total[key]),
+                previous = nonnegativeInt(previousUsageTotal[key]);
+              return current === null || previous === null || current < previous
+                ? null
+                : current - previous;
+            };
             const observation: RuntimeUsageEvent = {
               type: 'usage',
               usageId: `${turnId}:total:${totalCount ?? 'unknown'}:${seenUsage.size}`,
               usage: {
-                inputTokens: nonnegativeInt(last.inputTokens),
-                cachedInputTokens: nonnegativeInt(last.cachedInputTokens),
-                cacheWriteInputTokens: nonnegativeInt(last.cacheWriteInputTokens),
-                outputTokens: nonnegativeInt(last.outputTokens),
-                raw: last as Json,
+                inputTokens: tokenDelta('inputTokens'),
+                cachedInputTokens: tokenDelta('cachedInputTokens'),
+                cacheWriteInputTokens: tokenDelta('cacheWriteInputTokens'),
+                outputTokens: tokenDelta('outputTokens'),
+                raw: {
+                  ...(last as Record<string, Json>),
+                  _cumulative: total as Json,
+                  _basis: previousUsageTotal
+                    ? 'cumulative_delta'
+                    : total
+                      ? 'last_observed_request'
+                      : 'unknown_source_scope',
+                },
               },
             };
+            previousUsageTotal = total;
             input.reportUsage?.(observation);
             yield observation;
           } else if (message.method === 'turn/completed') {
@@ -647,11 +834,22 @@ export function createCodexAdapter(config: CodexAdapterConfig = {}): RuntimeAdap
                 outcome: 'failed',
               };
             else if (completed.status === 'completed')
-              observedTerminal = {
-                type: 'result',
-                text: answer,
-                providerSessionId: threadId,
-              };
+              observedTerminal =
+                input.nativeAction === 'compact' && !compactBoundary
+                  ? {
+                      type: 'error',
+                      outcome: 'unknown',
+                      message: 'Codex compaction lacks a completed contextCompaction item',
+                    }
+                  : {
+                      type: 'result',
+                      text: answer,
+                      providerSessionId: threadId,
+                      nativeCheckpoint: turnId,
+                      ...(input.nativeAction === 'compact'
+                        ? { compacted: { kind: 'boundary', evidence: compactBoundary! } }
+                        : {}),
+                    };
             if (observedTerminal)
               report(
                 'runtime_terminal',
@@ -750,6 +948,7 @@ export function createCodexAdapter(config: CodexAdapterConfig = {}): RuntimeAdap
         }
       } finally {
         input.signal.removeEventListener('abort', requestInterrupt);
+        await bridge?.close();
         await connection.close();
         prune(input.sessionId);
       }

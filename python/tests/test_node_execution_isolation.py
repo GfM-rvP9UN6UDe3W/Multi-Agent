@@ -86,8 +86,8 @@ class NodeExecutionIsolationTests(unittest.IsolatedAsyncioTestCase):
                 await asyncio.sleep(0.005)
 
     def assert_capability(self, orch):
-        self.assertEqual(orch.info.protocol_version, "1.0")
-        self.assertEqual(orch.info.schema_version, 2)
+        self.assertEqual(orch.info.protocol_version, "2.0")
+        self.assertEqual(orch.info.schema_version, 3)
         isolation = orch.info.capabilities.execution_isolation
         self.assertEqual(isolation.version, 1)
         self.assertIs(isolation.resource_release, True)

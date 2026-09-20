@@ -111,7 +111,7 @@ Run `npm test`, `npm run test:python`, `npm run typecheck`, and `npm run format:
 
 ## 9. Implementation confirmation and adapter migration
 
-A2 completed on 2026-09-20. Historical A RED/GREEN remains unchanged. New acceptance, review regressions, and complete commands appear in the [A2 TDD summary](../tdd/0003-a2-evidence.md). Archive, GC, and namespace switching remain unimplemented B work.
+A2 completed on 2026-09-20. Historical A RED/GREEN remains unchanged. New acceptance, review regressions, and complete commands appear in the [A2 TDD summary](../tdd/0003-a2-evidence.md). Archive, GC and namespace switching were implemented later in SPEC-0009; this section preserves the historical A2 evidence.
 
 Third-party RuntimeAdapter implementations must declare `executionBudget={version:2,acceptanceCapMs,turnCapMs}`, using null for caps not explicitly configured. In host mode, derive expiry only from `RuntimeInput.executionBudget` remaining-time accessors. Timers wake and reread the budget rather than establish a second clock. Standalone execution must establish its own monotonic total budget at execute entry. Reject new work/execution-producing resume for legacy adapters before submission, without rejecting saved-result acceptance resume or shutting down the host because an old provider cannot execute.
 
@@ -119,4 +119,4 @@ Stop proof travels through the independent `reportExecutionEvidence` callback, c
 
 Reconciliation checks both business terminal evidence and the adapter's retained terminal certificate. Cleanup errors cannot overwrite real results, and sideEffects=unknown cannot bypass checks for a contradictory explicit outcome. Removing an old provider configuration does not prevent owner attestation from settling history. Missing process handles alone are still not stop proof.
 
-Before schema 2 migration, create `store-schema1-<uuid>.sqlite` in the original stateDir and verify integrity, schema, workspace, and storeId. Backup/migration failures must not commit the new schema or model requests. Old engines refuse schema 2. Product flows for backup restoration/new namespaces remain unimplemented; a backup cannot be used as another automatically dispatching host.
+Before schema 2 migration, create `store-schema1-<uuid>.sqlite` in the original stateDir and verify integrity, schema, workspace, and storeId. Backup/migration failures must not commit the new schema or model requests. Old engines refuse schema 2. Later SPEC-0009 supplies backup import/new namespaces under a fresh identity; a backup cannot be used as another automatically dispatching host.

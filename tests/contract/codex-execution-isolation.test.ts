@@ -322,7 +322,7 @@ test('A2 Codex uses the negotiated host clock instead of starting another explic
   assert.equal((await bounded(f.finished)).at(-1)?.type, 'result');
 });
 
-test('A2 Codex reports a matching terminal before cleanup then full stopping evidence without changing event shapes', async (t) => {
+test('A2 Codex reports a matching terminal and native checkpoint before full stopping evidence', async (t) => {
   const f = await setup(t);
   const events = await bounded(f.finished);
   assert.deepEqual(
@@ -338,6 +338,7 @@ test('A2 Codex reports a matching terminal before cleanup then full stopping evi
     type: 'result',
     text: 'isolated result',
     providerSessionId: 'isolated-thread',
+    nativeCheckpoint: 'isolated-turn',
   });
   assert.equal(last?.localResources, 'stopped');
   assert.equal(last?.remoteExecution, 'stopped');

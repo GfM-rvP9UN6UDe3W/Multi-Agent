@@ -1,3 +1,4 @@
+import { MUTATIONS } from './identity.ts';
 /** Optional Node test entry point. Normal engine/SDK imports never load this module. */
 import assert from 'node:assert/strict';
 import { mkdir, mkdtemp, realpath, rm } from 'node:fs/promises';
@@ -116,6 +117,7 @@ async function harness(
   engine = active;
   const create = () =>
     active.call('tasks.create', {
+      expectedStoreId: active.storeId,
       idempotencyKey: 'same-business-request',
       spec: {
         goal: 'Deterministic host conformance request',
@@ -147,6 +149,7 @@ async function approve(engine: Engine, id: string) {
   })) as ApprovalRequest;
   assert.equal(approval.purpose, 'task_acceptance');
   await engine.call('approvals.decide', {
+    expectedStoreId: engine.storeId,
     approvalId: approval.approvalId,
     decision: { expectedRevision: approval.revision, choice: 'approve' },
     idempotencyKey: 'explicit-test-review',
@@ -256,7 +259,11 @@ export function registerRuntimeAdapterContract(
       const f = await harness(t, createFixture);
       await f.act('accept');
       const cancel = () =>
-        f.engine.call('tasks.cancel', { taskId: f.created.id, idempotencyKey: 'cancel' });
+        f.engine.call('tasks.cancel', {
+          expectedStoreId: f.engine.storeId,
+          taskId: f.created.id,
+          idempotencyKey: 'cancel',
+        });
       if (!f.fixture.adapter.capabilities().interrupt) {
         await assert.rejects(cancel(), { code: 'UNSUPPORTED_CAPABILITY' });
         assert.equal(f.input.signal.aborted, false);
@@ -317,6 +324,7 @@ export function registerRuntimeAdapterContract(
       await f.engine.call(
         'sessions.reconcile',
         {
+          expectedStoreId: f.engine.storeId,
           target: {
             sessionId: current.id,
             expectedGeneration: current.generation,
@@ -339,7 +347,11 @@ export function registerRuntimeAdapterContract(
         { owner: true },
       );
       assert.equal((await task(f.engine, f.created.id)).status, 'paused');
-      await f.engine.call('tasks.resume', { taskId: f.created.id, idempotencyKey: 'review-only' });
+      await f.engine.call('tasks.resume', {
+        expectedStoreId: f.engine.storeId,
+        taskId: f.created.id,
+        idempotencyKey: 'review-only',
+      });
       await approve(f.engine, f.created.id);
       assert.equal(f.fixture.submissions().length, 1);
     },

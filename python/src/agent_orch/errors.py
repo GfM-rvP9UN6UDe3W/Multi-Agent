@@ -9,6 +9,7 @@ class OrchestrationError(Exception):
         self.code = code
         self.data = dict(data or {})
         self.idempotency_key = idempotency_key or self.data.get("idempotencyKey")
+        self.retry_identity = self.data.get("retryIdentity")
         self.operation_id = self.data.get("operationId")
         self.method: str | None = self.data.get("method")
         self.scope: str | None = self.data.get("scope")

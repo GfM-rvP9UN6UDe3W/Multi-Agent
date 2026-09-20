@@ -1,9 +1,19 @@
+import { ControlPlane } from './control-plane.ts';
+import { StorageGovernance } from './storage.ts';
+import { AsyncLocalStorage } from 'node:async_hooks';
+import { MUTATIONS, requestDigest, requestScope, type RetryIdentity } from './identity.ts';
+const requestIdentity = new AsyncLocalStorage<RetryIdentity>();
 import { randomUUID } from 'node:crypto';
 import { Store } from './store.ts';
 import { OrchestrationError, fail } from './errors.ts';
 import { object, fields, string, integer, taskSpec, messageSpec, digest } from './validation.ts';
 import { readRuntimeCapabilities } from './runtime.ts';
 import { usageRecord } from './usage.ts';
+import { contains, normalizeRules, verifyRule, workspacePath } from './verification.ts';
+import type { VerificationEvidence } from './verification.ts';
+import { ORCHESTRATION_TOOLS, TOOL_NAMES } from './tools.ts';
+import { CostLedger } from './cost-ledger.ts';
+import { estimateContext, moneyUnits, moneyString } from './accounting.ts';
 import type {
   Engine,
   EngineConfig,
@@ -31,11 +41,18 @@ import type {
   ExecutionEvidence,
   ExecutionConflict,
   SchedulerSnapshot,
+  FrozenVerificationRule,
+  TaskSpec,
+  RuntimeSpec,
+  RoutingDecision,
+  RuntimeTools,
+  RuntimePermissionRequest,
 } from './types.ts';
 export * from './types.ts';
 export { OrchestrationError } from './errors.ts';
 export { createFakeAdapter } from './fake.ts';
 export { readRuntimeCapabilities, requireEngineRuntimeInput } from './runtime.ts';
+export { priceUsage, estimateStrategies, estimateContext } from './accounting.ts';
 
 const terminalTasks = new Set(['completed', 'failed', 'cancelled']);
 const now = () => new Date().toISOString();
@@ -108,7 +125,7 @@ interface Flight {
   messageIds: string[];
   controller: AbortController;
   promise: Promise<void>;
-  intent: 'cancel' | 'pause' | 'shutdown' | null;
+  intent: 'cancel' | 'pause' | 'stop' | 'shutdown' | null;
   controlIds: string[];
   expired: boolean;
   cancelTimers: (() => void)[];
@@ -119,9 +136,14 @@ interface Flight {
 
 class LocalEngine implements Engine {
   readonly instanceId = randomUUID();
-  readonly storeId: string;
+  get storeId(): string {
+    return this.store.storeId;
+  }
+  private controlPlane?: ControlPlane;
   private store: Store;
   private config: EngineConfig;
+  private storage: StorageGovernance;
+  private storageTimer?: ReturnType<typeof setInterval>;
   private adapters: Map<string, RuntimeAdapter>;
   private flights = new Map<string, Flight>();
   private closing = false;
@@ -135,6 +157,13 @@ class LocalEngine implements Engine {
   >();
   private clock: EngineClock;
   private timeouts: Required<LifecycleTimeouts>;
+  private verificationRules: FrozenVerificationRule[];
+  private queueTimers = new Map<string, { cancel: () => void; deadline: number }>();
+  private permissionWaits = new Map<
+    string,
+    { promise: Promise<boolean>; settle: (allow: boolean) => void }
+  >();
+  private accounting: CostLedger;
 
   constructor(config: EngineConfig) {
     string(config.workspace, 'workspace');
@@ -155,7 +184,27 @@ class LocalEngine implements Engine {
       1024,
     );
     integer(config.limits?.maxTurnsPerTask ?? 20, 'maxTurnsPerTask', 1, 1000);
+    integer(config.limits?.maxLogicalSessions ?? 10000, 'maxLogicalSessions', 1, 100000);
+    integer(config.limits?.maxQueuedTasks ?? 1000, 'maxQueuedTasks', 1, 10000);
+    for (const [key, fallback, max] of [
+      ['maxDepth', 4, 16],
+      ['maxChildren', 32, 1000],
+      ['maxCallsPerDispatch', 100, 10000],
+      ['maxRepeatedCalls', 6, 100],
+    ] as const)
+      integer(config.tools?.[key] ?? fallback, `tools.${key}`, 1, max);
+    if (config.tools?.enabled !== undefined && typeof config.tools.enabled !== 'boolean')
+      fail('VALIDATION_ERROR', 'tools.enabled must be boolean');
     integer(config.approvalTtlMs ?? 86400000, 'approvalTtlMs', 1, 604800000);
+    integer(config.runtimeApprovals?.ttlMs ?? 300000, 'runtimeApprovals.ttlMs', 1, 86400000);
+    integer(config.messages?.ttlMs ?? 86400000, 'messages.ttlMs', 1, 604800000);
+    integer(config.messages?.maxHops ?? 16, 'messages.maxHops', 1, 128);
+    integer(config.messages?.maxPerMinute ?? 120, 'messages.maxPerMinute', 1, 10000);
+    if (
+      config.runtimeApprovals?.enabled !== undefined &&
+      typeof config.runtimeApprovals.enabled !== 'boolean'
+    )
+      fail('VALIDATION_ERROR', 'runtimeApprovals.enabled must be boolean');
     const timeouts = object(config.timeouts ?? {}, 'timeouts');
     fields(timeouts, Object.keys(defaultTimeouts));
     this.timeouts = { ...defaultTimeouts };
@@ -176,12 +225,49 @@ class LocalEngine implements Engine {
         fail('UNSUPPORTED_CAPABILITY', `Provider ${provider} cannot enforce ${profile}`);
     }
     this.config = config;
-    this.store = new Store(config.workspace, config.stateDir);
-    this.storeId = this.store.storeId;
+    if (config.stores)
+      this.controlPlane = new ControlPlane(
+        config.workspace,
+        config.stateDir,
+        config.stores,
+        config.storageFault,
+      );
+    const stateDir = this.controlPlane?.activeStateDir ?? config.stateDir;
     try {
+      this.store = new Store(config.workspace, stateDir, {
+        now: () => this.clock.wallNow(),
+        fault: config.storageFault,
+        fence: this.controlPlane?.fence(stateDir),
+      });
+      this.controlPlane?.bind(this.store);
+    } catch (error) {
+      this.controlPlane?.close();
+      throw error;
+    }
+    try {
+      this.storage = new StorageGovernance(this.store, config.storage);
+      this.accounting = new CostLedger(this.store, config);
+      this.verificationRules = normalizeRules(this.store.workspace, config.verificationRules);
+      for (const paths of Object.values(config.writeScopes ?? {})) {
+        if (!Array.isArray(paths) || !paths.length || paths.length > 100)
+          fail('VALIDATION_ERROR', 'Write scopes must contain 1..100 workspace paths');
+        for (const path of paths)
+          workspacePath(this.store.workspace, string(path, 'writeScope.path'));
+      }
       this.recover();
+      this.storageTimer = setInterval(() => {
+        if (this.closing || this.closed) return;
+        try {
+          this.storage.collect();
+        } catch (error) {
+          this.store.storageFailure(error);
+          this.closing = true;
+        }
+      }, 3600000);
+      this.storageTimer.unref();
     } catch (error) {
       this.store.close();
+      this.controlPlane?.close();
       throw error;
     }
   }
@@ -278,13 +364,643 @@ class LocalEngine implements Engine {
   }
   private ensureMutable(): void {
     this.ensureOpen();
+    this.store.assertWritable();
     if (this.closing) fail('HOST_STOPPING', 'Engine is stopping');
   }
   private task(id: string): TaskSnapshot {
     return this.store.require('tasks', id);
   }
+  private dependencyState(spec: TaskSpec): 'queued' | 'waiting_dependency' | 'blocked' {
+    const visiting = new Set<string>();
+    const seen = new Set<string>();
+    const walk = (id: string) => {
+      if (visiting.has(id)) fail('DEPENDENCY_CYCLE', 'Dependency graph contains a cycle');
+      if (seen.has(id)) return;
+      if (seen.size > 10000) fail('VALIDATION_ERROR', 'Dependency graph is too large');
+      seen.add(id);
+      visiting.add(id);
+      for (const next of this.task(id).spec.dependencyTaskIds ?? []) walk(next);
+      visiting.delete(id);
+    };
+    const dependencies = spec.dependencyTaskIds ?? [];
+    for (const id of dependencies) walk(id);
+    const tasks = dependencies.map((id) => this.task(id));
+    if (tasks.some((t) => ['failed', 'cancelled'].includes(t.status))) return 'blocked';
+    return tasks.every((t) => t.status === 'completed') ? 'queued' : 'waiting_dependency';
+  }
+  private refreshDependencies(): void {
+    for (const task of this.store.tasksInState('waiting_dependency')) {
+      const status = this.dependencyState(task.spec);
+      if (status === 'waiting_dependency') continue;
+      this.store.transaction(() => {
+        this.saveTask(task, status, status === 'blocked' ? 'dependency_failed' : null);
+        this.taskEvent(task);
+      });
+    }
+  }
+  private writePaths(spec: TaskSpec): string[] {
+    const writable =
+      this.config.providers?.[spec.runtime.provider]?.permissionProfile === 'workspace-write';
+    if (spec.writeScope !== undefined) {
+      const paths = this.config.writeScopes?.[spec.writeScope];
+      if (!paths) fail('INVALID_WORKSPACE_SCOPE', 'Write scope is not registered');
+      if (!writable)
+        fail('INVALID_WORKSPACE_SCOPE', 'Read-only runtime cannot request a write scope');
+      return [...new Set(paths.map((path) => workspacePath(this.store.workspace, path)))];
+    }
+    return writable ? [this.store.workspace] : [];
+  }
+  private writeConflict(task: TaskSnapshot): boolean {
+    const paths = task.verificationRules?.length ? [this.store.workspace] : (task.writePaths ?? []);
+    if (!paths.length) return false;
+    return (this.store.activeDispatches() as Dispatch[]).some((d) => {
+      if (d.executionLease?.status !== 'held' && !d.verificationPending) return false;
+      const occupied = d.writePaths as string[] | undefined;
+      return occupied?.some((a) => paths.some((b) => contains(a, b) || contains(b, a))) ?? false;
+    });
+  }
   private session(id: string): SessionSnapshot {
     return this.store.require('sessions', id);
+  }
+  private associatedTask(session: SessionSnapshot): TaskSnapshot {
+    if (!session.taskId) fail('NO_SESSION_TASK', 'The logical session has no associated task');
+    return this.task(session.taskId);
+  }
+  private checkedTarget(value: unknown): SessionSnapshot {
+    const target = object(value, 'target');
+    fields(target, [
+      'sessionId',
+      'expectedGeneration',
+      'expectedRevision',
+      'expectedDispatchId',
+      'expectedState',
+    ]);
+    const session = this.session(string(target.sessionId, 'sessionId', 128));
+    if (
+      session.generation !== target.expectedGeneration ||
+      session.revision !== target.expectedRevision ||
+      session.activeDispatchId !== target.expectedDispatchId ||
+      session.status !== target.expectedState
+    )
+      fail('STALE_TARGET', 'Session target changed');
+    return session;
+  }
+  private requireQuietSession(session: SessionSnapshot): void {
+    if (
+      this.flights.has(session.id) ||
+      session.activeDispatchId ||
+      this.store.activeDispatches(session.id).length ||
+      this.adapters.get(session.provider)?.hasActiveResources?.(session.id)
+    )
+      fail('RUNTIME_STILL_ACTIVE', 'Session has unresolved execution or retained resources');
+    if (session.taskId && !terminalTasks.has(this.task(session.taskId).status))
+      fail('SESSION_BUSY', 'Finish or cancel the associated task before managing history');
+  }
+  private forkCandidate(source: SessionSnapshot, snapshotRef: string): SessionSnapshot {
+    this.requireQuietSession(source);
+    const task = this.associatedTask(source);
+    if (task.status !== 'completed' || !task.artifactRefs.includes(snapshotRef))
+      fail('INVALID_SNAPSHOT', 'Fork requires an accepted source artifact');
+    this.store.artifactText(snapshotRef, 1024 * 1024);
+    const adapter = this.adapters.get(source.provider)!;
+    if (
+      readRuntimeCapabilities(adapter).fork !== true ||
+      !source.providerSessionId ||
+      !source.nativeCheckpoint
+    )
+      fail('UNSUPPORTED_CAPABILITY', 'Runtime lacks a completed native checkpoint for forking');
+    const session = this.newSession(
+      { provider: source.provider, model: source.model },
+      source.writePaths ?? [],
+      null,
+      source.rootTaskId ?? task.rootTaskId ?? task.id,
+    );
+    session.forkSource = {
+      sessionId: source.id,
+      generation: source.generation,
+      providerSessionId: source.providerSessionId,
+      nativeCheckpoint: source.nativeCheckpoint,
+      snapshotRef,
+    };
+    return session;
+  }
+  private newSession(
+    runtime: RuntimeSpec,
+    writePaths: string[],
+    taskId: string | null,
+    rootTaskId?: string,
+  ): SessionSnapshot {
+    const count = (
+      this.store.db.prepare('SELECT COUNT(*) AS n FROM sessions').get() as { n: number }
+    ).n;
+    if (count >= (this.config.limits?.maxLogicalSessions ?? 10000))
+      fail(
+        'SESSION_CAPACITY_EXHAUSTED',
+        'Logical session capacity reached; settle and archive this store',
+      );
+    return {
+      id: randomUUID(),
+      taskId,
+      provider: runtime.provider,
+      model: runtime.model,
+      providerSessionId: null,
+      generation: 1,
+      revision: 1,
+      status: 'idle',
+      activeDispatchId: null,
+      taskIds: taskId ? [taskId] : [],
+      ...(rootTaskId ? { rootTaskId } : {}),
+      permissionProfile:
+        this.config.providers?.[runtime.provider]?.permissionProfile ?? 'read-only',
+      writePaths,
+    };
+  }
+  private selectSession(
+    spec: TaskSpec,
+    taskId: string,
+    rootTaskId: string,
+    writePaths: string[],
+  ): { session: SessionSnapshot; routing?: RoutingDecision; fresh: boolean } {
+    const plan = spec.contextPlan;
+    if (!plan) {
+      const session = this.newSession(spec.runtime, writePaths, taskId, rootTaskId);
+      return {
+        session,
+        fresh: true,
+        routing: {
+          policyVersion: 1,
+          mode: 'fresh',
+          candidateSessionId: session.id,
+          expectedGeneration: 1,
+          enqueuedAt: this.time(),
+          deadlineAt: new Date(this.clock.wallNow() + 30000).toISOString(),
+          maxQueueWaitMs: 30000,
+          fallbackModes: [],
+          reasonCode: 'ROOT_SESSION',
+        },
+      };
+    }
+    for (const ref of plan.contextRefs) this.store.artifactText(ref.artifactRef, 32768);
+    if (
+      (plan.requestedMode === 'reuse' ||
+        plan.requestedMode === 'fork' ||
+        (spec.parentTaskId && plan.requestedMode === 'fresh')) &&
+      !plan.independent
+    )
+      fail('INVALID_ROUTING', 'This routing mode requires declared independence');
+    const fresh = plan.requestedMode === 'fresh' || plan.requestedMode === 'fork';
+    if (plan.requestedMode !== 'fresh' && !plan.candidateSessionId)
+      fail('INVALID_ROUTING', 'This mode requires candidateSessionId');
+    const session =
+      plan.requestedMode === 'fork'
+        ? this.forkCandidate(
+            this.session(plan.candidateSessionId!),
+            string(plan.snapshotRef, 'snapshotRef', 128),
+          )
+        : plan.requestedMode === 'fresh'
+          ? this.newSession(spec.runtime, writePaths, taskId, rootTaskId)
+          : this.session(plan.candidateSessionId!);
+    if (
+      session.provider !== spec.runtime.provider ||
+      session.model !== spec.runtime.model ||
+      (session.permissionProfile ?? 'read-only') !==
+        (this.config.providers?.[spec.runtime.provider]?.permissionProfile ?? 'read-only') ||
+      digest(session.writePaths ?? []) !== digest(writePaths)
+    )
+      fail(
+        'SESSION_INCOMPATIBLE',
+        'Candidate runtime, model, permission profile or write scope differs',
+      );
+    const previousRoot =
+      session.rootTaskId ??
+      (session.taskId ? (this.task(session.taskId).rootTaskId ?? session.taskId) : undefined);
+    if (previousRoot && previousRoot !== rootTaskId && !this.config.allowCrossRootReuse)
+      fail(
+        'HISTORY_REUSE_FORBIDDEN',
+        'Cross-root history reuse requires explicit owner configuration',
+      );
+    if (session.status === 'closed') fail('SESSION_CLOSED', 'Session is closed');
+    return {
+      session,
+      fresh,
+      routing: {
+        policyVersion: 1,
+        mode: plan.requestedMode,
+        candidateSessionId: session.id,
+        expectedGeneration: session.generation,
+        enqueuedAt: this.time(),
+        deadlineAt: new Date(this.clock.wallNow() + plan.maxQueueWaitMs).toISOString(),
+        maxQueueWaitMs: plan.maxQueueWaitMs,
+        fallbackModes: [...plan.fallbackModes],
+        reasonCode: 'DECLARED_ROUTING',
+      },
+    };
+  }
+  private sessionReady(task: TaskSnapshot, session: SessionSnapshot): boolean {
+    if (session.status !== 'idle' || session.activeDispatchId || this.flights.has(session.id))
+      return false;
+    if (
+      session.taskId &&
+      session.taskId !== task.id &&
+      !terminalTasks.has(this.task(session.taskId).status)
+    )
+      return false;
+    return this.store.activeDispatches(session.id).length === 0;
+  }
+  private armQueue(task: TaskSnapshot): void {
+    if (
+      !task.routing ||
+      task.routing.submittedAt ||
+      task.routing.expiredAt ||
+      this.queueTimers.has(task.id)
+    )
+      return;
+    const remaining = Math.max(
+      0,
+      Math.min(
+        task.routing.maxQueueWaitMs,
+        Date.parse(task.routing.deadlineAt) - this.clock.wallNow(),
+      ),
+    );
+    const deadline = this.clock.monotonicNow() + remaining;
+    const record = { cancel: () => {}, deadline };
+    const fire = () => {
+      const left = deadline - this.clock.monotonicNow();
+      if (left > 0) record.cancel = this.clock.setTimer(fire, Math.ceil(left));
+      else this.kick();
+    };
+    record.cancel = this.clock.setTimer(fire, Math.ceil(remaining));
+    this.queueTimers.set(task.id, record);
+  }
+  private stopQueue(taskId: string): void {
+    this.queueTimers.get(taskId)?.cancel();
+    this.queueTimers.delete(taskId);
+  }
+  private inSubtree(taskId: string, rootId: string): boolean {
+    const seen = new Set<string>();
+    for (let id: string | undefined = taskId; id && !seen.has(id) && seen.size <= 32; ) {
+      if (id === rootId) return true;
+      seen.add(id);
+      id = this.store.get<TaskSnapshot>('tasks', id)?.spec.parentTaskId;
+    }
+    return false;
+  }
+  private toolLimit(flight: Flight, code: string): never {
+    this.store.transaction(() => {
+      const task = this.task(flight.taskId);
+      task.reason = code;
+      this.store.put('tasks', task.id, task);
+      this.store.event(
+        'tool.limit_reached',
+        { code, dispatchId: flight.dispatchId },
+        { taskId: task.id, sessionId: flight.sessionId },
+      );
+    });
+    flight.intent = 'pause';
+    if (
+      readRuntimeCapabilities(this.adapters.get(this.session(flight.sessionId).provider)!).interrupt
+    )
+      flight.controller.abort();
+    fail(code, 'Runtime tool limit reached; work is being paused');
+  }
+  private boundTools(flight: Flight): RuntimeTools {
+    const assertLive = () => {
+      if (
+        this.closed ||
+        this.closing ||
+        flight.expired ||
+        flight.controller.signal.aborted ||
+        this.flights.get(flight.sessionId) !== flight ||
+        !this.live(flight)
+      )
+        fail('STALE_GRANT', 'Runtime binding is no longer active');
+    };
+    const authorize = (id: string) => {
+      if (!this.inSubtree(id, flight.taskId))
+        fail('UNAUTHORIZED', 'Target is outside the delegated subtree');
+    };
+    return {
+      definitions: ORCHESTRATION_TOOLS,
+      call: async (name, raw) => {
+        assertLive();
+        if (!TOOL_NAMES.includes(name as (typeof TOOL_NAMES)[number]))
+          fail('UNAUTHORIZED', 'Unknown orchestration tool');
+        let encoded: string;
+        try {
+          encoded = JSON.stringify(raw);
+        } catch {
+          fail('VALIDATION_ERROR', 'Tool input must be JSON');
+        }
+        if (!encoded || Buffer.byteLength(encoded) > 65536)
+          fail('VALIDATION_ERROR', 'Tool input exceeds 64 KiB');
+        const request = object(JSON.parse(encoded), 'request');
+        const allowed =
+          name === 'work_delegate'
+            ? ['goal', 'contextPlan', 'dependencyTaskIds', 'writeScope', 'idempotencyKey']
+            : name === 'work_send'
+              ? [
+                  'taskId',
+                  'toSessionId',
+                  'expectedGeneration',
+                  'kind',
+                  'summary',
+                  'artifactRefs',
+                  'ttlMs',
+                  'replyToMessageId',
+                  'idempotencyKey',
+                ]
+              : name === 'work_read'
+                ? ['kind', 'id']
+                : ['target', 'command', 'idempotencyKey'];
+        fields(request, allowed);
+        const { idempotencyKey: providedKey, ...args } = request;
+        const key =
+          name === 'work_read' ? randomUUID() : string(providedKey, 'idempotencyKey', 128);
+        const callId = `${flight.dispatchId}:${key}`;
+        const hash = digest({ name, args });
+        const previous = this.store.get<{
+          digest: string;
+          status: string;
+          result?: Json;
+          error?: { code: string; message: string };
+        }>('tool_calls', callId);
+        if (previous) {
+          if (previous.digest !== hash)
+            fail('IDEMPOTENCY_CONFLICT', 'Tool key was used for different arguments');
+          if (previous.status === 'completed') return previous.result!;
+          if (previous.error) fail(previous.error.code, previous.error.message);
+          fail('OUTCOME_UNKNOWN', 'Previous tool call has no durable completion receipt');
+        }
+        const parent = this.task(flight.taskId);
+        const descendants = this.store
+          .all<TaskSnapshot>('tasks')
+          .filter((task) => this.inSubtree(task.id, parent.id));
+        const state = digest(
+          descendants.map((task) => [task.id, task.status, task.revision, task.artifactRefs]),
+        );
+        const loopKey = `${parent.id}:${hash}`;
+        const loop = this.store.get<{ state: string; count: number }>('tool_loops', loopKey);
+        if (loop?.state === state && loop.count >= (this.config.tools?.maxRepeatedCalls ?? 6))
+          this.toolLimit(flight, 'TOOL_LOOP_LIMIT');
+        const count = (
+          this.store.db
+            .prepare(
+              "SELECT count(*) AS count FROM tool_calls WHERE json_extract(data, '$.dispatchId')=?",
+            )
+            .get(flight.dispatchId) as { count: number }
+        ).count;
+        if (count >= (this.config.tools?.maxCallsPerDispatch ?? 100))
+          this.toolLimit(flight, 'TOOL_CALL_LIMIT');
+        const record = {
+          id: callId,
+          taskId: parent.id,
+          sessionId: flight.sessionId,
+          dispatchId: flight.dispatchId,
+          generation: flight.generation,
+          name,
+          digest: hash,
+          status: 'pending',
+          createdAt: this.time(),
+        };
+        this.store.transaction(() => {
+          this.store.put('tool_calls', callId, record);
+          this.store.put('tool_loops', loopKey, {
+            id: loopKey,
+            taskId: parent.id,
+            state,
+            count: loop?.state === state ? loop.count + 1 : 1,
+          });
+        });
+        try {
+          let result: unknown;
+          const mutationKey = `tool:${callId}`;
+          if (name === 'work_delegate') {
+            const goal = string(args.goal, 'goal', 16384);
+            const plan =
+              args.contextPlan === undefined ? undefined : object(args.contextPlan, 'contextPlan');
+            if (!plan || ['continue', 'parallel_tools'].includes(plan.requestedMode as string)) {
+              if (
+                plan?.candidateSessionId !== undefined &&
+                plan.candidateSessionId !== flight.sessionId
+              )
+                fail('UNAUTHORIZED', 'Inline continuation must use this session');
+              result = {
+                taskId: parent.id,
+                sessionId: flight.sessionId,
+                mode: plan?.requestedMode ?? 'continue',
+                delegated: false,
+                instruction: goal,
+              };
+            } else {
+              let depth = 0;
+              for (
+                let current: TaskSnapshot | undefined = parent;
+                current?.spec.parentTaskId;
+                current = this.store.get<TaskSnapshot>('tasks', current.spec.parentTaskId)
+              )
+                if (++depth >= (this.config.tools?.maxDepth ?? 4))
+                  this.toolLimit(flight, 'DELEGATION_DEPTH_LIMIT');
+              if (
+                descendants.filter((task) => task.spec.parentTaskId === parent.id).length >=
+                (this.config.tools?.maxChildren ?? 32)
+              )
+                this.toolLimit(flight, 'DELEGATION_CHILD_LIMIT');
+              const childSpec = taskSpec({
+                goal,
+                runtime: parent.spec.runtime,
+                acceptance: parent.spec.acceptance,
+                parentTaskId: parent.id,
+                contextPlan: plan,
+                ...(args.dependencyTaskIds !== undefined
+                  ? { dependencyTaskIds: args.dependencyTaskIds }
+                  : {}),
+                ...(parent.spec.budget ? { budget: parent.spec.budget } : {}),
+                ...(args.writeScope !== undefined
+                  ? { writeScope: args.writeScope }
+                  : parent.spec.writeScope
+                    ? { writeScope: parent.spec.writeScope }
+                    : {}),
+              });
+              for (const dependency of childSpec.dependencyTaskIds ?? []) authorize(dependency);
+              for (const ref of childSpec.contextPlan!.contextRefs) {
+                if (!descendants.some((task) => task.artifactRefs.includes(ref.artifactRef)))
+                  fail('UNAUTHORIZED', 'Context artifact is outside the delegated subtree');
+              }
+              if (plan.candidateSessionId) {
+                const candidate = this.session(
+                  string(plan.candidateSessionId, 'candidateSessionId', 128),
+                );
+                if (!candidate.taskId)
+                  fail('UNAUTHORIZED', 'Tools cannot claim an unassigned session');
+                authorize(candidate.taskId);
+              }
+              const paths = this.writePaths(childSpec);
+              if (
+                paths.some(
+                  (path) => !(parent.writePaths ?? []).some((root) => contains(root, path)),
+                )
+              )
+                fail('UNAUTHORIZED', 'Child write scope exceeds its parent');
+              result = await this.call('tasks.create', {
+                spec: childSpec,
+                idempotencyKey: mutationKey,
+                expectedStoreId: this.storeId,
+              });
+            }
+          } else if (name === 'work_send') {
+            const taskId = string(args.taskId, 'taskId', 128);
+            if (parent.spec.parentTaskId !== taskId) authorize(taskId);
+            result = await this.call(
+              'messages.send',
+              { spec: args, idempotencyKey: mutationKey, expectedStoreId: this.storeId },
+              {
+                runtimeActor: {
+                  sessionId: flight.sessionId,
+                  taskId: flight.taskId,
+                  dispatchId: flight.dispatchId,
+                  generation: flight.generation,
+                },
+              },
+            );
+          } else if (name === 'work_control') {
+            const target = object(args.target, 'target');
+            const session = this.session(string(target.sessionId, 'sessionId', 128));
+            if (!session.taskId) fail('UNAUTHORIZED', 'Tools cannot control an unassigned session');
+            authorize(session.taskId);
+            const command = object(args.command, 'command');
+            fields(command, ['action', 'mode']);
+            const action = string(command.action, 'action', 32);
+            if (!['pause', 'resume', 'stop', 'compact', 'rotate'].includes(action))
+              fail('UNAUTHORIZED', 'Control action is not granted');
+            result = await this.call(
+              ['compact', 'rotate'].includes(action) ? `sessions.${action}` : 'sessions.control',
+              {
+                target,
+                ...(['compact', 'rotate'].includes(action) ? {} : { command }),
+                idempotencyKey: mutationKey,
+                expectedStoreId: this.storeId,
+              },
+            );
+          } else {
+            const kind = string(args.kind, 'kind', 32),
+              id = string(args.id, 'id', 512);
+            if (kind === 'task') {
+              authorize(id);
+              result = this.task(id);
+            } else if (kind === 'session') {
+              const session = this.session(id);
+              if (!session.taskId) fail('UNAUTHORIZED', 'Session has no granted task');
+              authorize(session.taskId);
+              result = this.sessionSnapshot(id);
+            } else if (kind === 'message') {
+              const message = this.store.require<MessageSnapshot>('messages', id);
+              authorize(message.taskId);
+              result = message;
+            } else if (kind === 'artifact') {
+              if (!descendants.some((task) => task.artifactRefs.includes(id)))
+                fail('UNAUTHORIZED', 'Artifact is outside the delegated subtree');
+              result = { artifactRef: id, text: this.store.artifactText(id, 65536) };
+            } else if (kind === 'usage') {
+              authorize(id);
+              result = await this.call('usage.get', { taskId: id });
+            } else if (kind === 'operation') {
+              const op = this.store.operation(id);
+              if (
+                !descendants.some(
+                  (task) => task.id === op.targetId || task.sessionId === op.targetId,
+                )
+              )
+                fail('UNAUTHORIZED', 'Operation is outside the delegated subtree');
+              result = op;
+            } else fail('UNAUTHORIZED', 'Read kind is not granted');
+          }
+          const encoded = JSON.stringify(result);
+          if (Buffer.byteLength(encoded) > 262144)
+            fail('TOOL_OUTPUT_LIMIT', 'Tool result exceeds 256 KiB; use bounded artifacts');
+          const json = JSON.parse(encoded) as Json;
+          this.store.put('tool_calls', callId, {
+            ...record,
+            status: 'completed',
+            result: json,
+            completedAt: this.time(),
+          });
+          return json;
+        } catch (error) {
+          const code = error instanceof OrchestrationError ? error.code : 'TOOL_FAILED';
+          const message =
+            error instanceof OrchestrationError ? error.message : 'Orchestration tool failed';
+          if (!this.closed)
+            this.store.put('tool_calls', callId, {
+              ...record,
+              status: 'failed',
+              error: { code, message },
+              completedAt: this.time(),
+            });
+          fail(code, message);
+        }
+      },
+    };
+  }
+  private expireQueue(task: TaskSnapshot): void {
+    const route = task.routing!;
+    this.store.transaction(() => {
+      const current = this.task(task.id);
+      if (
+        current.routing?.submittedAt ||
+        !['queued', 'waiting_dependency'].includes(current.status)
+      )
+        return;
+      route.expiredAt = this.time();
+      const fallback = route.fallbackModes.shift();
+      if (fallback) {
+        const replacement = this.selectSession(
+          {
+            ...task.spec,
+            contextPlan: {
+              ...task.spec.contextPlan!,
+              requestedMode: fallback,
+              fallbackModes: route.fallbackModes,
+              maxQueueWaitMs: 0,
+            },
+          },
+          task.id,
+          task.rootTaskId ?? task.id,
+          task.writePaths ?? [],
+        );
+        if (replacement.fresh)
+          this.store.put('sessions', replacement.session.id, replacement.session);
+        task.sessionId = replacement.session.id;
+        task.routing = {
+          ...replacement.routing!,
+          enqueuedAt: route.enqueuedAt,
+          deadlineAt: route.deadlineAt,
+          reasonCode: 'DECLARED_FALLBACK',
+        };
+        this.store.put('tasks', task.id, task);
+      } else {
+        task.routing = route;
+        task.routing.reasonCode = 'SCHEDULING_BLOCKED';
+        this.saveTask(task, 'blocked', 'SCHEDULING_BLOCKED');
+        const receipt = this.store
+          .operations()
+          .find((op) => op.method === 'tasks.create' && op.targetId === task.id);
+        if (receipt) {
+          receipt.status = 'failed';
+          receipt.error = {
+            code: 'SCHEDULING_BLOCKED',
+            message: 'Unsubmitted routing candidate expired',
+          };
+          this.store.saveOperation(receipt);
+        }
+      }
+      this.store.event(
+        'routing.expired',
+        { mode: route.mode, fallback: fallback ?? null },
+        { taskId: task.id, sessionId: task.sessionId },
+      );
+      this.taskEvent(task);
+    });
+    this.stopQueue(task.id);
   }
   private sessionSnapshot(id: string): SessionSnapshot {
     const session = this.session(id);
@@ -301,13 +1017,15 @@ class LocalEngine implements Engine {
     return session;
   }
   private scheduler(): SchedulerSnapshot {
-    const records = this.store.all<Dispatch>('dispatches');
+    const records = this.store.activeDispatches() as Dispatch[];
     const held = records.filter((d) => d.executionLease?.status === 'held');
     const quarantined = records.filter((d) => d.quarantined);
     const reserved = held.filter((d) => !d.quarantined);
-    const conflicts = this.store
-      .all<ExecutionConflict>('execution_conflicts')
-      .filter((c) => c.status === 'open');
+    const conflicts = (
+      this.store.db
+        .prepare("SELECT data FROM execution_conflicts WHERE json_extract(data,'$.status')='open'")
+        .all() as { data: string }[]
+    ).map((row) => JSON.parse(row.data) as ExecutionConflict);
     const maxActiveSessions = this.config.limits?.maxActiveSessions ?? 2;
     const maxQuarantinedDispatches = this.config.limits?.maxQuarantinedDispatches ?? 32;
     const reasons: string[] = [];
@@ -363,6 +1081,9 @@ class LocalEngine implements Engine {
     });
   }
   private admitWork(): void {
+    if (this.controlPlane?.hasPendingRollover)
+      fail('STORAGE_BACKPRESSURE', 'Continue settlement of the original rollover');
+    this.storage.admit(68);
     if (this.scheduler().reasons.includes('QUARANTINE_CAPACITY_EXCEEDED'))
       fail(
         'QUARANTINE_CAPACITY_EXCEEDED',
@@ -387,6 +1108,7 @@ class LocalEngine implements Engine {
   }
   private release(d: Dispatch, evidenceRef: string, reason: string): void {
     if (d.executionLease.status === 'released') return;
+    if (reason === 'runtime_stop_and_cleanup' && d.verificationPending) return;
     if (reason === 'runtime_stop_and_cleanup')
       evidenceRef = this.store.artifact(
         JSON.stringify({
@@ -604,6 +1326,7 @@ class LocalEngine implements Engine {
           return;
         }
         this.store.put('usage', value.id, value);
+        this.accounting.record(value, dispatch, this.time());
         this.store.event(
           'usage.recorded',
           {
@@ -652,10 +1375,17 @@ class LocalEngine implements Engine {
   ): OperationSnapshot {
     string(key, 'idempotencyKey', 256);
     const hash = digest(payload);
+    const identity = requestIdentity.getStore();
     const existing = this.store.findOperation(method, scope, key);
     if (existing) {
-      if (existing.digest !== hash)
+      if (
+        existing.digest !== hash ||
+        (identity &&
+          existing.operation.retryIdentity &&
+          identity.requestDigest !== existing.operation.retryIdentity.requestDigest)
+      )
         fail('IDEMPOTENCY_CONFLICT', 'Key was already used with different payload');
+      this.store.assertDetails(existing.operation);
       return existing.operation;
     }
     // An owner must be able to attest unknown resources that prevented its shutdown.
@@ -663,11 +1393,24 @@ class LocalEngine implements Engine {
     if (method === 'sessions.reconcile' && this.shutdownId) this.ensureOpen();
     else this.ensureMutable();
     return this.store.transaction(() => {
+      if (
+        ![
+          'tasks.create',
+          'messages.send',
+          'sessions.open',
+          'sessions.fork',
+          'sessions.compact',
+          'storage.configure',
+          'storage.gc',
+        ].includes(method)
+      )
+        this.storage.settlement(method, scope);
       const op: OperationSnapshot = {
         id: randomUUID(),
         method,
         scope,
         idempotencyKey: key,
+        ...(identity ? { retryIdentity: identity } : {}),
         status: 'completed',
         targetId: '',
         result: null,
@@ -685,9 +1428,32 @@ class LocalEngine implements Engine {
   }
   private recover(): void {
     this.store.transaction(() => {
+      for (const approval of this.store.all<ApprovalRequest>('approvals')) {
+        if (approval.purpose !== 'runtime_permission' || approval.status !== 'pending') continue;
+        approval.status = 'invalidated';
+        approval.revision++;
+        this.store.put('approvals', approval.approvalId, approval);
+        const task = this.task(approval.taskId);
+        if (task.approvalId === approval.approvalId) {
+          task.approvalId = null;
+          this.store.put('tasks', task.id, task);
+        }
+        this.store.event(
+          'approval.invalidated',
+          { approvalId: approval.approvalId, reason: 'owner_restart' },
+          { taskId: task.id, sessionId: task.sessionId },
+        );
+      }
       for (const task of this.store.all<TaskSnapshot>('tasks')) {
         const session = this.session(task.sessionId);
-        if (task.status === 'running' || session.activeDispatchId) {
+        if (session.taskId !== task.id) {
+          if (task.status === 'queued') {
+            this.saveTask(task, 'paused', 'owner_restart');
+            this.taskEvent(task);
+          }
+          continue;
+        }
+        if (task.status === 'running' || task.status === 'verifying' || session.activeDispatchId) {
           const dispatchId = session.activeDispatchId;
           this.saveTask(
             task,
@@ -725,6 +1491,15 @@ class LocalEngine implements Engine {
       }
       for (const op of this.store.operations())
         if (op.status === 'persisted') {
+          if (op.method === 'storage.gc') {
+            op.status = 'failed';
+            op.error = {
+              code: 'GC_INTERRUPTED',
+              message: 'Recorded file actions recovered; batch completion was not recorded',
+            };
+            this.store.saveOperation(op);
+            continue;
+          }
           op.status = 'outcome_unknown';
           op.error = {
             code: 'OUTCOME_UNKNOWN',
@@ -745,7 +1520,7 @@ class LocalEngine implements Engine {
   private expireApprovals(): void {
     const expired = this.store
       .all<ApprovalRequest>('approvals')
-      .filter((a) => a.status === 'pending' && Date.parse(a.expiresAt) <= Date.now());
+      .filter((a) => a.status === 'pending' && Date.parse(a.expiresAt) <= this.clock.wallNow());
     if (!expired.length) return;
     this.store.transaction(() => {
       for (const approval of expired) {
@@ -753,6 +1528,19 @@ class LocalEngine implements Engine {
         approval.revision++;
         this.store.put('approvals', approval.approvalId, approval);
         const task = this.task(approval.taskId);
+        if (approval.purpose === 'runtime_permission') {
+          this.permissionWaits.get(approval.approvalId)?.settle(false);
+          if (task.approvalId === approval.approvalId) {
+            task.approvalId = null;
+            if (task.status === 'waiting_approval') this.saveTask(task, 'running', null);
+          }
+          this.store.event(
+            'approval.expired',
+            { approvalId: approval.approvalId, revision: approval.revision },
+            { taskId: task.id, sessionId: task.sessionId },
+          );
+          continue;
+        }
         if (task.approvalId === approval.approvalId && task.status === 'waiting_approval') {
           this.saveTask(task, 'paused', 'approval_expired');
           this.saveSession(this.session(task.sessionId), 'paused');
@@ -773,8 +1561,129 @@ class LocalEngine implements Engine {
       approval.status = 'invalidated';
       approval.revision++;
       this.store.put('approvals', approval.approvalId, approval);
+      this.permissionWaits.get(approval.approvalId)?.settle(false);
     }
     task.approvalId = null;
+  }
+  private async requestRuntimePermission(
+    flight: Flight,
+    request: RuntimePermissionRequest,
+  ): Promise<boolean> {
+    if (
+      this.closed ||
+      this.closing ||
+      flight.expired ||
+      flight.controller.signal.aborted ||
+      this.flights.get(flight.sessionId) !== flight ||
+      !this.live(flight)
+    )
+      return false;
+    string(request.requestId, 'permission.requestId', 256);
+    string(request.toolName, 'permission.toolName', 256);
+    const serialized = JSON.stringify(request.permission);
+    if (!serialized || Buffer.byteLength(serialized) > 65536)
+      fail('VALIDATION_ERROR', 'Permission object exceeds 64 KiB');
+    const session = this.session(flight.sessionId);
+    if (
+      request.providerSessionId &&
+      session.providerSessionId &&
+      request.providerSessionId !== session.providerSessionId
+    )
+      return false;
+    const id = `runtime-${digest({ dispatchId: flight.dispatchId, requestId: request.requestId })}`;
+    const fingerprint = digest(request);
+    const old = this.store.get<ApprovalRequest>('approvals', id);
+    if (old) {
+      if (old.target.requestDigest !== fingerprint)
+        fail('IDEMPOTENCY_CONFLICT', 'Permission target changed');
+      return this.permissionWaits.get(id)?.promise ?? old.status === 'approved';
+    }
+    const task = this.task(flight.taskId);
+    if (task.approvalId) return false;
+    const ttl = Math.min(
+      this.config.runtimeApprovals?.ttlMs ?? 300000,
+      flight.budget.remainingTurnMs(),
+    );
+    if (ttl <= 0) return false;
+    let resolve!: (allow: boolean) => void;
+    const promise = new Promise<boolean>((done) => {
+      resolve = done;
+    });
+    let cancelled = false;
+    let cancelTimer = () => {};
+    const settle = (allow: boolean) => {
+      if (cancelled) return;
+      cancelled = true;
+      cancelTimer();
+      flight.controller.signal.removeEventListener('abort', abort);
+      this.permissionWaits.delete(id);
+      resolve(allow && !flight.expired && !flight.controller.signal.aborted && this.live(flight));
+    };
+    const invalidate = (status: 'expired' | 'invalidated') => {
+      const approval = this.store.get<ApprovalRequest>('approvals', id);
+      if (approval?.status === 'pending')
+        this.store.transaction(() => {
+          approval.status = status;
+          approval.revision++;
+          this.store.put('approvals', id, approval);
+          const current = this.task(flight.taskId);
+          if (current.approvalId === id) {
+            current.approvalId = null;
+            if (current.status === 'waiting_approval') this.saveTask(current, 'running', null);
+          }
+          this.store.event(
+            `approval.${status}`,
+            { approvalId: id, revision: approval.revision },
+            { taskId: task.id, sessionId: session.id },
+          );
+        });
+      settle(false);
+    };
+    const abort = () => invalidate('invalidated');
+    this.permissionWaits.set(id, { promise, settle });
+    try {
+      this.store.transaction(() => {
+        task.approvalId = id;
+        this.saveTask(task, 'waiting_approval', 'runtime_permission');
+        const approval: ApprovalRequest = {
+          approvalId: id,
+          taskId: task.id,
+          purpose: 'runtime_permission',
+          revision: 1,
+          status: 'pending',
+          target: {
+            taskId: task.id,
+            taskRevision: task.revision,
+            artifactRefs: [],
+            sessionId: session.id,
+            generation: flight.generation,
+            dispatchId: flight.dispatchId,
+            providerSessionId: session.providerSessionId,
+            ...(request.providerTurnId ? { providerTurnId: request.providerTurnId } : {}),
+            requestId: request.requestId,
+            toolName: request.toolName,
+            permission: request.permission,
+            requestDigest: fingerprint,
+          },
+          summary: `Permission requested for ${request.toolName}`,
+          evidenceRefs: [],
+          expiresAt: new Date(this.clock.wallNow() + ttl).toISOString(),
+        };
+        this.store.put('approvals', id, approval);
+        this.store.event('approval.requested', approval as unknown as Record<string, Json>, {
+          taskId: task.id,
+          sessionId: session.id,
+        });
+        this.taskEvent(task);
+      });
+      cancelTimer = this.clock.setTimer(() => invalidate('expired'), ttl);
+      flight.controller.signal.addEventListener('abort', abort, { once: true });
+      if (flight.controller.signal.aborted) abort();
+      return await promise;
+    } catch (error) {
+      settle(false);
+      throw error;
+    }
   }
   private requestApproval(task: TaskSnapshot): void {
     this.invalidateApproval(task);
@@ -794,7 +1703,9 @@ class LocalEngine implements Engine {
       },
       summary: task.result ?? '',
       evidenceRefs: [...task.artifactRefs],
-      expiresAt: new Date(Date.now() + (this.config.approvalTtlMs ?? 86400000)).toISOString(),
+      expiresAt: new Date(
+        this.clock.wallNow() + (this.config.approvalTtlMs ?? 86400000),
+      ).toISOString(),
     };
     this.store.put('approvals', id, approval);
     this.taskEvent(task);
@@ -831,9 +1742,10 @@ class LocalEngine implements Engine {
         fail('UNSUPPORTED_CAPABILITY', 'The original runtime provider is not configured');
       readRuntimeCapabilities(adapter);
     }
-    this.saveSession(session, 'idle');
+    if (session.taskId === task.id) this.saveSession(session, 'idle');
     if (task.status !== 'paused') return;
     if (
+      task.spec.acceptance.mode === 'human' &&
       ['approval_expired', 'reconciled_result'].includes(task.reason ?? '') &&
       task.result !== null
     ) {
@@ -850,22 +1762,198 @@ class LocalEngine implements Engine {
     context: CallContext = {},
   ): Promise<unknown> {
     this.ensureOpen();
+    if (
+      [
+        'stores.rollover',
+        'stores.import',
+        'storage.backup',
+        'rollovers.get',
+        'archives.lookup',
+        'archives.readArtifact',
+      ].includes(method)
+    ) {
+      if (['stores.rollover', 'stores.import', 'storage.backup'].includes(method) && !context.owner)
+        fail('UNAUTHORIZED', 'Only the owner may switch stores');
+      if (!this.controlPlane)
+        fail('ROLLOVER_UNSUPPORTED', 'Configure trusted controlDir, storesRoot and archiveRoot');
+      if (method === 'rollovers.get') {
+        fields(raw, ['rolloverId']);
+        return this.controlPlane.rolloverRecord(string(raw.rolloverId, 'rolloverId'));
+      }
+      if (method === 'archives.lookup') return this.controlPlane.archiveLookup(raw);
+      if (method === 'archives.readArtifact') return this.controlPlane.readArchiveArtifact(raw);
+      if (raw.expectedStoreId === undefined)
+        fail('STORE_NAMESPACE_REQUIRED', 'A fixed expectedStoreId is required');
+      const runtimeBlockers = [...this.flights.values()].map((flight) => ({
+        id: flight.dispatchId,
+        reason: 'owned_runtime_handle',
+      }));
+      for (const [id] of this.pendingResourceCleanups)
+        runtimeBlockers.push({ id, reason: 'cleanup_handle' });
+      if (method === 'storage.backup')
+        return this.controlPlane.backup(this.store, raw, runtimeBlockers);
+      const record = this.controlPlane.rollover(this.store, raw, runtimeBlockers, method);
+      if (record.status === 'completed' && this.store.storeId !== this.controlPlane.activeStoreId) {
+        const policy = this.storage.policy;
+        this.store.close();
+        const stateDir = this.controlPlane.activeStateDir;
+        this.store = new Store(this.config.workspace, stateDir, {
+          now: () => this.clock.wallNow(),
+          fault: this.config.storageFault,
+          fence: this.controlPlane.fence(stateDir),
+        });
+        this.controlPlane.bind(this.store);
+        this.storage = new StorageGovernance(this.store, policy);
+        this.accounting = new CostLedger(this.store, this.config);
+      }
+      return record;
+    }
+    if (this.controlPlane?.switching)
+      fail('STORE_SWITCH_IN_PROGRESS', 'Continue the original rollover before using a store');
+    if (method === 'initialize' && raw.protocolVersion !== '2.0')
+      fail('PROTOCOL_MISMATCH', 'Expected protocolVersion 2.0');
+    if (!MUTATIONS.has(method)) return this.dispatchCall(method, raw, context);
+    if (raw.expectedStoreId === undefined)
+      fail('STORE_NAMESPACE_REQUIRED', 'A fixed expectedStoreId is required');
+    if (raw.expectedStoreId !== this.storeId)
+      fail('STORE_NAMESPACE_MISMATCH', 'Request belongs to another store', {
+        expectedStoreId: raw.expectedStoreId,
+        currentStoreId: this.storeId,
+        archiveId:
+          typeof raw.expectedStoreId === 'string'
+            ? (this.controlPlane?.archiveId(raw.expectedStoreId) ?? null)
+            : null,
+      });
+    const hash = requestDigest(method, raw);
+    if (raw.requestDigest !== undefined && raw.requestDigest !== hash)
+      fail('IDEMPOTENCY_CONFLICT', 'Retry payload digest changed');
+    const identity: RetryIdentity = {
+      storeId: this.storeId,
+      method,
+      scope: requestScope(method, raw),
+      idempotencyKey: typeof raw.idempotencyKey === 'string' ? raw.idempotencyKey : '',
+      digestVersion: 1,
+      requestDigest: hash,
+    };
+    const { expectedStoreId: _expected, requestDigest: _digest, ...params } = raw;
+    return requestIdentity.run(identity, async () => {
+      const result = await this.dispatchCall(method, params, context);
+      return result && typeof result === 'object' ? { ...result, retryIdentity: identity } : result;
+    });
+  }
+  private async dispatchCall(
+    method: string,
+    raw: Record<string, unknown>,
+    context: CallContext,
+  ): Promise<unknown> {
     const p = object(raw);
-    if (!['scheduler.get', 'scheduler.getConflict'].includes(method)) this.expireApprovals();
+    if (!this.store.degraded) {
+      if (!['scheduler.get', 'scheduler.getConflict'].includes(method)) this.expireApprovals();
+      this.expireMessages();
+    }
     switch (method) {
+      case 'storage.status':
+        fields(p, []);
+        return this.storage.status();
+      case 'state.snapshot':
+        fields(p, ['snapshotId', 'offset', 'limit']);
+        return this.storage.snapshot(p);
+      case 'state.releaseSnapshot':
+        fields(p, ['snapshotId']);
+        this.storage.releaseSnapshot(string(p.snapshotId, 'snapshotId', 128));
+        return { released: true };
+      case 'storage.configure':
+      case 'storage.pin':
+      case 'storage.unpin': {
+        if (!context.owner) fail('UNAUTHORIZED', 'Storage policy is owner-only');
+        fields(
+          p,
+          method === 'storage.configure'
+            ? ['policy', 'idempotencyKey']
+            : ['ref', 'reason', 'idempotencyKey'],
+        );
+        const { idempotencyKey, ...payload } = p;
+        const operation = this.operation(
+          method,
+          'local',
+          string(idempotencyKey, 'idempotencyKey'),
+          payload,
+          (op) => {
+            if (method === 'storage.configure')
+              op.result = this.storage.configure(object(p.policy)) as any;
+            else {
+              if (method === 'storage.pin')
+                this.storage.pin(string(p.ref, 'ref'), string(p.reason, 'reason'));
+              else this.storage.unpin(string(p.ref, 'ref'));
+              op.result = { ref: p.ref as string };
+            }
+          },
+        );
+        if (method === 'storage.configure') this.storage.reload();
+        return operation;
+      }
+      case 'storage.gc': {
+        if (!context.owner) fail('UNAUTHORIZED', 'Storage collection is owner-only');
+        fields(p, ['idempotencyKey']);
+        const key = string(p.idempotencyKey, 'idempotencyKey');
+        const prior = this.store.findOperation(method, 'local', key);
+        if (prior) {
+          this.store.assertDetails(prior.operation);
+          return prior.operation;
+        }
+        const operation = this.operation(method, 'local', key, {}, (op) => {
+          op.status = 'persisted';
+        });
+        try {
+          const result = this.storage.collect();
+          this.store.transaction(() => {
+            operation.status = 'completed';
+            operation.result = result;
+            this.store.saveOperation(operation);
+          });
+          return operation;
+        } catch (error) {
+          if (!this.store.degraded) {
+            operation.status = 'failed';
+            operation.error = {
+              code: 'GC_INTERRUPTED',
+              message: 'Collection interrupted; recover recorded file actions before a new batch',
+            };
+            this.store.saveOperation(operation);
+          }
+          throw error;
+        }
+      }
       case 'initialize': {
         fields(p, ['protocolVersion', 'sdkVersion']);
-        if (p.protocolVersion !== '1.0') fail('PROTOCOL_MISMATCH', 'Expected protocolVersion 1.0');
+        if (p.protocolVersion !== '2.0') fail('PROTOCOL_MISMATCH', 'Expected protocolVersion 2.0');
         string(p.sdkVersion, 'sdkVersion', 128);
         return {
-          protocolVersion: '1.0',
+          protocolVersion: '2.0',
           engineVersion: '0.1.0',
-          schemaVersion: 2,
+          schemaVersion: 3,
           instanceId: this.instanceId,
           storeId: this.storeId,
           capabilities: {
             events: 'cursor-pull',
-            acceptance: ['human'],
+            storeNamespaces: { version: 1, digestVersion: 1 },
+            storage: {
+              version: 1,
+              snapshots: true,
+              retention: true,
+              archives: !!this.controlPlane,
+            },
+            acceptance: ['human', 'checks'],
+            sessionLifecycle: {
+              version: 1,
+              open: true,
+              reuse: true,
+              routing: true,
+              fork: true,
+              compact: true,
+              rotate: true,
+              stop: true,
+            },
             providers: [...this.adapters.keys()],
             lifecycle: { version: 1, reconcile: 'owner-attestation', durableDeadlines: true },
             executionIsolation: {
@@ -896,35 +1984,66 @@ class LocalEngine implements Engine {
           spec,
           (op) => {
             this.admitWork();
+            const queued = (
+              this.store.db
+                .prepare(
+                  "SELECT COUNT(*) AS n FROM tasks WHERE json_extract(data,'$.status') IN ('queued','waiting_dependency')",
+                )
+                .get() as { n: number }
+            ).n;
+            if (queued >= (this.config.limits?.maxQueuedTasks ?? 1000))
+              fail('QUEUE_CAPACITY_EXHAUSTED', 'Queued task capacity reached');
+            const status = this.dependencyState(spec);
+            const parent = spec.parentTaskId ? this.task(spec.parentTaskId) : undefined;
+            if (parent?.spec.budget && !spec.budget)
+              spec.budget = structuredClone(parent.spec.budget);
+            if (
+              parent?.spec.budget &&
+              spec.budget &&
+              (parent.spec.budget.currency !== spec.budget.currency ||
+                moneyUnits(spec.budget.maxCost) > moneyUnits(parent.spec.budget.maxCost))
+            )
+              fail('UNAUTHORIZED', 'Child budget exceeds its parent');
+            const writePaths = this.writePaths(spec);
+            const rules =
+              spec.acceptance.mode === 'checks'
+                ? spec.acceptance.ruleRefs.map((ref) => {
+                    const rule = this.verificationRules.find(
+                      (r) => r.id === ref.id && r.version === ref.version,
+                    );
+                    if (!rule)
+                      fail(
+                        'UNKNOWN_VERIFICATION_RULE',
+                        'Verification rule id/version is not registered',
+                      );
+                    return structuredClone(rule);
+                  })
+                : undefined;
             const id = randomUUID(),
-              sessionId = randomUUID(),
-              time = now();
+              time = this.time();
+            const rootTaskId = parent?.rootTaskId ?? parent?.id ?? id;
+            const selected = this.selectSession(spec, id, rootTaskId, writePaths);
+            const sessionId = selected.session.id;
             const task: TaskSnapshot = {
+              retryIdentity: requestIdentity.getStore(),
               id,
               sessionId,
               spec,
-              status: 'queued',
+              status,
               revision: 1,
               artifactRefs: [],
               result: null,
-              reason: null,
+              reason: status === 'blocked' ? 'dependency_failed' : null,
               approvalId: null,
               createdAt: time,
               updatedAt: time,
-            };
-            const session: SessionSnapshot = {
-              id: sessionId,
-              taskId: id,
-              provider: spec.runtime.provider,
-              model: spec.runtime.model,
-              providerSessionId: null,
-              generation: 1,
-              revision: 1,
-              status: 'idle',
-              activeDispatchId: null,
+              rootTaskId,
+              writePaths,
+              ...(selected.routing ? { routing: selected.routing } : {}),
+              ...(rules ? { verificationRules: rules, verificationAttempts: 0 } : {}),
             };
             this.store.put('tasks', id, task);
-            this.store.put('sessions', sessionId, session);
+            if (selected.fresh) this.store.put('sessions', sessionId, selected.session);
             op.targetId = id;
             op.result = { taskId: id };
             this.store.event(
@@ -934,6 +2053,7 @@ class LocalEngine implements Engine {
             );
           },
         );
+        this.armQueue(this.task(op.targetId));
         this.kick();
         return this.task(op.targetId);
       }
@@ -943,9 +2063,80 @@ class LocalEngine implements Engine {
       case 'sessions.get':
         fields(p, ['sessionId']);
         return this.sessionSnapshot(string(p.sessionId, 'sessionId', 128));
+      case 'sessions.inspect': {
+        fields(p, ['sessionId', 'timeoutMs', 'limit']);
+        const session = this.session(string(p.sessionId, 'sessionId', 128));
+        const adapter = this.adapters.get(session.provider);
+        if (!adapter?.inspect)
+          fail('UNSUPPORTED_CAPABILITY', 'Runtime history inspection is unavailable');
+        const timeoutMs = integer(p.timeoutMs ?? 5000, 'timeoutMs', 1, 60000);
+        const limit = integer(p.limit ?? 16, 'limit', 1, 64);
+        const target = {
+          sessionId: session.id,
+          generation: session.generation,
+          dispatchId: session.activeDispatchId,
+          providerSessionId: session.providerSessionId,
+        };
+        if (!session.providerSessionId)
+          return {
+            target,
+            status: 'not_found',
+            records: [],
+            truncated: false,
+            execution: 'unknown',
+            detail: 'No native session identity was recorded; submission outcome is unchanged',
+          };
+        const controller = new AbortController();
+        let timer: NodeJS.Timeout | undefined;
+        try {
+          const result = await Promise.race([
+            adapter.inspect({
+              ...target,
+              providerSessionId: session.providerSessionId,
+              workspace: this.store.workspace,
+              stateDir: this.store.stateDir,
+              limit,
+              timeoutMs,
+              signal: controller.signal,
+            }),
+            new Promise<never>((_, reject) => {
+              timer = setTimeout(() => {
+                controller.abort();
+                reject(new Error('Inspection timed out'));
+              }, timeoutMs);
+            }),
+          ]);
+          if (
+            result.providerSessionId !== session.providerSessionId ||
+            Buffer.byteLength(JSON.stringify(result)) > 131072
+          )
+            return {
+              target,
+              status: 'mismatch',
+              records: [],
+              truncated: false,
+              execution: 'unknown',
+              detail: 'Runtime inspection identity or bounds failed validation',
+            };
+          return { ...result, target, execution: 'unknown' };
+        } catch {
+          return {
+            target,
+            status: 'unavailable',
+            records: [],
+            truncated: false,
+            execution: 'unknown',
+            detail:
+              'Bounded native inspection failed; prior outcome and resource ownership are unchanged',
+          };
+        } finally {
+          if (timer) clearTimeout(timer);
+          controller.abort();
+        }
+      }
       case 'scheduler.get':
         fields(p, []);
-        return this.store.transaction(() => this.scheduler());
+        return this.scheduler();
       case 'scheduler.getConflict':
         fields(p, ['conflictId']);
         return this.store.require<ExecutionConflict>(
@@ -968,6 +2159,8 @@ class LocalEngine implements Engine {
             const task = this.task(id),
               session = this.session(task.sessionId);
             op.targetId = id;
+            if (session.status === 'closed')
+              fail('SESSION_CLOSED', 'Stopped sessions cannot resume an old task');
             if (task.status === 'blocked' || session.status === 'outcome_unknown')
               fail('OUTCOME_UNKNOWN', 'Inspect the unresolved dispatch before resuming');
             if (terminalTasks.has(task.status)) fail('STALE_TARGET', 'Task is terminal');
@@ -998,8 +2191,9 @@ class LocalEngine implements Engine {
               return;
             }
             const session = this.session(task.sessionId),
-              flight = this.flights.get(session.id);
-            if (session.status === 'outcome_unknown')
+              activeFlight = this.flights.get(session.id),
+              flight = activeFlight?.taskId === task.id ? activeFlight : undefined;
+            if (session.taskId === task.id && session.status === 'outcome_unknown')
               fail('OUTCOME_UNKNOWN', 'Cannot confirm cancellation of an unknown dispatch');
             if (flight) {
               if (!readRuntimeCapabilities(this.adapters.get(session.provider)!).interrupt)
@@ -1025,14 +2219,31 @@ class LocalEngine implements Engine {
             } else {
               this.invalidateApproval(task);
               this.saveTask(task, 'cancelled', 'cancelled_by_client');
-              this.saveSession(session, 'idle');
+              for (const message of this.store.all<MessageSnapshot>('messages')) {
+                if (message.taskId !== task.id || message.status !== 'persisted') continue;
+                message.status = 'expired';
+                this.store.put('messages', message.id, message);
+                const outbox = this.store.get<Record<string, unknown>>('outbox', message.id);
+                if (outbox)
+                  this.store.put('outbox', message.id, {
+                    ...outbox,
+                    status: 'expired',
+                    reason: 'task_cancelled_before_submission',
+                  });
+                this.store.event(
+                  'message.expired',
+                  { messageId: message.id, reason: 'task_cancelled_before_submission' },
+                  { taskId: task.id, sessionId: message.toSessionId },
+                );
+              }
+              if (session.taskId === task.id) this.saveSession(session, 'idle');
               this.taskEvent(task, op.id);
             }
           },
         );
         if (op.status === 'persisted') {
           const flight = this.flights.get(this.task(id).sessionId);
-          if (flight) {
+          if (flight?.taskId === id) {
             flight.intent = 'cancel';
             if (!flight.controlIds.includes(op.id)) {
               flight.controlIds.push(op.id);
@@ -1063,13 +2274,54 @@ class LocalEngine implements Engine {
             fail('STALE_TARGET', 'Session generation changed');
           if (terminalTasks.has(task.status))
             fail('STALE_TARGET', 'Cannot send to a terminal task');
+          const sender = context.runtimeActor?.sessionId ?? 'client:local';
+          const recent = this.store.db
+            .prepare(
+              "SELECT count(*) AS count FROM messages WHERE json_extract(data,'$.fromSessionId')=? AND json_extract(data,'$.createdAt')>=?",
+            )
+            .get(sender, new Date(this.clock.wallNow() - 60000).toISOString()) as { count: number };
+          if (recent.count >= (this.config.messages?.maxPerMinute ?? 120))
+            fail('MESSAGE_RATE_LIMIT', 'Message rate limit reached');
+          const sourceIds = context.runtimeActor
+            ? [...(this.flights.get(context.runtimeActor.sessionId)?.messageIds ?? [])]
+            : [];
+          if (spec.replyToMessageId) {
+            const reply = this.store.require<MessageSnapshot>('messages', spec.replyToMessageId);
+            if (
+              context.runtimeActor &&
+              reply.toSessionId !== sender &&
+              reply.fromSessionId !== sender
+            )
+              fail('UNAUTHORIZED', 'Reply target is outside sender context');
+            sourceIds.push(reply.id);
+          }
+          const hops =
+            1 +
+            Math.max(
+              0,
+              ...sourceIds.map(
+                (id) => this.store.get<MessageSnapshot>('messages', id)?.hopCount ?? 0,
+              ),
+            );
+          if (hops > (this.config.messages?.maxHops ?? 16))
+            fail('MESSAGE_HOP_LIMIT', 'Message hop limit reached');
           const id = randomUUID();
           const message: MessageSnapshot = {
+            retryIdentity: requestIdentity.getStore(),
             ...spec,
             id,
-            fromSessionId: 'client:local',
+            fromSessionId: sender,
             idempotencyKey: key,
             status: 'persisted',
+            createdAt: this.time(),
+            expiresAt: new Date(
+              this.clock.wallNow() +
+                Math.min(
+                  spec.ttlMs ?? this.config.messages?.ttlMs ?? 86400000,
+                  this.config.messages?.ttlMs ?? 86400000,
+                ),
+            ).toISOString(),
+            hopCount: hops,
           };
           this.store.put('messages', id, message);
           this.store.put('outbox', id, { id, sessionId: session.id, status: 'persisted' });
@@ -1101,6 +2353,7 @@ class LocalEngine implements Engine {
           string(p.idempotencyKey, 'idempotencyKey', 256),
         );
         if (!result) fail('NOT_FOUND', 'Idempotent operation not found');
+        this.store.assertDetails(result.operation);
         return result.operation;
       }
       case 'approvals.get':
@@ -1125,6 +2378,40 @@ class LocalEngine implements Engine {
           (op) => {
             const approval = this.store.require<ApprovalRequest>('approvals', id);
             const task = this.task(approval.taskId);
+            if (approval.purpose === 'runtime_permission') {
+              const target = approval.target;
+              const session = this.session(task.sessionId);
+              if (
+                approval.status !== 'pending' ||
+                approval.revision !== decision.expectedRevision ||
+                task.approvalId !== id ||
+                task.revision !== target.taskRevision ||
+                session.id !== target.sessionId ||
+                session.generation !== target.generation ||
+                session.activeDispatchId !== target.dispatchId ||
+                Date.parse(approval.expiresAt) <= this.clock.wallNow() ||
+                !this.permissionWaits.has(id)
+              )
+                fail('STALE_TARGET', 'Runtime permission request is no longer current');
+              approval.status = decision.choice === 'approve' ? 'approved' : 'denied';
+              approval.revision++;
+              this.store.put('approvals', id, approval);
+              task.approvalId = null;
+              this.saveTask(task, 'running', null);
+              op.targetId = id;
+              op.result = {
+                taskId: task.id,
+                purpose: approval.purpose,
+                choice: decision.choice as string,
+              };
+              this.store.event(
+                `approval.${approval.status}`,
+                { approvalId: id, revision: approval.revision },
+                { taskId: task.id, sessionId: session.id, operationId: op.id },
+              );
+              this.taskEvent(task, op.id);
+              return;
+            }
             if (
               approval.status !== 'pending' ||
               approval.revision !== decision.expectedRevision ||
@@ -1144,7 +2431,7 @@ class LocalEngine implements Engine {
               decision.choice === 'deny'
                 ? 'failed'
                 : pending.length
-                  ? session.status === 'paused'
+                  ? ['paused', 'closed'].includes(session.status)
                     ? 'paused'
                     : 'queued'
                   : 'completed';
@@ -1166,6 +2453,9 @@ class LocalEngine implements Engine {
             this.taskEvent(task, op.id);
           },
         );
+        const permission = this.store.get<ApprovalRequest>('approvals', id);
+        if (permission?.purpose === 'runtime_permission' && permission.status !== 'pending')
+          this.permissionWaits.get(id)?.settle(permission.status === 'approved');
         this.kick();
         return op;
       }
@@ -1191,6 +2481,93 @@ class LocalEngine implements Engine {
               ? 'reported'
               : 'unknown',
         };
+      }
+      case 'costs.get': {
+        fields(p, ['taskId', 'scope']);
+        const scope = p.scope ?? 'direct';
+        if (!['direct', 'tree', 'host_overhead'].includes(String(scope)))
+          fail('VALIDATION_ERROR', 'Invalid cost scope');
+        return this.accounting.summary(
+          p.taskId === undefined ? undefined : string(p.taskId, 'taskId', 128),
+          scope as 'direct' | 'tree' | 'host_overhead',
+        );
+      }
+      case 'context.estimate': {
+        fields(p, [
+          'provider',
+          'model',
+          'keepHistoryTokens',
+          'compactHistoryTokens',
+          'requests',
+          'growthTokens',
+          'outputTokens',
+          'retainedPrefixTokens',
+          'compaction',
+          'intervalsMs',
+          'ttlMs',
+        ]);
+        const pricing = this.accounting.pricing.find(
+          (price) => price.provider === p.provider && price.model === p.model,
+        );
+        if (!pricing) fail('UNKNOWN_PRICING', 'No registered price for this provider and model');
+        return estimateContext({ ...p, pricing } as unknown as Parameters<
+          typeof estimateContext
+        >[0]);
+      }
+      case 'costs.recordOverhead': {
+        if (!context.owner) fail('UNAUTHORIZED', 'Only the host owner can record overhead');
+        fields(p, [
+          'billingId',
+          'currency',
+          'amount',
+          'pricingVersion',
+          'summary',
+          'idempotencyKey',
+        ]);
+        const billingId = string(p.billingId, 'billingId', 256),
+          currency = string(p.currency, 'currency', 3);
+        if (!/^[A-Z]{3}$/.test(currency)) fail('VALIDATION_ERROR', 'Invalid currency');
+        const amount =
+          p.amount === null ? null : moneyString(moneyUnits(string(p.amount, 'amount', 64)));
+        const payload = {
+          billingId,
+          currency,
+          amount,
+          pricingVersion: string(p.pricingVersion, 'pricingVersion', 128),
+          summary: string(p.summary, 'summary', 2048),
+        };
+        return this.operation(
+          method,
+          'host',
+          string(p.idempotencyKey, 'idempotencyKey'),
+          payload,
+          (op) => {
+            const id = `overhead:${billingId}`;
+            const previous = this.store.get<Record<string, unknown>>('costs', id);
+            if (previous && previous.requestDigest !== digest(payload))
+              fail('IDEMPOTENCY_CONFLICT', 'Billing identity has a different overhead record');
+            if (!previous)
+              this.store.put('costs', id, {
+                id,
+                usageRecordId: null,
+                dispatchId: null,
+                costOwnerTaskId: null,
+                rootTaskId: null,
+                category: 'host_overhead',
+                ...payload,
+                amountUnits: amount === null ? null : moneyUnits(amount).toString(),
+                requestDigest: digest(payload),
+                createdAt: this.time(),
+              });
+            op.targetId = id;
+            op.result = { costRecordId: id };
+            this.store.event(
+              'cost.overhead_recorded',
+              { costRecordId: id, amount, currency, actor: 'host_owner' },
+              { operationId: op.id },
+            );
+          },
+        );
       }
       case 'usage.getRecord': {
         fields(p, ['usageRecordId']);
@@ -1218,12 +2595,161 @@ class LocalEngine implements Engine {
           fail('VALIDATION_ERROR', 'operationId is required');
         return this.close(p as CloseOptions);
       }
-      case 'sessions.open':
-      case 'sessions.fork':
-        fail(
-          'UNSUPPORTED_CAPABILITY',
-          'Explicit session opening and forking are not in this increment',
+      case 'sessions.open': {
+        fields(p, ['spec', 'idempotencyKey']);
+        const raw = object(p.spec, 'spec');
+        fields(raw, ['runtime', 'writeScope']);
+        const spec = taskSpec({
+          ...raw,
+          goal: 'Open a logical session',
+          acceptance: { mode: 'human', criteria: ['Logical session only'] },
+        });
+        const adapter = this.adapters.get(spec.runtime.provider);
+        if (!adapter) fail('VALIDATION_ERROR', 'Provider is not configured');
+        readRuntimeCapabilities(adapter);
+        if (
+          this.config.providers?.[spec.runtime.provider]?.model &&
+          this.config.providers[spec.runtime.provider].model !== spec.runtime.model
+        )
+          fail('VALIDATION_ERROR', 'Model does not match configured provider');
+        const op = this.operation(
+          method,
+          'local',
+          string(p.idempotencyKey, 'idempotencyKey'),
+          raw,
+          (op) => {
+            this.admitWork();
+            const session = this.newSession(spec.runtime, this.writePaths(spec), null);
+            this.store.put('sessions', session.id, session);
+            op.targetId = session.id;
+            op.result = { sessionId: session.id };
+            this.store.event(
+              'session.opened',
+              { generation: 1 },
+              { sessionId: session.id, operationId: op.id },
+            );
+          },
         );
+        return this.sessionSnapshot(op.targetId);
+      }
+      case 'sessions.fork': {
+        fields(p, ['target', 'snapshotRef', 'idempotencyKey']);
+        const target = object(p.target, 'target');
+        const op = this.operation(
+          method,
+          string(target.sessionId, 'sessionId', 128),
+          string(p.idempotencyKey, 'idempotencyKey'),
+          { target, snapshotRef: p.snapshotRef },
+          (op) => {
+            this.admitWork();
+            const source = this.checkedTarget(target);
+            const fork = this.forkCandidate(source, string(p.snapshotRef, 'snapshotRef', 128));
+            this.store.put('sessions', fork.id, fork);
+            op.targetId = fork.id;
+            op.result = { sessionId: fork.id, nativeForkPending: true };
+            this.store.event(
+              'session.fork_prepared',
+              {
+                sourceSessionId: source.id,
+                snapshotRef: p.snapshotRef as string,
+                nativeCheckpoint: source.nativeCheckpoint!,
+              },
+              { sessionId: fork.id, operationId: op.id },
+            );
+          },
+        );
+        return this.sessionSnapshot(op.targetId);
+      }
+      case 'sessions.rotate': {
+        fields(p, ['target', 'idempotencyKey']);
+        const target = object(p.target, 'target');
+        return this.operation(
+          method,
+          string(target.sessionId, 'sessionId', 128),
+          string(p.idempotencyKey, 'idempotencyKey'),
+          { target },
+          (op) => {
+            const session = this.checkedTarget(target);
+            this.requireQuietSession(session);
+            const artifactRef = this.store.artifact(JSON.stringify(session));
+            session.generations = [
+              ...(session.generations ?? []),
+              {
+                generation: session.generation,
+                providerSessionId: session.providerSessionId,
+                ...(session.nativeCheckpoint ? { nativeCheckpoint: session.nativeCheckpoint } : {}),
+                artifactRef,
+              },
+            ];
+            session.generation++;
+            session.providerSessionId = null;
+            delete session.nativeCheckpoint;
+            delete session.forkSource;
+            session.taskId = null;
+            this.saveSession(session, 'idle');
+            op.targetId = session.id;
+            op.result = { generation: session.generation, artifactRef };
+            this.store.event(
+              'session.rotated',
+              { generation: session.generation, artifactRef },
+              { sessionId: session.id, operationId: op.id },
+            );
+          },
+        );
+      }
+      case 'sessions.compact': {
+        fields(p, ['target', 'idempotencyKey']);
+        const target = object(p.target, 'target');
+        const op = this.operation(
+          method,
+          string(target.sessionId, 'sessionId', 128),
+          string(p.idempotencyKey, 'idempotencyKey'),
+          { target },
+          (op) => {
+            this.admitWork();
+            const session = this.checkedTarget(target);
+            this.requireQuietSession(session);
+            op.targetId = session.id;
+            if (!session.providerSessionId) {
+              op.status = 'noop';
+              op.result = { reason: 'NO_NATIVE_HISTORY' };
+              return;
+            }
+            if (readRuntimeCapabilities(this.adapters.get(session.provider)!).compact !== true)
+              fail('UNSUPPORTED_CAPABILITY', 'Runtime cannot manually compact');
+            const source = this.associatedTask(session);
+            const id = randomUUID();
+            const task: TaskSnapshot = {
+              id,
+              sessionId: session.id,
+              status: 'queued',
+              revision: 1,
+              spec: {
+                goal: 'Compact the existing native history',
+                runtime: { provider: session.provider, model: session.model },
+                acceptance: { mode: 'human', criteria: ['Native compaction boundary observed'] },
+                parentTaskId: source.id,
+              },
+              artifactRefs: [],
+              result: null,
+              reason: null,
+              approvalId: null,
+              createdAt: this.time(),
+              updatedAt: this.time(),
+              kind: 'compaction',
+              maintenanceOperationId: op.id,
+              rootTaskId: source.rootTaskId ?? source.id,
+              writePaths: session.writePaths ?? [],
+            };
+            this.store.put('tasks', id, task);
+            op.status = 'persisted';
+            op.result = { taskId: id };
+            this.taskEvent(task, op.id);
+          },
+        );
+        this.kick();
+        return op;
+      }
       default:
         fail('METHOD_NOT_FOUND', `Unknown method: ${method}`);
     }
@@ -1247,8 +2773,8 @@ class LocalEngine implements Engine {
       string(target.expectedDispatchId, 'expectedDispatchId', 128);
     const command = object(p.command, 'command');
     fields(command, ['action', 'mode']);
-    if (!['pause', 'resume'].includes(command.action as string))
-      fail('UNSUPPORTED_CAPABILITY', 'Only pause/resume are implemented');
+    if (!['pause', 'resume', 'stop'].includes(command.action as string))
+      fail('UNSUPPORTED_CAPABILITY', 'Unknown session control action');
     const mode = command.mode ?? 'drain';
     if (!['drain', 'interrupt'].includes(mode as string))
       fail('VALIDATION_ERROR', 'Invalid pause mode');
@@ -1258,8 +2784,7 @@ class LocalEngine implements Engine {
       string(p.idempotencyKey, 'idempotencyKey'),
       { target, command },
       (op) => {
-        const session = this.session(sessionId),
-          task = this.task(session.taskId);
+        const session = this.session(sessionId);
         op.targetId = sessionId;
         if (
           session.generation !== target.expectedGeneration ||
@@ -1268,6 +2793,35 @@ class LocalEngine implements Engine {
           session.status !== target.expectedState
         )
           fail('STALE_TARGET', 'Control target changed');
+        if (command.action === 'stop' && !this.flights.has(sessionId)) {
+          if (
+            session.activeDispatchId ||
+            this.store.activeDispatches(sessionId).length ||
+            this.adapters.get(session.provider)?.hasActiveResources?.(sessionId)
+          )
+            fail('RUNTIME_STILL_ACTIVE', 'Stop requires confirmed execution and resource release');
+          if (session.status === 'closed') {
+            op.status = 'noop';
+            return;
+          }
+          this.saveSession(session, 'closed');
+          if (session.taskId) {
+            const task = this.task(session.taskId);
+            if (!terminalTasks.has(task.status) && task.status !== 'waiting_approval') {
+              this.saveTask(task, 'paused', 'session_stopped');
+              this.taskEvent(task, op.id);
+            }
+          }
+          this.store.event(
+            'session.closed',
+            { generation: session.generation },
+            { sessionId, operationId: op.id },
+          );
+          return;
+        }
+        if (session.status === 'closed')
+          fail('SESSION_CLOSED', 'Open or rotate a session before new work');
+        const task = this.associatedTask(session);
         if (session.status === 'outcome_unknown' || task.status === 'blocked')
           fail('OUTCOME_UNKNOWN', 'Session requires reconciliation');
         if (terminalTasks.has(task.status)) fail('STALE_TARGET', 'Task is terminal');
@@ -1311,7 +2865,7 @@ class LocalEngine implements Engine {
     if (op.status === 'persisted') {
       const flight = this.flights.get(sessionId);
       if (flight) {
-        flight.intent = 'pause';
+        flight.intent = command.action === 'stop' ? 'stop' : 'pause';
         if (!flight.controlIds.includes(op.id)) {
           flight.controlIds.push(op.id);
           this.arm(
@@ -1330,7 +2884,34 @@ class LocalEngine implements Engine {
   private pendingMessages(sessionId: string): MessageSnapshot[] {
     return this.store
       .all<MessageSnapshot>('messages')
-      .filter((m) => m.toSessionId === sessionId && m.status === 'persisted');
+      .filter(
+        (m) =>
+          m.toSessionId === sessionId &&
+          m.status === 'persisted' &&
+          (!m.expiresAt || Date.parse(m.expiresAt) > this.clock.wallNow()),
+      );
+  }
+  private expireMessages(): void {
+    const expired = this.store.db
+      .prepare(
+        "SELECT data FROM messages WHERE json_extract(data,'$.status')='persisted' AND json_extract(data,'$.expiresAt')<=?",
+      )
+      .all(this.time()) as { data: string }[];
+    if (!expired.length) return;
+    this.store.transaction(() => {
+      for (const row of expired) {
+        const message = JSON.parse(row.data) as MessageSnapshot;
+        message.status = 'expired';
+        this.store.put('messages', message.id, message);
+        const outbox = this.store.get<Record<string, unknown>>('outbox', message.id);
+        if (outbox) this.store.put('outbox', message.id, { ...outbox, status: 'expired' });
+        this.store.event(
+          'message.expired',
+          { messageId: message.id },
+          { taskId: message.taskId, sessionId: message.toSessionId },
+        );
+      }
+    });
   }
 
   private reconcile(p: Record<string, unknown>): OperationSnapshot {
@@ -1389,7 +2970,7 @@ class LocalEngine implements Engine {
       { target, evidence },
       (op) => {
         const session = this.session(sessionId),
-          task = this.task(session.taskId);
+          task = this.associatedTask(session);
         if (
           session.generation !== target.expectedGeneration ||
           session.revision !== target.expectedRevision ||
@@ -1473,7 +3054,10 @@ class LocalEngine implements Engine {
         const evidenceRef = this.store.artifact(JSON.stringify(audit));
         const executionReleased =
           evidence.localResources === 'stopped' && evidence.remoteExecution === 'stopped';
-        if (executionReleased) this.release(dispatch as Dispatch, evidenceRef, 'owner_attestation');
+        if (executionReleased) {
+          dispatch.verificationPending = false;
+          this.release(dispatch as Dispatch, evidenceRef, 'owner_attestation');
+        }
         op.result = {
           sessionId,
           dispatchId,
@@ -1643,7 +3227,11 @@ class LocalEngine implements Engine {
             evidenceRef: result!.evidenceRef,
             actor: 'host_owner',
           },
-          { sessionId: op.scope, taskId: this.session(op.scope).taskId, operationId: op.id },
+          {
+            sessionId: op.scope,
+            taskId: this.session(op.scope).taskId ?? undefined,
+            operationId: op.id,
+          },
         );
         this.store.event('operation.updated', { status: 'completed' }, { operationId: op.id });
         this.pendingResourceCleanups.delete(op.id);
@@ -1754,15 +3342,53 @@ class LocalEngine implements Engine {
       this.scheduled = false;
       if (this.closing || this.closed) return;
       try {
+        this.expireMessages();
+        this.refreshDependencies();
+        for (const task of this.store.tasksInState('waiting_dependency')) {
+          this.armQueue(task);
+          if (
+            task.routing &&
+            !task.routing.submittedAt &&
+            (Date.parse(task.routing.deadlineAt) <= this.clock.wallNow() ||
+              (this.queueTimers.get(task.id)?.deadline ?? Infinity) <= this.clock.monotonicNow())
+          )
+            this.expireQueue(task);
+        }
         const queued = this.store.queuedTasks();
         if (!queued.length) return;
-        let canDispatch = this.scheduler().canDispatch;
+        let canDispatch = this.scheduler().canDispatch && !this.storage.status().backpressured;
         for (const task of queued) {
-          if (!canDispatch) break;
-          if (this.flights.has(task.sessionId)) continue;
-          const session = this.session(task.sessionId);
-          if (session.status !== 'idle') continue;
-          if (this.start(task, session)) canDispatch = this.scheduler().canDispatch;
+          this.armQueue(task);
+          let session = this.session(task.sessionId);
+          for (
+            let attempts = 0;
+            attempts < 5 && task.routing && !task.routing.submittedAt;
+            attempts++
+          ) {
+            const remaining = Math.min(
+              Date.parse(task.routing.deadlineAt) - this.clock.wallNow(),
+              (this.queueTimers.get(task.id)?.deadline ?? this.clock.monotonicNow()) -
+                this.clock.monotonicNow(),
+            );
+            const ready =
+              canDispatch && this.sessionReady(task, session) && !this.writeConflict(task);
+            if (remaining > 0 || (task.routing.maxQueueWaitMs === 0 && ready)) break;
+            this.expireQueue(task);
+            if (task.status === 'blocked') break;
+            session = this.session(task.sessionId);
+          }
+          if (task.status !== 'queued' || !canDispatch || !this.sessionReady(task, session))
+            continue;
+          if (task.routing && task.routing.expectedGeneration !== session.generation) {
+            this.store.transaction(() => {
+              this.saveTask(task, 'blocked', 'STALE_TARGET');
+              this.taskEvent(task);
+            });
+            this.stopQueue(task.id);
+            continue;
+          }
+          if (this.start(task, session))
+            canDispatch = this.scheduler().canDispatch && !this.storage.status().backpressured;
         }
       } catch (error) {
         // A scheduler/storage failure must not become an unhandled promise or silently retry a dispatch.
@@ -1774,6 +3400,41 @@ class LocalEngine implements Engine {
     });
   }
   private start(task: TaskSnapshot, session: SessionSnapshot): boolean {
+    this.store.assertWritable();
+    if (this.controlPlane?.hasPendingRollover || this.storage.status().backpressured) return false;
+    const dependencyStatus = this.dependencyState(task.spec);
+    if (dependencyStatus !== 'queued') {
+      this.store.transaction(() => {
+        this.saveTask(
+          task,
+          dependencyStatus,
+          dependencyStatus === 'blocked' ? 'dependency_failed' : null,
+        );
+        this.taskEvent(task);
+      });
+      return false;
+    }
+    try {
+      const currentPaths = this.writePaths(task.spec);
+      for (const path of task.writePaths ?? []) workspacePath(this.store.workspace, path);
+      if (digest(currentPaths) !== digest(task.writePaths ?? []))
+        fail('INVALID_WORKSPACE_SCOPE', 'Registered write scope changed after admission');
+    } catch (error) {
+      this.store.transaction(() => {
+        this.saveTask(task, 'blocked', 'INVALID_WORKSPACE_SCOPE');
+        this.taskEvent(task);
+      });
+      return false;
+    }
+    if (this.writeConflict(task)) return false;
+    const moneyPolicy = this.accounting.policy(task);
+    if (moneyPolicy.reason) {
+      this.store.transaction(() => {
+        this.saveTask(task, 'paused', moneyPolicy.reason);
+        this.taskEvent(task);
+      });
+      return false;
+    }
     const adapter = this.adapters.get(session.provider);
     let capabilities: RuntimeCapabilities;
     try {
@@ -1816,7 +3477,11 @@ class LocalEngine implements Engine {
     const cap = capabilities.executionBudget;
     const enteredMono = this.clock.monotonicNow(),
       enteredWall = this.clock.wallNow();
-    const effectiveTurnMs = Math.min(this.timeouts.turnMs, cap.turnCapMs ?? Infinity);
+    const effectiveTurnMs = Math.min(
+      this.timeouts.turnMs,
+      cap.turnCapMs ?? Infinity,
+      task.kind === 'compaction' ? 300000 : Infinity,
+    );
     const effectiveAcceptanceMs = Math.min(
       this.timeouts.acceptanceMs,
       cap.acceptanceCapMs ?? Infinity,
@@ -1861,7 +3526,7 @@ class LocalEngine implements Engine {
       controller,
       promise: Promise.resolve(),
       intent: null,
-      controlIds: [],
+      controlIds: task.maintenanceOperationId ? [task.maintenanceOperationId] : [],
       expired: false,
       cancelTimers: [],
       deadlineChecks: [],
@@ -1870,8 +3535,24 @@ class LocalEngine implements Engine {
     this.store.transaction(() => {
       if (!this.scheduler().canDispatch)
         fail('DISPATCH_CAPACITY_CHANGED', 'Dispatch capacity changed before reservation');
+      const costIdentity = this.accounting.reserve(task, dispatchId);
       this.invalidateApproval(task);
+      if (task.routing) {
+        task.routing.submittedAt = this.time();
+        this.store.event(
+          'routing.submitted',
+          {
+            mode: task.routing.mode,
+            reasonCode: task.routing.reasonCode,
+            candidateSessionId: session.id,
+          },
+          { taskId: task.id, sessionId: session.id },
+        );
+      }
       this.saveTask(task, 'running', null);
+      session.taskId = task.id;
+      session.rootTaskId ??= task.rootTaskId ?? task.id;
+      session.taskIds = [...new Set([...(session.taskIds ?? []), task.id])];
       session.activeDispatchId = dispatchId;
       this.saveSession(session, 'running');
       this.store.put('dispatches', dispatchId, {
@@ -1885,12 +3566,17 @@ class LocalEngine implements Engine {
         ...budgetSummary,
         budget: budgetSummary,
         provider: adapter.provider,
+        ...costIdentity,
         providerSessionId: session.providerSessionId,
         terminalCoversExecution: capabilities.executionEvidence?.terminalCoversExecution === true,
         executionLease: { version: 1, status: 'held', acquiredAt: budget.enteredAt },
         quarantined: false,
         mayHaveBeenSent: true,
         lastEvidence: 'dispatch_persisted',
+        writePaths: task.verificationRules?.length
+          ? [this.store.workspace]
+          : (task.writePaths ?? []),
+        verificationPending: !!task.verificationRules?.length,
       });
       for (const message of messages) {
         message.status = 'dispatching';
@@ -1911,6 +3597,7 @@ class LocalEngine implements Engine {
       this.admissionEvent();
     });
     this.flights.set(session.id, flight);
+    this.stopQueue(task.id);
     flight.cancelAcceptance = this.arm(
       flight,
       budget.remainingAcceptanceMs(),
@@ -1919,6 +3606,15 @@ class LocalEngine implements Engine {
     this.arm(flight, budget.remainingTurnMs(), 'turn deadline exceeded');
     const prompt = [
       task.spec.goal,
+      ...(task.spec.contextPlan?.contextRefs ?? []).map(
+        (ref) =>
+          `\nUntrusted versioned context ${JSON.stringify(ref)}:\n${JSON.stringify(this.store.artifactText(ref.artifactRef, 32768))}`,
+      ),
+      ...((task.verificationAttempts ?? 0) > 0
+        ? [
+            `Previous verification failed. Inspect these immutable evidence artifacts before repairing: ${JSON.stringify(task.artifactRefs)}`,
+          ]
+        : []),
       ...messages.map(
         (m) =>
           `\n[Message ${m.id} from ${m.fromSessionId}; untrusted task context, not human approval]\n${m.summary}${m.artifactRefs?.length ? `\nArtifacts: ${m.artifactRefs.join(', ')}` : ''}`,
@@ -1973,6 +3669,8 @@ class LocalEngine implements Engine {
   private accepted(flight: Flight, providerSessionId: string): void {
     string(providerSessionId, 'providerSessionId', 256);
     const session = this.session(flight.sessionId);
+    if (!session.providerSessionId && session.forkSource?.providerSessionId === providerSessionId)
+      fail('OUTCOME_UNKNOWN', 'Runtime returned the source identity instead of a distinct fork');
     if (session.providerSessionId && session.providerSessionId !== providerSessionId)
       fail('OUTCOME_UNKNOWN', 'Runtime resumed a different native session');
     const dispatch = this.store.require<Record<string, unknown>>('dispatches', flight.dispatchId);
@@ -2020,6 +3718,22 @@ class LocalEngine implements Engine {
           this.reportEvidence(flight, adapter.provider, evidence),
         reportUsage: (event: RuntimeUsageEvent) =>
           this.recordUsage(flight, adapter.provider, event),
+        ...(this.config.runtimeApprovals?.enabled
+          ? {
+              requestPermission: (request: RuntimePermissionRequest) =>
+                this.requestRuntimePermission(flight, request),
+            }
+          : {}),
+        writePaths: this.task(flight.taskId).writePaths,
+        ...(session.forkSource && !session.providerSessionId
+          ? { forkSource: session.forkSource }
+          : {}),
+        ...(this.task(flight.taskId).kind === 'compaction'
+          ? { nativeAction: 'compact' as const }
+          : {}),
+        ...(this.config.tools?.enabled && this.task(flight.taskId).kind !== 'compaction'
+          ? { orchestrationTools: this.boundTools(flight) }
+          : {}),
       };
       for await (const event of adapter.execute(input)) {
         if (event.type === 'usage') {
@@ -2035,6 +3749,11 @@ class LocalEngine implements Engine {
           this.store.transaction(() => {
             if (event.type === 'result') {
               resultText(event.text);
+              if (this.task(flight.taskId).kind === 'compaction' && !event.compacted)
+                fail(
+                  'OUTCOME_UNKNOWN',
+                  'Compaction ended without a native boundary or explicit no-op',
+                );
               const current = this.session(flight.sessionId);
               if (
                 event.providerSessionId &&
@@ -2069,6 +3788,41 @@ class LocalEngine implements Engine {
         outcome: 'unknown',
       };
     }
+    let verification: VerificationEvidence[] | undefined;
+    const activeApproval = this.task(flight.taskId).approvalId;
+    if (
+      activeApproval &&
+      this.store.get<ApprovalRequest>('approvals', activeApproval)?.purpose === 'runtime_permission'
+    )
+      this.store.transaction(() => this.invalidateApproval(this.task(flight.taskId)));
+    const candidate = this.task(flight.taskId);
+    if (
+      terminal.type === 'result' &&
+      !flight.expired &&
+      flight.intent !== 'cancel' &&
+      this.live(flight) &&
+      candidate.verificationRules?.length &&
+      this.stopProof(this.store.require<Dispatch>('dispatches', flight.dispatchId)) &&
+      !adapter.hasActiveResources?.(flight.sessionId)
+    ) {
+      this.store.transaction(() => {
+        this.saveTask(candidate, 'verifying', null);
+        this.taskEvent(candidate);
+      });
+      verification = [];
+      for (const rule of candidate.verificationRules) {
+        verification.push(await verifyRule(this.store.workspace, rule, flight.controller.signal));
+        if (!verification.at(-1)!.passed) break;
+      }
+    }
+    const verificationStopped =
+      verification?.every((evidence) => evidence.resourcesStopped) ?? true;
+    if (!verificationStopped)
+      terminal = {
+        type: 'error',
+        outcome: 'unknown',
+        message: 'Verification cleanup is unconfirmed',
+      };
     try {
       for (const check of flight.deadlineChecks) check();
       if (!this.live(flight)) return;
@@ -2103,6 +3857,7 @@ class LocalEngine implements Engine {
             quarantinedAt: observed.quarantinedAt ?? this.time(),
             terminalEvidence: observed.terminalEvidence ?? terminal,
             observationEndedAt: this.time(),
+            verificationPending: !verificationStopped,
           });
           this.store.event(
             'dispatch.late_evidence',
@@ -2124,16 +3879,63 @@ class LocalEngine implements Engine {
           task.artifactRefs = [this.store.artifact(fullResult)];
           task.result = resultPreview(fullResult, task.artifactRefs[0]);
           current.activeDispatchId = null;
-          this.saveSession(current, flight.intent === 'pause' ? 'paused' : 'idle');
+          if (terminal!.nativeCheckpoint) current.nativeCheckpoint = terminal!.nativeCheckpoint;
+          this.saveSession(
+            current,
+            flight.intent === 'stop' ? 'closed' : flight.intent === 'pause' ? 'paused' : 'idle',
+          );
           if (flight.intent === 'cancel') {
             this.saveTask(task, 'cancelled', 'cancelled_by_client');
+            this.taskEvent(task);
+          } else if (task.kind === 'compaction') {
+            const ref = this.store.artifact(JSON.stringify(terminal!.compacted));
+            task.artifactRefs.push(ref);
+            this.saveTask(task, 'completed', null);
+            this.store.event(
+              'session.compacted',
+              { evidenceRef: ref, kind: terminal!.compacted!.kind },
+              { sessionId: current.id, taskId: task.id },
+            );
+            this.taskEvent(task);
+          } else if (task.spec.acceptance.mode === 'checks') {
+            const passed =
+              verification?.length === task.verificationRules?.length &&
+              verification?.every((r) => r.passed);
+            const evidenceRef = this.store.artifact(
+              JSON.stringify({
+                taskId: task.id,
+                dispatchId: flight.dispatchId,
+                resultArtifactRefs: [...task.artifactRefs],
+                rules: verification ?? [],
+                passed: !!passed,
+              }),
+            );
+            task.artifactRefs.push(evidenceRef);
+            task.verificationAttempts = (task.verificationAttempts ?? 0) + 1;
+            const repair =
+              !passed &&
+              task.verificationAttempts <= (task.spec.acceptance.maxRepairs ?? 0) &&
+              flight.intent !== 'pause';
+            this.saveTask(
+              task,
+              passed ? 'completed' : repair ? 'queued' : 'blocked',
+              passed ? null : 'verification_failed',
+            );
+            this.store.event(
+              'verification.completed',
+              { passed: !!passed, evidenceRef },
+              { taskId: task.id, sessionId: current.id },
+            );
             this.taskEvent(task);
           } else this.requestApproval(task);
         } else if (terminal!.type === 'interrupted') {
           this.messagesStatus(flight, 'failed');
           this.store.put('dispatches', flight.dispatchId, { ...dispatch, status: 'interrupted' });
           current.activeDispatchId = null;
-          this.saveSession(current, flight.intent === 'cancel' ? 'idle' : 'paused');
+          this.saveSession(
+            current,
+            flight.intent === 'stop' ? 'closed' : flight.intent === 'cancel' ? 'idle' : 'paused',
+          );
           this.saveTask(
             task,
             flight.intent === 'cancel' ? 'cancelled' : 'paused',
@@ -2159,6 +3961,11 @@ class LocalEngine implements Engine {
           this.taskEvent(task);
         }
         const finalDispatch = this.store.require<Dispatch>('dispatches', flight.dispatchId);
+        this.accounting.settle(flight.dispatchId);
+        finalDispatch.verificationPending = !verificationStopped;
+        if (verification && !verificationStopped)
+          finalDispatch.verificationEvidenceRef = this.store.artifact(JSON.stringify(verification));
+        this.store.put('dispatches', finalDispatch.id, finalDispatch);
         if (this.stopProof(finalDispatch) && !adapter.hasActiveResources?.(flight.sessionId))
           this.release(
             finalDispatch,
@@ -2177,7 +3984,8 @@ class LocalEngine implements Engine {
             };
           } else if (
             (op.method === 'tasks.cancel' && task.status === 'cancelled') ||
-            (op.method === 'sessions.control' && current.status === 'paused')
+            (op.method === 'sessions.control' && ['paused', 'closed'].includes(current.status)) ||
+            (op.method === 'sessions.compact' && task.status === 'completed')
           )
             op.status = 'completed';
           else {
@@ -2194,6 +4002,7 @@ class LocalEngine implements Engine {
             { operationId: id, taskId: task.id, sessionId: task.sessionId },
           );
         }
+        this.config.storageFault?.('terminal.before_commit');
       });
     } catch (error) {
       // Preserve uncertainty if result persistence or native identity checks fail.
@@ -2235,12 +4044,20 @@ class LocalEngine implements Engine {
   }
 
   async close(options: CloseOptions = {}): Promise<{ status: 'closed'; operationId: string }> {
+    if (this.store.isClosed && this.controlPlane?.switching) {
+      if (this.storageTimer) clearInterval(this.storageTimer);
+      this.controlPlane.close();
+      this.closed = true;
+      this.shutdownId ??= randomUUID();
+      return { status: 'closed', operationId: this.shutdownId };
+    }
     const mode = options.mode ?? 'drain';
     if (!['drain', 'interrupt'].includes(mode)) fail('VALIDATION_ERROR', 'Unknown close mode');
     const timeout = integer(options.timeoutMs ?? 30000, 'timeoutMs', 0, 3600000);
     if (options.operationId !== undefined && options.operationId !== this.shutdownId)
       fail('STALE_TARGET', 'Unknown shutdown operation');
     if (this.closed) return { status: 'closed', operationId: this.shutdownId! };
+    if (this.store.degraded) return this.closeDegraded(timeout);
     if (!this.shutdownId) {
       this.shutdownId = randomUUID();
       this.closing = true;
@@ -2259,7 +4076,8 @@ class LocalEngine implements Engine {
         for (const task of this.store.all<TaskSnapshot>('tasks'))
           if (task.status === 'queued') {
             this.saveTask(task, 'paused', 'owner_shutdown');
-            this.saveSession(this.session(task.sessionId), 'paused');
+            const session = this.session(task.sessionId);
+            if (session.taskId === task.id) this.saveSession(session, 'paused');
             this.taskEvent(task);
           }
         this.admissionEvent();
@@ -2323,10 +4141,48 @@ class LocalEngine implements Engine {
       op.status = 'completed';
       op.result = { status: 'closed' };
       this.store.saveOperation(op);
+      for (const { cancel } of this.queueTimers.values()) cancel();
+      this.queueTimers.clear();
+      if (this.storageTimer) clearInterval(this.storageTimer);
       this.store.close();
+      this.controlPlane?.close();
       this.closed = true;
     }
     return { status: 'closed', operationId: this.shutdownId };
+  }
+  private async closeDegraded(timeoutMs: number): Promise<never> {
+    this.closing = true;
+    this.shutdownId ??= randomUUID();
+    for (const flight of this.flights.values()) {
+      flight.intent ??= 'shutdown';
+      flight.controller.abort();
+    }
+    this.beginAdapterClose();
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      await Promise.race([
+        Promise.all([
+          this.closeAdaptersPromise,
+          ...[...this.flights.values()].map((f) => f.promise),
+        ]),
+        new Promise<never>((_, reject) => {
+          timer = setTimeout(() => reject(this.shutdownIncomplete()), timeoutMs);
+        }),
+      ]);
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
+    for (const { cancel } of this.queueTimers.values()) cancel();
+    this.queueTimers.clear();
+    if (this.storageTimer) clearInterval(this.storageTimer);
+    this.store.close();
+    this.controlPlane?.close();
+    this.closed = true;
+    throw new OrchestrationError(
+      'STORAGE_DEGRADED_CLOSED',
+      'Local resources closed; shutdown receipt could not be persisted. Restart must recover unresolved work.',
+      { status: 'closed', operationId: this.shutdownId, durableReceipt: false },
+    );
   }
   private beginAdapterClose(): void {
     if (this.closeAdaptersPromise) return;
@@ -2339,7 +4195,7 @@ class LocalEngine implements Engine {
     });
   }
   private shutdownIncomplete(): OrchestrationError {
-    if (!this.closed && this.shutdownId) {
+    if (!this.closed && !this.store.degraded && this.shutdownId) {
       this.store.transaction(() => {
         const op = this.store.operation(this.shutdownId!);
         if (op.lifecycle && !op.lifecycle.expiredAt) {

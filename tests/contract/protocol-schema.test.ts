@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { test } from 'node:test';
 import { promisify } from 'node:util';
 import { startUnixHost } from '../../packages/cli/src/host.ts';
-import { createEngine, createFakeAdapter } from '../../packages/engine/src/index.ts';
+import { createEngine, createFakeAdapter } from '../fixtures/engine.ts';
 import type { RuntimeAdapter } from '../../packages/engine/src/types.ts';
 import { connectOrchestrator } from '../../packages/sdk-typescript/src/index.ts';
 import { schemaValidator } from '../fixtures/schema-validator.ts';

@@ -4,7 +4,7 @@ import { mkdtemp, mkdir, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
-import { createEngine } from '../../packages/engine/src/index.ts';
+import { createEngine } from '../fixtures/engine.ts';
 import { createFakeAdapter } from '../../packages/engine/src/fake.ts';
 import type {
   Engine,
@@ -193,7 +193,7 @@ test('AC-R01 populated schema2 stores regain query indexes without changing hist
             value: string;
           }
         ).value,
-        '2',
+        '3',
       );
       const indexes = db
         .prepare(

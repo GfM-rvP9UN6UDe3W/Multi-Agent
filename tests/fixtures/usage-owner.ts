@@ -1,5 +1,5 @@
 import { createInterface } from 'node:readline';
-import { createEngine, createFakeAdapter } from '../../packages/engine/src/index.ts';
+import { createEngine, createFakeAdapter } from './engine.ts';
 import { startUnixHost } from '../../packages/cli/src/host.ts';
 import type { EventPage, TaskSnapshot } from '../../packages/engine/src/types.ts';
 

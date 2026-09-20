@@ -15,7 +15,7 @@ import {startStdioHost,startUnixHost} from ${JSON.stringify(moduleUrl)};
 let closeCount=0;
 const engine={instanceId:'fixture',storeId:'fixture-store',
   async call(method,params,context){
-    if(method==='initialize')return {protocolVersion:'1.0',engineVersion:'test',schemaVersion:1,instanceId:'fixture',storeId:'fixture-store',capabilities:{}};
+    if(method==='initialize')return {protocolVersion:'2.0',engineVersion:'test',schemaVersion:1,instanceId:'fixture',storeId:'fixture-store',capabilities:{storeNamespaces:{version:1}}};
     if(method==='echo')return {params,owner:context.owner,closeCount};
     if(method==='delay'){await new Promise(r=>setTimeout(r,params.ms));return true;}
     if(method==='host.shutdown'){if(!context.owner)throw Object.assign(new Error('Owner required'),{code:'FORBIDDEN'});return this.close();}
@@ -100,8 +100,8 @@ test('AC11 stdio handshake, UTF-8 chunking and stdout contain only RPC frames', 
   assert.equal((await read(1)).error.data.code, 'NOT_INITIALIZED');
   send(proc.stdin!, 2, 'initialize', { protocolVersion: '0.9', sdkVersion: 'test' });
   assert.equal((await read(2)).error.data.code, 'PROTOCOL_MISMATCH');
-  send(proc.stdin!, 3, 'initialize', { protocolVersion: '1.0', sdkVersion: 'test' });
-  assert.equal((await read(3)).result.protocolVersion, '1.0');
+  send(proc.stdin!, 3, 'initialize', { protocolVersion: '2.0', sdkVersion: 'test' });
+  assert.equal((await read(3)).result.protocolVersion, '2.0');
   const encoded = Buffer.from(
     JSON.stringify({ jsonrpc: '2.0', id: 4, method: 'echo', params: { text: '任务' } }) + '\n',
   );
@@ -133,7 +133,7 @@ test('AC11 64 pending requests stay bounded; request 65 is rejected', async (t) 
   const { proc } = child();
   t.after(() => stop(proc));
   const read = frames(proc.stdout!);
-  send(proc.stdin!, 0, 'initialize', { protocolVersion: '1.0', sdkVersion: 'test' });
+  send(proc.stdin!, 0, 'initialize', { protocolVersion: '2.0', sdkVersion: 'test' });
   await read(0);
   for (let i = 1; i <= 65; i++) send(proc.stdin!, i, 'delay', { ms: 350 });
   assert.equal((await read(65)).error.data.code, 'REQUEST_LIMIT_EXCEEDED');
@@ -162,7 +162,7 @@ test(
       const socket = createConnection(socketPath);
       await once(socket, 'connect');
       const read = frames(socket);
-      send(socket, 1, 'initialize', { protocolVersion: '1.0', sdkVersion: 'test' });
+      send(socket, 1, 'initialize', { protocolVersion: '2.0', sdkVersion: 'test' });
       await read(1);
       return { socket, read };
     }

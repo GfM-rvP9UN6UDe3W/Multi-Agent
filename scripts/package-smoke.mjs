@@ -1,0 +1,219 @@
+import { mkdtemp, mkdir, writeFile, readFile, rm, realpath } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join, resolve, dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { execFileSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
+import assert from 'node:assert/strict';
+import { smokeClaudeBundles } from './package-bundles-smoke.mjs';
+
+const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
+const release = resolve(process.argv[2] ?? join(root, 'dist/release'));
+const pythonRelease = resolve(process.env.PACKAGE_PYTHON_RELEASE ?? release);
+const python = process.env.PACKAGE_TEST_PYTHON ?? 'python3';
+const base = await realpath(await mkdtemp(join(tmpdir(), 'agent-orch-install-')));
+const env = {
+  ...process.env,
+  npm_config_cache: join(base, 'npm-cache'),
+  npm_config_offline: 'true',
+  PYTHONPATH: '',
+  NODE_PATH: '',
+};
+const manifest = JSON.parse(await readFile(join(release, 'npm-manifest.json'), 'utf8'));
+const archive = (name) => join(release, manifest.packages.find((pkg) => pkg.name === name).file);
+const run = (command, args, options = {}) =>
+  execFileSync(command, args, { cwd: base, env, encoding: 'utf8', timeout: 60000, ...options });
+const results = [];
+try {
+  for (const pkg of manifest.packages)
+    assert.equal(
+      createHash('sha256')
+        .update(await readFile(join(release, pkg.file)))
+        .digest('hex'),
+      pkg.sha256,
+      pkg.name,
+    );
+  await writeFile(
+    join(base, 'package.json'),
+    '{"name":"offline-package-fixture","private":true,"type":"module"}\n',
+  );
+  run('npm', [
+    'install',
+    '--offline',
+    '--ignore-scripts',
+    '--no-audit',
+    '--no-fund',
+    '--package-lock=true',
+    ...['@agent-orch/engine', '@agent-orch/sdk', '@agent-orch/cli'].map(archive),
+  ]);
+  const lock = JSON.parse(await readFile(join(base, 'package-lock.json'), 'utf8'));
+  for (const name of ['@agent-orch/engine', '@agent-orch/sdk', '@agent-orch/cli']) {
+    const entry = lock.packages[`node_modules/${name}`];
+    assert.match(entry.resolved, /^file:/);
+    assert.match(entry.integrity, /^sha512-/);
+  }
+  for (const name of ['work', 'state']) await mkdir(join(base, name));
+  const embedded = `import assert from 'node:assert/strict';
+import {createOrchestrator,validateWire} from '@agent-orch/sdk';
+import {createFakeAdapter} from '@agent-orch/engine/fake';
+const client=await createOrchestrator({workspace:${JSON.stringify(join(base, 'work'))},stateDir:${JSON.stringify(join(base, 'state'))},storage:{emergencyBytes:4096,minFreeBytes:0},adapters:[createFakeAdapter()]});
+try {
+ const task=await client.tasks.create({goal:'offline packaged acceptance',runtime:{provider:'fake',model:'fixture'},acceptance:{mode:'human',criteria:['fixture output']}});
+ for await(const event of client.events({taskId:task.id,signal:AbortSignal.timeout(5000)})) {
+  if(event.type==='approval.requested'){const approval=await client.approvals.get(String(event.data.approvalId));await client.approvals.decide(approval.approvalId,{choice:'approve',expectedRevision:approval.revision});break;}
+ }
+ const done=await task.wait({timeoutMs:5000});assert.equal(done.status,'completed');validateWire('TaskSnapshot',done);
+ console.log(JSON.stringify({mode:'installed-embedded',status:done.status,modelCalls:0}));
+}finally{await client.close();}`;
+  await writeFile(join(base, 'embedded.mjs'), embedded);
+  results.push(JSON.parse(run(process.execPath, ['embedded.mjs'])));
+  const cli = join(base, 'node_modules/@agent-orch/cli/dist/main.js');
+  run(process.execPath, [cli, '--help']);
+  for (const selected of ['codex', 'claude']) {
+    const isolated = join(base, selected);
+    await mkdir(isolated);
+    await writeFile(join(isolated, 'package.json'), '{"private":true,"type":"module"}');
+    run(
+      'npm',
+      [
+        'install',
+        '--offline',
+        '--ignore-scripts',
+        '--no-audit',
+        '--no-fund',
+        '--package-lock=false',
+        archive('@agent-orch/engine'),
+        archive(`@agent-orch/adapter-${selected}`),
+        ...(selected === 'claude' ? [archive('@agent-orch/sdk')] : []),
+      ],
+      { cwd: isolated },
+    );
+    await writeFile(
+      join(isolated, 'check.mjs'),
+      `import assert from 'node:assert/strict';\nimport * as selected from '@agent-orch/adapter-${selected}';\nassert.equal(typeof selected.${selected === 'codex' ? 'createCodexAdapter' : 'createClaudeAdapter'},'function');\ntry{import.meta.resolve('@agent-orch/adapter-${selected === 'codex' ? 'claude' : 'codex'}');throw new Error('Unexpected second adapter');}catch(e){assert.equal(e.code,'ERR_MODULE_NOT_FOUND');}\nconsole.log('ok');`,
+    );
+    assertOutput(run(process.execPath, ['check.mjs'], { cwd: isolated }), 'ok');
+    if (selected === 'claude') {
+      await writeFile(
+        join(isolated, 'missing-peer.mjs'),
+        `import assert from 'node:assert/strict';
+import {createClaudeMcpServer} from '@agent-orch/adapter-claude';
+await assert.rejects(createClaudeMcpServer({definitions:[],call:async()=>null}),e=>e.code==='CLAUDE_DEPENDENCY_UNAVAILABLE'&&e.message.includes('zod ^4.0.0'));
+console.log('missing-peer-ok');`,
+      );
+      assertOutput(
+        run(process.execPath, ['missing-peer.mjs'], { cwd: isolated }),
+        'missing-peer-ok',
+      );
+      await rm(join(isolated, 'missing-peer.mjs'));
+      results.push(...(await smokeClaudeBundles({ root, isolated, run })));
+    }
+    if (selected === 'codex') {
+      const ts = (await import('typescript')).default;
+      let peer = ts.transpileModule(
+        await readFile(join(root, 'tests/fixtures/codex-tools.ts'), 'utf8'),
+        { compilerOptions: { target: ts.ScriptTarget.ES2023, module: ts.ModuleKind.ESNext } },
+      ).outputText;
+      peer = peer.replace(
+        '../../packages/engine/src/tools.ts',
+        '@agent-orch/engine/internal/tools',
+      );
+      peer = peer.replace('./orchestration-actions.ts', './orchestration-actions.mjs');
+      const actions = ts.transpileModule(
+        await readFile(join(root, 'tests/fixtures/orchestration-actions.ts'), 'utf8'),
+        { compilerOptions: { target: ts.ScriptTarget.ES2023, module: ts.ModuleKind.ESNext } },
+      ).outputText;
+      await writeFile(join(isolated, 'orchestration-actions.mjs'), actions);
+      await writeFile(join(isolated, 'peer.mjs'), peer);
+      await mkdir(join(isolated, 'work'));
+      await mkdir(join(isolated, 'state'));
+      await writeFile(
+        join(isolated, 'bridge.mjs'),
+        `import assert from 'node:assert/strict';
+import {createCodexAdapter} from '@agent-orch/adapter-codex';
+import {ORCHESTRATION_TOOLS} from '@agent-orch/engine/internal/tools';
+const adapter=createCodexAdapter({command:process.execPath,args:[${JSON.stringify(join(isolated, 'peer.mjs'))}]});
+const calls=[];const events=[];
+try{for await(const event of adapter.execute({taskId:'task',sessionId:'session',dispatchId:'dispatch',providerSessionId:null,model:'fixture',workspace:${JSON.stringify(join(isolated, 'work'))},stateDir:${JSON.stringify(join(isolated, 'state'))},permissionProfile:'read-only',prompt:'offline tools',signal:new AbortController().signal,orchestrationTools:{definitions:ORCHESTRATION_TOOLS,async call(name){calls.push(name);return {ok:true};}}}))events.push(event);
+assert.equal(events.at(-1).type,'result',JSON.stringify(events));assert.equal(calls.length,4);console.log('bridge-ok');}finally{await adapter.close();}`,
+      );
+      assertOutput(run(process.execPath, ['bridge.mjs'], { cwd: isolated }), 'bridge-ok');
+      results.push({ mode: 'installed-codex-private-mcp', tools: 4, modelCalls: 0 });
+    }
+    results.push({
+      mode: `installed-${selected}-only`,
+      imported: true,
+      modelCalls: 0,
+      nativeDependency:
+        selected === 'claude' ? 'pinned-sdk-mcp-with-offline-peer' : 'not_installed_or_invoked',
+    });
+  }
+  const venv = join(base, 'venv');
+  run(python, ['-m', 'venv', venv]);
+  const vpython = join(venv, 'bin', 'python');
+  run(vpython, [
+    '-m',
+    'pip',
+    'install',
+    '--disable-pip-version-check',
+    '--no-index',
+    '--no-deps',
+    join(pythonRelease, 'agent_orch-0.1.0-py3-none-any.whl'),
+  ]);
+  const pythonScript = `import asyncio,json\nfrom agent_orch import Orchestrator,TaskSpec,RuntimeSpec,AcceptanceSpec,validate_wire\nfrom agent_orch import wire_types\nasync def main():\n client=await Orchestrator.local(engine_command=${JSON.stringify([process.execPath, cli, 'host', '--stdio', '--config', join(base, 'python-config.json')])},close_timeout=3)\n try:\n  task=await client.tasks.create(TaskSpec(goal='installed Python managed host',runtime=RuntimeSpec('fake','fixture'),acceptance=AcceptanceSpec(criteria=['fixture review'])))\n  async for event in client.events(task_id=task.id):\n   if event.type=='approval.requested':\n    approval=await client.approvals.get(event.data.approval_id)\n    await client.approvals.decide(approval.approval_id,{'choice':'approve','expected_revision':approval.revision})\n    break\n  done=await task.wait(timeout=5)\n  assert done.status=='completed'\n  print(json.dumps({'mode':'installed-python-managed','status':done.status,'modelCalls':0}))\n finally: await client.close(timeout=3)\nasyncio.run(main())\n`;
+  await mkdir(join(base, 'python-state'));
+  await writeFile(
+    join(base, 'python-config.json'),
+    JSON.stringify({
+      workspace: join(base, 'work'),
+      stateDir: join(base, 'python-state'),
+      providers: { fake: { model: 'fixture' } },
+      storage: { emergencyBytes: 4096, minFreeBytes: 0 },
+    }),
+  );
+  await writeFile(join(base, 'python-roundtrip.py'), pythonScript);
+  results.push(JSON.parse(run(vpython, ['python-roundtrip.py'])));
+  const builder = process.env.PACKAGE_BUILD_PYTHON;
+  if (builder) {
+    const extracted = join(base, 'sdist');
+    await mkdir(extracted);
+    run(builder, [
+      '-c',
+      'import tarfile,sys; tarfile.open(sys.argv[1]).extractall(sys.argv[2],filter="data")',
+      join(pythonRelease, 'agent_orch-0.1.0.tar.gz'),
+      extracted,
+    ]);
+    const rebuilt = join(base, 'rebuilt');
+    await mkdir(rebuilt);
+    run(builder, [
+      '-m',
+      'build',
+      '--no-isolation',
+      '--wheel',
+      '--outdir',
+      rebuilt,
+      join(extracted, 'agent_orch-0.1.0'),
+    ]);
+    run(vpython, [
+      '-m',
+      'pip',
+      'install',
+      '--disable-pip-version-check',
+      '--no-index',
+      '--no-deps',
+      '--force-reinstall',
+      join(rebuilt, 'agent_orch-0.1.0-py3-none-any.whl'),
+    ]);
+    const roundtrip = JSON.parse(run(vpython, ['python-roundtrip.py']));
+    results.push({ ...roundtrip, mode: 'installed-wheel-rebuilt-from-sdist' });
+  } else
+    throw new Error(
+      'PACKAGE_BUILD_PYTHON must name an offline environment with the pinned build dependencies',
+    );
+  console.log(JSON.stringify({ offline: true, node: process.version, results }));
+} finally {
+  await rm(base, { recursive: true, force: true });
+}
+function assertOutput(actual, expected) {
+  if (actual.trim() !== expected) throw new Error(actual);
+}

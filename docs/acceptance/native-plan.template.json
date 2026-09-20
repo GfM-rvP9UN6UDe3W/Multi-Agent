@@ -1,0 +1,29 @@
+{
+  "version": 1,
+  "provider": null,
+  "language": "typescript",
+  "model": null,
+  "identitySourceLabel": null,
+  "expectedVersions": {
+    "node": "24.14.0",
+    "claudeSdk": "0.3.274",
+    "codexCli": "0.153.4"
+  },
+  "budget": {
+    "currency": "USD",
+    "maxCost": "1",
+    "reservePerDispatch": "1"
+  },
+  "pricing": null,
+  "limits": {
+    "maxActiveSessions": 1,
+    "maxTurnsPerTask": 1
+  },
+  "timeouts": {
+    "acceptanceMs": 30000,
+    "turnMs": 120000
+  },
+  "permissionProfile": "read-only",
+  "goal": "Reply exactly ORCH_NATIVE_ACCEPTANCE_V1. Do not use any tools.",
+  "approvalRequired": "Fill provider/model/pricing/identity-source label, review the complete plan and explicitly authorize its SHA-256 before run. Native credentials remain with the provider runtime."
+}

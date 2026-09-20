@@ -1,4 +1,4 @@
-import { createEngine, createFakeAdapter } from '../../packages/engine/src/index.ts';
+import { createEngine, createFakeAdapter } from './engine.ts';
 import type { TaskSnapshot } from '../../packages/engine/src/types.ts';
 const engine = await createEngine({
   workspace: process.argv[2],

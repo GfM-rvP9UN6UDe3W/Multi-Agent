@@ -2,7 +2,11 @@
 
 One Node.js orchestration engine, with TypeScript and Python SDKs for local applications that manage tasks, durable messages, session state, and human acceptance.
 
-**This is an unpublished development version. The foundation, SPEC-0003-A lifecycle, A2 execution isolation, SPEC-0004 reliability fixes, SPEC-0005 wire-contract tests, SPEC-0006 host-runtime contracts, and SPEC-0007 host policy/usage are implemented.** Runnable source and offline fixture verification are available; the complete first-release design is not yet implemented. A2 evidence covers [cross-language integration](docs/tdd/0003-a2-wiring.md), [Claude](docs/tdd/0003-a2-claude.md), and [Codex](docs/tdd/0003-a2-codex.md). Earlier evidence remains in the foundation and A records. Ordinary tests use an explicitly enabled `fake` runtime or protocol fixtures, without model requests or login credentials. The Claude/Codex adapters implement a minimal protocol and bounded resource cleanup; real-model end-to-end acceptance remains unverified.
+Licensed under the [MIT License](LICENSE). Commercial use, modification and redistribution are permitted with the copyright and license notice preserved. Third-party SDKs and native executables retain their own licenses.
+
+**The five npm packages are ESM-only; direct `require()` is not exported.** Host-side single-file CJS and ESM bundles are supported through the [bundled-host integration contract](docs/acceptance/bundled-host.md). A Claude consumer installs **`@agent-orch/sdk` + `@agent-orch/engine` + `@agent-orch/adapter-claude`**. The SDK alone does not install a provider. The other packages are `@agent-orch/adapter-codex` and `@agent-orch/cli`. Local RC tarballs and their SHA-256 manifest can be installed without public npm publication.
+
+**Unpublished development version: SPEC-0001–0010, including the B/C storage, routing, accounting and bundled-host implementation, are present.** The latest offline regression passes **435 Node tests and 48 Python tests**, with no skipped tests. See the [completion matrix](docs/specs/0009-complete-design.md#completion-matrix), [original implementation evidence](docs/tdd/0009-complete-design.md), and [RC/bundle verification evidence](docs/tdd/0010-bundled-host-delivery.md). Locally installable npm and Python artifacts are available through the build commands below. Real-model acceptance, actual OS sandbox enforcement, external application integration, economic benefit and publication remain separate unverified boundaries. Ordinary tests use explicit fake runtimes or owned protocol fixtures without login credentials or model requests.
 
 - [Foundation specification and acceptance criteria](docs/specs/0001-foundation.md)
 - [Runtime adapter specification](docs/specs/0002-runtime-adapters.md)
@@ -12,44 +16,45 @@ One Node.js orchestration engine, with TypeScript and Python SDKs for local appl
 - [Client recovery and wire-snapshot contracts](docs/specs/0005-wire-contract.md)
 - [Host runtime contract and offline conformance](docs/specs/0006-host-runtime-contract.md)
 - [Embedded host policy and durable usage replay](docs/specs/0007-host-policy-and-usage.md)
-- [Archive and namespace-transition specification — not implemented](docs/specs/0003-b-archive.md)
-- [Phased specification: A/A2 implemented; B/C retention and routing pending](docs/specs/0003-policy-retention-deadlines.md)
+- [Archive and namespace-transition contract](docs/specs/0003-b-archive.md)
+- [Lifecycle, storage and routing contracts](docs/specs/0003-policy-retention-deadlines.md)
+- [Design completion specification](docs/specs/0009-complete-design.md)
 - [TDD evidence](docs/tdd/0001-evidence.md)
 - [Contribution guidelines](CONTRIBUTING.md)
-- [Full product design](AGENT_ORCHESTRATION_DESIGN.md) and [planned integration guide](SDK_USAGE_AND_WIRING.md)
+- [Full product design](AGENT_ORCHESTRATION_DESIGN.md) and [integration guide](SDK_USAGE_AND_WIRING.md)
 
 ## Implemented scope
 
 | Component | Current capability |
 | --- | --- |
-| Single engine | SQLite WAL, OS file lock, persistence for tasks, sessions, operations, messages, events, approvals, and raw usage |
-| Scheduling | Explicit provider/model, at most two occupied execution slots, serial execution per session, turn limits; separate accounting for durable leases and bounded business-outcome quarantine |
-| Reliable messaging | Durable messages and outbox, idempotency keys, target-generation checks, separate acceptance and completion records |
-| Task completion | Persist the result first; human approval is required for completed, and denial produces failed |
-| Control and recovery | Durable deadlines, pause/drain, supported interrupt, resume, cancel, and continued shutdown waits; unknown quarantine and owner reconciliation, without automatic resend after crashes or timeouts |
-| Scheduler diagnostics | Read-only `scheduler.get/getConflict`; owner-only `scheduler.resolveConflict` for resource conflicts with newly verified evidence |
-| TypeScript | In-process `createOrchestrator` or Unix-socket `connectOrchestrator` |
-| Existing application runtimes | Injected adapters, typed and validated budget/evidence capabilities, required host-input preflight, and an optional offline conformance suite |
-| Python | `Orchestrator.local` owns a Node child process; `Orchestrator.connect` connects to the same shared host |
-| Local protocol | JSON-RPC 2.0, stdio/Unix socket, version handshake, 1 MiB frames, 64 pending requests |
-| CLI | `host`, `doctor`, `submit`, `status`, and `approve`; other commands are explicitly rejected |
+| Single engine | SQLite WAL, exclusive writer, durable task/session/operation/message/approval/event/usage state; schema 3 |
+| Scheduling | Dependencies, finite reuse queues, per-session single flight, overlapping write-scope exclusion, A/Q/R isolation, turn/delegation/message limits |
+| Sessions | Logical open, serial reuse, checkpoint-bound native fork, observed compaction, generation rotation, pause/resume/stop and owner reconciliation |
+| Model tools | Owner-enabled work_delegate, work_send, work_read, work_control; private Claude MCP and Codex stdio bridge with dispatch-bound authorization |
+| Acceptance | Human result review or frozen registered verification commands; separate expiring runtime-permission approval |
+| Accounting | Exact registered-price estimates, direct/tree/overhead cost views, dispatch reservations, late usage and explicit unknown coverage |
+| Storage | Protected bounded GC, lifetime tombstones, leased paged snapshots, backpressure, settlement reserve, verified backups and phased archive/namespace rollover |
+| TypeScript | Embedded owner or Unix-socket client; generated wire types and bounded schema validator |
+| Python | Standard-library async client; owned Node stdio host or Unix connection; equivalent methods, generated wire types and validator |
+| Local protocol | Wire 2.0, immutable expectedStoreId on mutations, JSON-RPC 2.0, 1 MiB frames; per-connection and host-wide resource limits |
+| CLI | host, doctor, submit, run, attach, status, approve, control; private tool-bridge |
+| Delivery | Five local npm tarballs, Python wheel/sdist, clean-install smoke script, configured macOS/Linux version matrix |
 
-The foundation automatically assigns one logical session to each task. `sessions.open/fork`, compact/rotate/stop, engine delegation tool callbacks and the orchestration MCP bridge, automatic verification commands, monetary budgets, workspace write locks, and cross-task session reuse are not implemented. The mailbox is currently exposed through the SDK; models cannot yet invoke delegation tools themselves. Human approval is the only implemented acceptance path.
-
-SPEC-0003-A/A2 provide durable execution/control deadlines, late-evidence retention, execution leases, business-outcome quarantine, and owner-only `sessions.reconcile`. contextPlan, retention/GC, deduplication tombstones, storage-pressure protection, cross-task cost rules, and automatic policy selection remain in SPEC-0003-B/C. Long-running operation, capacity failures, and real-model acceptance are not yet validated.
+The owner enables model tools with `tools: { enabled: true }` and runtime permission requests with `runtimeApprovals: { enabled: true }`. Defaults preserve the smaller tool surface. The engine does not infer task independence from prose or select an economic routing strategy automatically. `contextPlan` declares fresh/reuse/fork or in-turn continuation intent. Fork preparation returns a logical receipt; native forking happens on first use and must produce a distinct native ID. Checks execute trusted owner-registered commands and detect changed baselines; this is not an OS isolation boundary for arbitrary executables.
 
 New A2 turns have a default total budget of 1,800 seconds. Proven execution stop and local cleanup may release an unknown dispatch's execution slot while its business outcome remains quarantined: A=`executionOccupied` counts held execution leases; Q=`quarantined` counts unknown business outcomes; R=`quarantineReserved` reserves capacity for unquarantined in-flight execution, including pending cleanup. Dispatch requires `A < maxActiveSessions` and `Q + R < maxQuarantinedDispatches`, with defaults of 2 and 32. Two unknown dispatches that may still be executing occupy both slots. Releasing A does not reduce Q, resume work, resend requests, or approve results.
 
-See the [JSON Schema](schemas/protocol.schema.json) for protocol data structures. [Actual payload contract tests](tests/contract/protocol-schema.test.ts) read task, approval, message, usage, operation, and related snapshots from a real Unix host, validate their constraints and corrupted variants, and compare mappings/raw JSON with a Python subprocess reading the same state. The test helper implements only the currently used constraint subset, rejects unsupported assertions and invalid additionalProperties values, and treats format as annotation. There is no production schema validator or schema-to-SDK code generation. See [scope and acceptance criteria](docs/specs/0005-wire-contract.md).
+See the [JSON Schema](schemas/protocol.schema.json), generated TypeScript `WireTypes`, Python `wire_types`, and `validateWire` / `validate_wire`. Generation is deterministic and checked by `npm run check:generated`. The production validators support the audited schema subset used here, fail on unsupported assertions and treat format as annotation; they are not general-purpose JSON Schema implementations. [Actual payload tests](tests/contract/protocol-schema.test.ts) and [generated-contract tests](tests/contract/generated-wire.test.ts) exercise both languages against real hosts.
 
 ## Local development and verification
 
-Declared minimums are Node.js 22.18+ and Python 3.11+. Recorded verification used Node.js 24.14.0 and Python 3.14.6. Node's built-in SQLite currently prints an experimental warning to stderr. The minimum-version matrix has not been separately verified.
+Declared minimums are Node.js 22.18+ and Python 3.11+. Recorded verification used Node.js 24.14.0 and Python 3.14.6. Node's built-in SQLite currently prints an experimental warning to stderr. The [CI matrix](.github/workflows/offline.yml) configures exact macOS/Linux and minimum/current runtime jobs; those remote jobs have not been executed in this task.
 
 Run from the repository root:
 
 ```sh
 npm ci --ignore-scripts
+npm run check:generated
 npm run typecheck
 npm run format:check
 npm test
@@ -58,11 +63,29 @@ npm run test:python
 
 Tests create and clean up only their own temporary workspaces, databases, sockets, and child processes. Unix-socket tests require local IPC permissions. If a restricted sandbox reports EPERM, rerun in an environment that permits local sockets; a skipped test is not a pass.
 
-Node executes erasable TypeScript source directly. No publishable compiled package exists yet. Installing a provisional package name from npm/PyPI does not reproduce this checkout.
+Node executes erasable TypeScript source directly. Distribution builds emit JavaScript and declarations, rewrite package boundaries, and include generated schemas. Install the local artifacts; nothing has been published to npm/PyPI.
 
-Scheduling reads queued candidates through a SQLite index and refreshes outer admission after an actual dispatch; nonqueued history no longer causes a full dispatch scan per task. Startup rebuilds task-state and dispatch-taskId indexes in existing schema 2 stores without changing business records. A/Q/R still come from durable dispatch records, and some historical queries retain linear cost. GC/archival remain unimplemented. Run `node tests/fixtures/scheduler-benchmark.ts . 50,100,150,300` to reproduce offline creation-latency samples; see [evidence and limits](docs/tdd/0004-runtime-reliability.md).
+```sh
+npm run build:packages
+# Use an isolated Python build environment with setuptools, wheel and build installed.
+python -m build --no-isolation --sdist --wheel --outdir dist/release python
+PACKAGE_BUILD_PYTHON="$(command -v python)" npm run test:packages
+```
+
+The package smoke creates fresh temporary npm installations and a Python venv, runs embedded TS and owned-host Python, checks each optional adapter independently, exercises the packaged Codex MCP bridge and actual Claude SDK MCP transport, rebuilds the sdist and repeats the Python round trip without network access. It also bundles SDK + engine + Claude adapter as CJS and ESM, deletes the temporary node_modules, and runs fixture tasks through human approval in both formats. `PACKAGE_BUILD_PYTHON` must point to the prepared build environment to include the sdist rebuild. Native provider dependencies are optional and are not downloaded at ordinary startup. See [acceptance instructions](docs/acceptance/README.md) and [local RC installation](docs/acceptance/bundled-host.md).
+
+Scheduling uses indexed queued tasks and active dispatches. Retained history still affects some storage/accounting queries; it is not an unlimited-capacity claim. Run `npm run benchmark:capacity -- 1000,10000 100` for bounded offline measurements. On the recorded Apple M5 Pro / Node 24.14.0 host, 1,000 versus 10,000 retained tasks produced approximately 21.6 versus 21.0 dispatches/s, and task admission p95 of 5.12 versus 8.44 ms. See [raw measurements](docs/tdd/0009-capacity.json) and their [limits](docs/tdd/0009-complete-design.md#capacity-and-supported-environments).
 
 ## Run the complete Python example
+
+Both languages also have matching offline checks/dependency/snapshot examples:
+
+```sh
+node examples/typescript/checks-and-dependencies.ts
+PYTHONPATH=python/src python3 examples/python/checks_and_dependencies.py
+```
+
+
 
 ```sh
 PYTHONPATH=python/src python3 examples/python/fake_roundtrip.py
@@ -133,14 +156,18 @@ The total deadline begins at dispatch and includes initialization and acceptance
 
 `scheduler.get()` returns A/Q/R, effective limits, `canDispatch`, reasons, and up to 16 occupancy/conflict references. Optional `execution` in `sessions.get()` reports leases, quarantine, and budget boundaries/sources. Both SDKs can read these over an ordinary socket. They require the exact capability `executionIsolation={version:1,resourceRelease:true,schedulerStatus:true,ownerConflictResolution:true,budgetVersion:2}`; an older host without it is rejected with `UNSUPPORTED_CAPABILITY` before sending. See the [scheduler and owner-conflict examples](SDK_USAGE_AND_WIRING.md#115-implemented-scheduler-queries-and-resource-conflicts) for fields and permissions.
 
-Storage schema is currently 2, wire protocol remains 1.0, and event schemaVersion remains 1. Before opening schema 1 state, the host creates and verifies a same-directory `store-schema1-<uuid>.sqlite` backup, then upgrades transactionally. Failure prevents model submission. Older records without leases recover conservatively; existing deadlines remain unchanged. Older hosts cannot open schema 2. Restoring a backup does not undo later side effects and must not be used to replay work. Custom adapters must implement `executionBudget.version=2`, use `null` for unspecified provider caps, and honor the remaining monotonic budget. Missing capability prevents task creation/dispatch. Follow the A2 evidence/notification contract; a capability declaration alone does not prove safe release.
+Storage schema is **3**, wire protocol **2.0**, and event schemaVersion remains **1**. Before upgrading schema 1/2, the host verifies a recovery SQLite backup and a complete bundle of retained artifacts and managed native history. Migration failure prevents dispatch; existing deadlines remain unchanged. Wire 1.0 is rejected. Every mutation retains a versioned `(storeId, method, scope, idempotencyKey, digest)` identity; reconnecting or refreshing the handshake cannot substitute a new store for an old retry. Custom adapters still require executionBudget version 2 and the existing stop-evidence contract.
+
+Owner-configured `stores: { controlDir, storesRoot, archiveRoot }` enables backups and rollover. These canonical private directories must be outside the workspace. Rollover refuses unfinished tasks, unknowns, resources, controls, messages, approvals and snapshot leases; it preserves the old directory and creates a fresh namespace without executable task copies. Import gives the backup a new identity and quarantines unfinished work for explicit owner review. Use public APIs, never restore an old manifest or copy an old SQLite file over live state.
+
+Default retention is 30 days for events, 90 for terminal details, 180 for raw usage; references and pins override age. GC processes at most 500 records / 8 MiB per batch with a 50 ms target. Artifact payload bytes count; a single oversized artifact is reported in `oversizedArtifacts` and retained for explicit archive/capacity handling. No unbounded automatic deletion is used. Snapshot leases last 60 seconds and cannot be extended by clock rollback. Quota defaults (10 GiB, warning at 80%, admission backpressure at 90%, 1 GiB minimum free space, 256 MiB emergency reserve, one million minimal records) are policy limits, not tested production capacity. Configure smaller reserves explicitly for fixtures.
 
 ```sh
 node packages/cli/src/main.ts doctor --config /absolute/orchestrator.json
 node packages/cli/src/main.ts host --config /absolute/orchestrator.json
 ```
 
-`doctor --config` currently validates configuration only. Its `configuration-only` result does not establish dependency, runtime, or model availability. `doctor --socket` verifies only the running host's handshake. `--stdio` opens no application socket and reserves stdout for protocol frames.
+`doctor --config` checks configuration, Node/SQLite, directory access and selected native dependency/CLI versions without reading login credentials or calling models. Its `offline-preflight` result is not authentication, sandbox or model acceptance. `doctor --socket` verifies only the running host's handshake. `--stdio` opens no application socket and reserves stdout for protocol frames.
 
 Client examples:
 
@@ -152,7 +179,7 @@ const orch = await connectOrchestrator({
 });
 ```
 
-Ordinary TypeScript Unix RPC requests default to 30 seconds, matching Python's default request wait; configure this with `requestTimeoutMs`. The connection option `timeoutMs` only controls connection establishment, and initialize has a separate five-second limit. Read/mutation options `{timeoutMs, signal}` override one request, for example `orch.tasks.get(taskId, {timeoutMs: 5000})`. Connection/default/request limits are integer milliseconds in 1..2147483647. Mutation timeouts retain method/scope/idempotencyKey for receipt lookup. Timeout does not cancel a remote task or close a healthy connection. Explicit task.wait total budgets remain independent; owner close allows its shutdown budget plus 1000ms for the RPC receipt.
+Ordinary TypeScript Unix RPC requests default to 30 seconds, matching Python's default request wait; configure this with `requestTimeoutMs`. The connection option `timeoutMs` only controls connection establishment, and initialize has a separate five-second limit. Read/mutation options `{timeoutMs, signal}` override one request, for example `orch.tasks.get(taskId, {timeoutMs: 5000})`. Connection/default/request limits are integer milliseconds in 1..2147483647. Mutation timeouts retain the complete immutable retry identity for receipt lookup. Timeout does not cancel a remote task or close a healthy connection. Explicit task.wait total budgets remain independent; owner close allows its shutdown budget plus 1000ms for the RPC receipt.
 
 ```python
 from agent_orch import Orchestrator
@@ -161,7 +188,7 @@ async with Orchestrator.connect(socket_path="/absolute/private-state/host.sock")
     current = await orch.tasks.get(task_id)
 ```
 
-Run `node packages/cli/src/main.ts --help` for submission, status, and approval arguments. The CLI does not approve automatically or enable fake by default. SIGINT/SIGTERM follow host shutdown procedures and clean up only owned processes.
+Run `node packages/cli/src/main.ts --help` for all commands. `run` submits and observes; `attach` observes an existing task. Both detach on approval/blocked/paused states by default. `--interactive` requires a TTY and explicit approve/deny; `--follow` keeps observing. Ctrl-C or an observation timeout detaches the client. `control` requires an exact saved session target JSON and returns a durable operation receipt. The CLI does not approve automatically or enable fake by default. SIGINT/SIGTERM follow host shutdown procedures and clean up only owned processes.
 
 CLI configuration `"shutdown": {"mode": "drain", "timeoutMs": 30000}` controls SIGINT/SIGTERM handling for both Unix and stdio hosts. Without configuration, preserve interrupt/1000ms for Unix and interrupt/30000ms for stdio. An incomplete shutdown reports `SHUTDOWN_INCOMPLETE` and operationId on stderr, retaining the control endpoint. Send another signal to continue the same mode, or let the stdio owner call `host.shutdown.continue`. Drain does not automatically escalate to interrupt. Unexpected parent EOF on stdio separately uses bounded 30000ms interrupt cleanup.
 
@@ -169,11 +196,11 @@ CLI configuration `"shutdown": {"mode": "drain", "timeoutMs": 30000}` controls S
 
 - Full long outputs are stored at `stateDir/artifacts/<sha256>.txt`. Snapshot result and approval summary use an explicitly marked preview with artifactRefs beyond 64 KiB. Inspect the complete artifact before approving it. Event replay is bounded by count and encoded bytes.
 - A creation receipt confirms persistence. `runtime_accepted` confirms upstream acceptance evidence. Message completed means that delivery batch finished; only task.completed means the deliverable passed acceptance.
-- Idempotency scopes: `local` for tasks.create; taskId for task control; target sessionId for session control and messages; approvalId for approvals; conflictId for scheduler.resolveConflict. Recover a lost receipt with `operations.lookup({method,scope,idempotencyKey})`; do not resend blindly with a new key.
+- Idempotency scopes: `local` for tasks.create; taskId for task control; target sessionId for session control and messages; approvalId for approvals; conflictId for scheduler.resolveConflict. Recover in the original store with `operations.lookup({method,scope,idempotencyKey})`; use `archives.lookup` with the original storeId after rollover. Preserve the SDK retry identity; `retry` never changes its namespace or payload digest.
 - Save each event cursor with its storeId. `events()` uses bounded read-only polling, never model requests or unbounded buffering for slow consumers. A nonzero cursor without the matching storeId is rejected.
 - `SHUTDOWN_INCOMPLETE` retains the client and operationId. Continue drain or explicitly request interrupt until shutdown is confirmed. A shutdown error must not hide the original application error or Python cancellation.
 - Restart does not automatically resume tasks. Unresolved running/dispatching work becomes blocked/outcome_unknown. Timeouts and late results do not clear quarantine automatically. Use owner reconciliation below rather than editing the database.
-- Missing usage fields remain null. Do not estimate costs or claim cache hits/cost reductions without evidence. There are no paid heartbeats or additional management LLMs.
+- Missing usage fields remain null. Registered-price estimates retain unknown coverage; do not report those estimates as bills or demonstrated cost reductions. There are no paid heartbeats or additional management LLMs.
 
 `sessions.reconcile(target, evidence, options)` accepts human attestation only from an embedded TypeScript owner or a Python-owned stdio host. Ordinary socket clients receive `UNAUTHORIZED`. The SDK first negotiates `initialize.capabilities.lifecycle={version:1,reconcile:"owner-attestation",durableDeadlines:true}` and rejects older hosts without it. The endpoint does not inspect upstream history or establish external side effects on the owner's behalf.
 
@@ -222,13 +249,13 @@ It uses only temporary SQLite stores and a fake runtime. It reopens the host out
 
 | Runtime | Integration used by this repository | Version baseline | Verified boundary |
 | --- | --- | --- | --- |
-| Claude | Optional `@anthropic-ai/claude-agent-sdk` peer dependency; `query()` and native session resume | **0.3.241 is the declared minimum**; package range **`>=0.3.241 <1`**. No exact installed SDK version is locked. | Offline SDK-message fixtures, observed local fixture-process exits, and lifecycle tests. The range is an installation constraint, not proof that every release works. Real SDK/model end-to-end acceptance is pending. |
+| Claude | Optional `@anthropic-ai/claude-agent-sdk` peer dependency; `query()` and native session resume | **0.3.241 is the declared minimum**, with peer range **`>=0.3.241 <1`**. **0.3.274** is the exact offline-tested candidate and pinned protocol CI version. | Installed 0.3.274 SDK MCP/permission/interruption transport against owned offline children, engine-bound tools, observed fixture exits, and lifecycle tests. The range is an installation constraint, not proof that every release works. Real SDK/model end-to-end acceptance is pending. |
 | Codex | Managed **`codex app-server`** subprocess; stdio JSONL and App Server **v2** types. The adapter does **not** import `@openai/codex-sdk`. | **`codex-cli 0.153.4`** was used for the recorded protocol-type comparison and offline launch-option checks. | v2 types generated by that CLI, configuration preflight, and actual offline subprocess fixtures. Other CLI versions require regenerated types and contract tests; real-model acceptance is pending. |
 
 These are the integration baselines for the published source, not claims about the latest upstream releases. The manifests are [Claude](packages/adapter-claude/package.json) and [Codex](packages/adapter-codex/package.json); detailed evidence and limitations are in [SPEC-0002](docs/specs/0002-runtime-adapters.md#compatibility-boundaries-and-sources). Official OpenAI documentation distinguishes [App Server](https://learn.chatgpt.com/docs/app-server) from the [Codex SDK](https://learn.chatgpt.com/docs/codex-sdk), and states that generated protocol types are specific to the CLI version used.
 
-Both adapters default to read-only and provide explicit native-session resume and bounded observation/cleanup. Embedded TypeScript can opt into workspace-write with host policy and full-stop observation; JSON CLI providers remain read-only. See [host policy and usage](#host-policy-and-durable-usage). Unconfirmed owned resources continue to block reconciliation. The optional Claude package loads only during execute; Codex starts an owned local App Server child. A version string alone does not establish runtime acceptance.
+Both adapters default to read-only and provide explicit native-session resume and bounded observation/cleanup. Embedded TypeScript can opt into workspace-write with host policy and full-stop observation; JSON CLI providers remain read-only. See [host policy and usage](#host-policy-and-durable-usage). Unconfirmed owned resources continue to block reconciliation. The optional Claude package loads only for selected Claude execution/inspection; Codex starts an owned local App Server child. A version string alone does not establish runtime acceptance.
 
 Claude records owned ChildProcess handles through the SDK's `spawnClaudeCodeProcess` callback and confirms local cleanup by actual exit. Query.close returning, iterator.return(done:true), or AbortSignal is not exit evidence. The first half of cleanupTimeoutMs lets the SDK clean up; the remaining half observes owned stdin EOF/SIGTERM fallback. Missing/failed close triggers fallback immediately. Pending or invalid returns and an SDK that does not forward the signal do not skip fallback or extend the total asynchronous budget. Unexited resources remain held, and late exit updates evidence; local exit alone does not prove a remote terminal outcome. An injected query factory must launch observable fixtures through `request.options.spawnClaudeCodeProcess({command,args,cwd,env,signal})`; ignoring this callback conservatively retains unknown resources until eligible owner reconciliation. Verification uses real offline subprocesses; real-provider model acceptance is still pending.
 
-The full integration design's `auth`, `executable`, MCP bridge, and gateway examples are not the current CLI's complete implemented interface. Unsupported fields are rejected. Future changes must update the specification, configuration validation, both SDK contracts, and documentation together. Real-model acceptance, package publication, and license selection remain separate work items.
+The stock configuration has no generic `auth` or gateway/executable abstraction. Credentials and endpoint configuration remain with the selected native runtime or application host; unsupported JSON fields reject. The private orchestration bridge is implemented. Follow [the current integration guide](SDK_USAGE_AND_WIRING.md) and the [opt-in native plan](docs/acceptance/README.md) for the remaining real-boundary acceptance. Public publication requires separate authorization; this project's license is MIT.

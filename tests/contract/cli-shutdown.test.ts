@@ -1,3 +1,4 @@
+import { MUTATIONS } from '../../packages/engine/src/identity.ts';
 import test, { type TestContext } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
@@ -31,6 +32,7 @@ async function until<T>(read: () => T | Promise<T>, timeoutMs = 3000): Promise<N
 
 function rpc(input: Readable, output: Writable) {
   let nextId = 0;
+  let storeId: string;
   let buffer = '';
   const pending = new Map<
     number,
@@ -50,11 +52,16 @@ function rpc(input: Readable, output: Writable) {
       if (!request) continue;
       if (frame.error)
         request.reject(Object.assign(new Error(frame.error.message), frame.error.data));
-      else request.resolve(frame.result);
+      else {
+        const info = frame.result as any;
+        if (info?.storeId && info?.protocolVersion) storeId = info.storeId;
+        request.resolve(frame.result);
+      }
     }
   });
   output.on('error', () => {});
   return async <T = unknown>(method: string, params: Record<string, unknown> = {}): Promise<T> => {
+    if (MUTATIONS.has(method)) params = { expectedStoreId: storeId!, ...params };
     const id = ++nextId;
     let timer: ReturnType<typeof setTimeout> | undefined;
     try {
@@ -122,7 +129,7 @@ async function runningHost(
     await once(socket, 'connect');
     call = rpc(socket, socket);
   } else call = rpc(proc.stdout, proc.stdin);
-  await call('initialize', { protocolVersion: '1.0', sdkVersion: 'test' });
+  await call('initialize', { protocolVersion: '2.0', sdkVersion: 'test' });
   const task = await call<TaskSnapshot>('tasks.create', {
     spec: {
       goal: 'Exercise configured host shutdown',

@@ -2,7 +2,13 @@ import type { ChildProcessWithoutNullStreams } from 'node:child_process';
 import type { UUID } from 'node:crypto';
 import { lstatSync, readlinkSync, realpathSync } from 'node:fs';
 import { basename, dirname, isAbsolute, relative, resolve, sep } from 'node:path';
-import type { RuntimeInput, RuntimeStopObserver } from '../../engine/src/types.ts';
+import type {
+  RuntimeInput,
+  RuntimeStopObserver,
+  RuntimeInspectionInput,
+  RuntimeInspection,
+} from '../../engine/src/types.ts';
+import type { RuntimeTools } from '../../engine/src/tools.ts';
 
 export interface ClaudeSpawnOptions {
   command: string;
@@ -40,6 +46,8 @@ export interface ClaudeQueryBaseOptions {
   model: string;
   cwd: string;
   resume?: string;
+  forkSession?: boolean;
+  resumeSessionAt?: string;
   settingSources: ('user' | 'project' | 'local')[];
   tools: string[];
   allowedTools: string[];
@@ -72,7 +80,10 @@ export interface ClaudeOptionsContext<Extra extends object = object> {
   readonly options: Readonly<ClaudeHostOptions<Extra>>;
 }
 export interface ClaudeAdapterConfig<Extra extends object = object> {
+  /** Host injection owns native dependency selection; also supply MCP/inspection callbacks as needed. */
   query?: ClaudeQueryFactory<Extra>;
+  createMcpServer?: (tools: RuntimeTools) => unknown | Promise<unknown>;
+  inspectSession?: (input: RuntimeInspectionInput) => Promise<RuntimeInspection>;
   permissionProfile?: RuntimeInput['permissionProfile'];
   options?: ClaudeHostOptions<Extra>;
   extendOptions?: (
@@ -233,7 +244,10 @@ export function buildClaudeOptions<Extra extends object>(
       : strings(extra.tools, 'tools');
   if (!write && tools.some((tool) => ['Edit', 'Write', 'Bash', 'NotebookEdit'].includes(tool)))
     invalid('read-only tools');
-  let writable = [workspace];
+  const registeredWritePaths = input.writePaths?.map((path) => canonical(path)) ?? [workspace];
+  if (registeredWritePaths.some((path) => !inside(workspace, path)))
+    invalid('registered writable roots');
+  let writable = registeredWritePaths;
   if (write) {
     if (extra.sandbox !== undefined && !record(extra.sandbox)) invalid('sandbox');
     const sandbox = { ...(extra.sandbox as Record<string, unknown> | undefined) };
@@ -251,6 +265,8 @@ export function buildClaudeOptions<Extra extends object>(
     if (filesystem.allowWrite !== undefined)
       writable = paths(filesystem.allowWrite, workspace, 'sandbox.allowWrite');
     if (writable.some((path) => !inside(workspace, path))) invalid('sandbox writable roots');
+    if (writable.some((path) => !registeredWritePaths.some((root) => inside(root, path))))
+      invalid('sandbox exceeds registered write scope');
     filesystem.allowWrite = writable;
     filesystem.denyRead = [
       ...new Set([...paths(filesystem.denyRead ?? [], workspace, 'sandbox.denyRead'), state]),

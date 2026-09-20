@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test, type TestContext } from 'node:test';
 import { createClaudeAdapter } from '../../packages/adapter-claude/src/index.ts';
-import { createEngine, createFakeAdapter } from '../../packages/engine/src/index.ts';
+import { createEngine, createFakeAdapter } from '../fixtures/engine.ts';
 import { Store } from '../../packages/engine/src/store.ts';
 import type {
   EventPage,

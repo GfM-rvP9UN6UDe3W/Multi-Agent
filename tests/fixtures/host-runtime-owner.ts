@@ -1,5 +1,5 @@
 import { createInterface } from 'node:readline';
-import { createEngine } from '../../packages/engine/src/index.ts';
+import { createEngine } from './engine.ts';
 import { createOfflineHostFixture } from '../../packages/engine/src/testing-host.ts';
 import { startUnixHost } from '../../packages/cli/src/host.ts';
 import type { SessionSnapshot, TaskSnapshot } from '../../packages/engine/src/types.ts';

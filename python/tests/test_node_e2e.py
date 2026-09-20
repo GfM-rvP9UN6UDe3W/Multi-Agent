@@ -6,7 +6,7 @@ import shutil
 import tempfile
 import unittest
 
-from agent_orch import AcceptanceSpec, Orchestrator, RuntimeSpec, ShutdownIncomplete, TaskSpec
+from agent_orch import AcceptanceSpec, CheckAcceptanceSpec, Orchestrator, RuntimeSpec, ShutdownIncomplete, TaskSpec
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -78,6 +78,30 @@ class NodeHostTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(duplicate.id, task_id)
             self.assertEqual((await duplicate.wait(timeout=1)).status, "completed")
 
+    async def test_f07_runtime_permission_is_not_task_acceptance(self):
+        async with Orchestrator.local(engine_command=[NODE, str(ROOT / "tests/fixtures/permission-host.ts"),
+                str(self.workspace), str(self.state)], poll_interval=0.005, request_timeout=5.0) as orch:
+            task = await orch.tasks.create(self.spec())
+            runtime = await self.approval(orch, task.id)
+            self.assertEqual(runtime.purpose, "runtime_permission")
+            self.assertEqual(runtime.target.tool_name, "Read")
+            self.assertEqual(runtime.target.session_id, task.session_id)
+            await orch.approvals.decide(runtime.approval_id,
+                {"choice": "approve", "expected_revision": runtime.revision}, idempotency_key="runtime-approve")
+            async with asyncio.timeout(3):
+                while True:
+                    current = await orch.tasks.get(task.id)
+                    if current.approval_id and current.approval_id != runtime.approval_id:
+                        break
+                    await asyncio.sleep(0.005)
+            acceptance = await orch.approvals.get(current.approval_id)
+            self.assertEqual(acceptance.purpose, "task_acceptance")
+            self.assertEqual(current.result, "permission-approved")
+            self.assertEqual(current.status, "waiting_approval")
+            await orch.approvals.decide(acceptance.approval_id,
+                {"choice": "approve", "expected_revision": acceptance.revision})
+            self.assertEqual((await task.wait(timeout=3)).status, "completed")
+
     async def test_ac07_node_owner_shutdown_timeout_and_interrupt(self):
         self.write_config(delay_ms=1000)
         orch = await self.local()
@@ -95,6 +119,28 @@ class NodeHostTests(unittest.IsolatedAsyncioTestCase):
         finally:
             if not orch.closed:
                 await orch.close(mode="interrupt", timeout=3)
+
+    async def test_f01_f08_real_node_dependency_and_registered_check(self):
+        config = json.loads(self.config.read_text())
+        config["verificationRules"] = [{"id": "fixture-check", "version": "1",
+            "argv": [NODE, "-e", 'console.log("checked from Python")'], "cwdRelative": ".",
+            "timeoutMs": 1000, "permissionProfile": "read-only", "success": {"exitCode": 0}}]
+        self.config.write_text(json.dumps(config))
+        async with self.local() as orch:
+            parent = await orch.tasks.create(self.spec())
+            approval = await self.approval(orch, parent.id)
+            dependent = await orch.tasks.create(TaskSpec(goal="wait for accepted prerequisite",
+                runtime=RuntimeSpec(provider="fake", model="fake-model"),
+                acceptance=CheckAcceptanceSpec(rule_refs=[{"id": "fixture-check", "version": "1"}]),
+                dependency_task_ids=[parent.id]))
+            self.assertEqual(dependent.status, "waiting_dependency")
+            self.assertEqual((await orch.scheduler.get()).execution_occupied, 0)
+            await orch.approvals.decide(approval.approval_id,
+                {"choice": "approve", "expected_revision": approval.revision})
+            done = await dependent.wait(timeout=3)
+            self.assertEqual(done.status, "completed")
+            self.assertEqual(len(done.artifact_refs), 2)
+            self.assertEqual(done.spec.dependency_task_ids, [parent.id])
 
     async def test_ac12_node_socket_two_clients_share_task_and_host_survives(self):
         socket_path = str(self.directory / "host.sock")

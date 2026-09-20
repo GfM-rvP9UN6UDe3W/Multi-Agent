@@ -6,6 +6,14 @@ import type { CloseOptions, Engine } from '../../engine/src/types.ts';
 
 export const MAX_FRAME_BYTES = 1024 * 1024;
 export const MAX_PENDING_REQUESTS = 64;
+export const MAX_HOST_CONNECTIONS = 32;
+export const MAX_HOST_PENDING_REQUESTS = 256;
+export const MAX_HOST_PENDING_BYTES = 8 * 1024 * 1024;
+export const MAX_CONNECTION_OUTPUT_BYTES = 8 * 1024 * 1024;
+interface HostBudget {
+  pending: number;
+  bytes: number;
+}
 export const OWNER_EOF_TIMEOUT_MS = 30_000;
 type RequestId = string | number;
 type RpcConnection = {
@@ -47,12 +55,22 @@ function errorData(error: unknown): {
   };
 }
 
+function storageClosed(error: unknown): boolean {
+  const normalized = errorData(error);
+  return (
+    normalized.code === 'STORAGE_DEGRADED_CLOSED' &&
+    normalized.data.status === 'closed' &&
+    normalized.data.durableReceipt === false
+  );
+}
+
 function connectRpc(
   engine: Engine,
   input: Readable,
   output: Writable,
   owner: boolean,
   log: (message: string) => void,
+  budget: HostBudget = { pending: 0, bytes: 0 },
 ): RpcConnection {
   let buffer = Buffer.alloc(0);
   let initialized = false;
@@ -61,6 +79,13 @@ function connectRpc(
   let backpressured = false;
   let shutdownSucceeded = false;
   const pending = new Map<RequestId, AbortController>();
+  const pendingBytes = new Map<RequestId, number>();
+  const release = (id: RequestId) => {
+    if (!pending.delete(id)) return;
+    budget.pending--;
+    budget.bytes -= pendingBytes.get(id) ?? 0;
+    pendingBytes.delete(id);
+  };
   let resolveClosed!: () => void;
   const closed = new Promise<void>((resolve) => {
     resolveClosed = resolve;
@@ -71,7 +96,7 @@ function connectRpc(
     stopped = true;
     buffer = Buffer.alloc(0);
     for (const controller of pending.values()) controller.abort();
-    pending.clear();
+    for (const id of [...pending.keys()]) release(id);
     input.pause();
     input.removeListener('data', onData);
     input.destroy();
@@ -98,6 +123,11 @@ function connectRpc(
           data: { code: 'FRAME_TOO_LARGE' },
         },
       });
+    }
+    if (output.writableLength + Buffer.byteLength(frame) > MAX_CONNECTION_OUTPUT_BYTES) {
+      finish();
+      output.destroy();
+      return;
     }
     const accepted = output.write(frame + '\n', (error) => {
       if (error) finish();
@@ -162,8 +192,8 @@ function connectRpc(
     const method = request.method;
     const params = request.params as Record<string, unknown>;
     if (method === 'initialize') {
-      if (params.protocolVersion !== '1.0') {
-        reject(id, 'PROTOCOL_MISMATCH', 'Only protocol 1.0 is supported');
+      if (params.protocolVersion !== '2.0') {
+        reject(id, 'PROTOCOL_MISMATCH', 'Only protocol 2.0 is supported');
         return;
       }
       if (
@@ -189,8 +219,22 @@ function connectRpc(
       reject(id, 'PROTOCOL_ERROR', 'Request id is already pending');
       return;
     }
+    if (
+      budget.pending >= MAX_HOST_PENDING_REQUESTS ||
+      budget.bytes + frame.length > MAX_HOST_PENDING_BYTES
+    ) {
+      reject(
+        id,
+        'HOST_REQUEST_LIMIT_EXCEEDED',
+        'Host-wide pending request count or byte limit reached',
+      );
+      return;
+    }
     const controller = new AbortController();
     pending.set(id, controller);
+    pendingBytes.set(id, frame.length);
+    budget.pending++;
+    budget.bytes += frame.length;
     Promise.resolve()
       .then(() => engine.call(method, params, { owner, signal: controller.signal }))
       .then(
@@ -211,14 +255,24 @@ function connectRpc(
         },
         (error) => {
           const normalized = errorData(error);
-          send({
-            jsonrpc: '2.0',
-            id,
-            error: { code: -32000, message: normalized.message, data: normalized.data },
-          });
+          const shutdownClosed =
+            owner && method.startsWith('host.shutdown') && storageClosed(error);
+          if (shutdownClosed) {
+            shutdownSucceeded = true;
+            closing = true;
+            input.pause();
+          }
+          send(
+            {
+              jsonrpc: '2.0',
+              id,
+              error: { code: -32000, message: normalized.message, data: normalized.data },
+            },
+            shutdownClosed ? finish : undefined,
+          );
         },
       )
-      .finally(() => pending.delete(id));
+      .finally(() => release(id));
   }
 
   function consume() {
@@ -256,10 +310,17 @@ function connectRpc(
           code: 'UNAUTHORIZED',
         });
       // Keep the owner pipe and controls available when shutdown is incomplete.
-      await engine.close(options);
+      let closedFailure: unknown;
+      try {
+        await engine.close(options);
+      } catch (error) {
+        if (!storageClosed(error)) throw error;
+        closedFailure = error;
+      }
       shutdownSucceeded = true;
       finish();
       await closed;
+      if (closedFailure) throw closedFailure;
     },
   };
 }
@@ -315,13 +376,19 @@ export async function startUnixHost(
     if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
   }
   const connections = new Set<RpcConnection>();
+  const budget: HostBudget = { pending: 0, bytes: 0 };
   const server = createServer((socket) => {
+    if (connections.size >= MAX_HOST_CONNECTIONS) {
+      socket.destroy();
+      return;
+    }
     const connection = connectRpc(
       engine,
       socket,
       socket,
       false,
       options.log ?? ((message) => process.stderr.write(message + '\n')),
+      budget,
     );
     connections.add(connection);
     void connection.closed.then(() => connections.delete(connection));
@@ -350,7 +417,13 @@ export async function startUnixHost(
     closed,
     async close(closeOptions?: CloseOptions) {
       if (ended) return;
-      await engine.close(closeOptions);
+      let closedFailure: unknown;
+      try {
+        await engine.close(closeOptions);
+      } catch (error) {
+        if (!storageClosed(error)) throw error;
+        closedFailure = error;
+      }
       ended = true;
       for (const connection of connections) connection.close();
       await new Promise<void>((resolve) => server.close(() => resolve()));
@@ -358,6 +431,7 @@ export async function startUnixHost(
         if (error.code !== 'ENOENT') throw error;
       });
       resolveClosed();
+      if (closedFailure) throw closedFailure;
     },
   };
 }

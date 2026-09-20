@@ -1,18 +1,18 @@
 # Multi-agent orchestration SDK design: TypeScript and Python
 
-Updated: 2026-09-20. Status: full product design. The foundation, [A lifecycle increment](./docs/specs/0003-a-lifecycle.md), and [A2 execution isolation](./docs/specs/0003-a2-execution-isolation.md) are implemented and verified with offline fixtures. npm/PyPI packages are unpublished, and no paid-model experiments have run. See [README](./README.md) for actual supported behavior and runnable entry points.
+Updated: 2026-09-21. Status: full product design with SPEC-0001–0009 implemented and offline-verified. [SPEC-0009](docs/specs/0009-complete-design.md#completion-matrix) records the exact completion/evidence matrix. Local npm tarballs and Python wheel/sdist are built and clean-installed; nothing is published. Real-model, native-history, actual sandbox, external-application, economic-benefit and remote CI-matrix acceptance remain separate gates. See [README](README.md) for runnable entry points.
 
 Product: **one orchestration engine, TypeScript and Python SDKs, optional Claude and Codex runtime adapters, and a lightweight CLI using the same engine.** Both language SDKs ship in the first public version. There are not two separate orchestration products maintained by provider.
 
-The project began with documents and diagrams. It now includes the engine, both clients, host, minimal adapters, tests, and initialized Git. This document describes the complete first-version target; interfaces outside implemented specifications are neither implemented nor published merely because they appear here.
+The project began with documents and diagrams. It now includes the engine, both clients, host, adapters, private tools, storage lifecycle, tests and local distribution builds. This document retains product intent and release gates; exact callable signatures are defined in the current SDKs, schema and wiring guide. Optional economic automation remains disabled pending evidence.
 
 [SPEC-0008](./docs/specs/0008-claude-interruption.md) implements the design's Claude Query.interrupt path with one open streaming prompt, matched structured abort terminals, bounded observation, and independent resource-stop proof. Pause/revise/resume and cancel are verified across TypeScript/Python and offline child processes. Installed SDK 0.3.274 transport is checked against an offline peer; real CLI/model acceptance remains pending.
 
 Companion: [SDK usage and detailed wiring](./SDK_USAGE_AND_WIRING.md), covering three operating modes, connection protocol, both language examples, MCP callbacks, model gateways, shutdown/recovery, and layered acceptance.
 
-The 2026-09-19 design review clarified routing responsibility, per-request cost estimates, cost ownership, failed-assumption branches, retention, and transition deadlines. [SPEC-0003](./docs/specs/0003-policy-retention-deadlines.md) A implements durable deadlines, unknown isolation, and owner attestation; see [evidence](./docs/tdd/0003-a-evidence.md). B/C GC, routing, and accounting remain future contracts. Design targets and offline tests are not real-model acceptance.
+The 2026-09-19 design review clarified routing responsibility, per-request cost estimates, cost ownership, failed-assumption branches, retention, and transition deadlines. [SPEC-0003](./docs/specs/0003-policy-retention-deadlines.md) A implements durable deadlines, unknown isolation, and owner attestation; see [evidence](./docs/tdd/0003-a-evidence.md). B/C GC, routing and accounting are implemented under SPEC-0009 with offline evidence. Design targets and offline tests are not real-model acceptance.
 
-The second review's N1 is implemented in A2 with offline verification: separate execution/outcome accounting and a shared engine/adapter total budget, default 1800 seconds for new turns. N2 archive rollover remains pending under [B](./docs/specs/0003-b-archive.md). N3 retains the joint dual-runtime first-release commitment while allowing independent provider development, acceptance, and readiness tracking.
+The second review's N1 is implemented in A2 with offline verification: separate execution/outcome accounting and a shared engine/adapter total budget, default 1800 seconds for new turns. N2 archive rollover is implemented under [B](./docs/specs/0003-b-archive.md). N3 retains the joint dual-runtime first-release commitment while allowing independent provider development, acceptance, and readiness tracking.
 
 The 2026-09-20 host-integration revision makes an existing application's execution pipeline an explicit integration target. Sections 7.3–7.5 distinguish the current adapter extension point, the host's responsibilities, and delivery slices. [SPEC-0006](./docs/specs/0006-host-runtime-contract.md) defines the contract and offline conformance increment. Axion is a reference application, not a dependency of the engine. Runtime compatibility, offline contract acceptance, packaged application acceptance, and real-model acceptance are separate milestones.
 
@@ -131,7 +131,7 @@ Python shields initiated async-with cleanup from local coroutine cancellation wh
 
 ### 3.2 Public API contract
 
-Both SDKs share Task, WorkSession, Message, Operation, Approval, Artifact, and Usage semantics; TS uses camelCase, Python snake_case. This is the complete target API, partly implemented. README/specs determine current support; open/fork and other future APIs are not enabled by this table.
+Both SDKs share Task, WorkSession, Message, Operation, Approval, Artifact, and Usage semantics; TS uses camelCase, Python snake_case. The table summarizes implemented API semantics. The current SDKs/schema determine exact signatures; optional provider operations remain capability/evidence-gated.
 
 | Capability | TypeScript | Python | Return / constraint |
 | --- | --- | --- | --- |
@@ -140,7 +140,7 @@ Both SDKs share Task, WorkSession, Message, Operation, Approval, Artifact, and U
 | Read task | tasks.get(taskId) | await tasks.get(task_id) | Durable snapshot, no model call |
 | Resume paused task | tasks.resume(taskId, options) | await tasks.resume(task_id, ...) | OperationHandle; revalidate runtime/budget |
 | Cancel task | tasks.cancel(taskId, options) | await tasks.cancel(task_id, ...) | Cancel only after stopping scheduling and reconciling active work |
-| Open/fork session | sessions.open(spec, options) / sessions.fork(ref, spec, options) | await sessions.open(spec, ...) / await sessions.fork(ref, spec, ...) | Async operation, idempotency, policy/capability checks |
+| Open/fork session | sessions.open(spec, options) / sessions.fork(target, snapshotRef, options) | await sessions.open(spec, ...) / await sessions.fork(target, snapshot_ref, ...) | Logical SessionSnapshot, idempotency and capability checks; native fork deferred to first use |
 | Read session | sessions.get(sessionId) | await sessions.get(session_id) | Generation, state, active dispatch, capability snapshot |
 | Message | messages.send(spec, options) | await messages.send(spec, ...) | Durable messageId receipt, not processing completion |
 | Control | sessions.control(target, command, options) | await sessions.control(target, command, ...) | OperationHandle; acceptance and completion separate |
@@ -236,7 +236,7 @@ Use versioned JSON-RPC 2.0 application messages in UTF-8 single-line JSON frames
 - Persist critical state/control/approval/message/usage events. Mark temporary token deltas ephemeral with no replay promise; persist final artifacts. Collected cursors return CURSOR_EXPIRED with snapshot/new-baseline guidance, never silent skipping.
 - Constrain paths, use UTC, represent money as decimal strings/currency, and retain missing values as unknown. No Python functions, TS closures, or arbitrary executable serialized objects cross the wire.
 
-Implemented sessions.reconcile extends wire 1.0 through lifecycle v1 owner-attestation/durableDeadlines negotiation. New SDKs do not send it without capability; OperationSnapshot adds optional lifecycle/resolution. Section 4.5's state.snapshot/store binding and B/C errors OPERATION_HISTORY_EXPIRED, SCHEDULING_BLOCKED, STORAGE_PRESSURE, and STORAGE_UNAVAILABLE remain future contracts.
+The current wire version is 2.0 and storage schema is 3. Lifecycle v1 still gates owner attestation; namespace v1 binds all mutations before writes. state.snapshot, archive reads and B/C errors are implemented. Current capacity/error names include STORAGE_BACKPRESSURE, STORAGE_DEGRADED_CLOSED, OPERATION_HISTORY_EXPIRED, SNAPSHOT_EXPIRED and SCHEDULING_BLOCKED; consult implemented contracts rather than older sketch names.
 
 The full-design stable error set includes VALIDATION_ERROR, UNAUTHORIZED, UNSUPPORTED_CAPABILITY, STALE_TARGET, IDEMPOTENCY_CONFLICT, HOST_ALREADY_RUNNING, ENGINE_NOT_FOUND, PROTOCOL_MISMATCH, RUNTIME_VERSION_UNSUPPORTED, BUDGET_EXCEEDED, OUTCOME_UNKNOWN, CURSOR_EXPIRED, and SHUTDOWN_INCOMPLETE. Errors carry operationId, safely exposable reasons, and retry guidance. Ordinary automatic retries require proven non-execution; current exact codes follow implemented specs.
 
@@ -348,7 +348,7 @@ Manage storage schemaVersion separately from communication protocolVersion. Chec
 
 ### 4.5 Retention, GC, and disk pressure
 
-These are proposed first-version defaults, to be versioned and negotiated by both SDKs. Current increments have no GC. Retention starts at the later of record termination and owning-task termination; unfinished records have no automatic expiry. Active tasks, unreconciled dispatch/unknown, pending approvals, recovery checkpoints, and explicit pins create protection that overrides age. Ordinary reads do not extend retention indefinitely.
+These are implemented first-version policy defaults under SPEC-0009. They are not measured production capacity limits. Retention starts at the later of record termination and owning-task termination; unfinished records have no automatic expiry. Active tasks, unreconciled dispatch/unknown, pending approvals, recovery checkpoints, and explicit pins create protection that overrides age. Ordinary reads do not extend retention indefinitely.
 
 | Data | Default retention/collection |
 | --- | --- |
@@ -364,7 +364,7 @@ Within the window, identical keys/payloads recover original operations. After co
 
 Old-backup rollback, independent backup clone, or unprovable log continuity requires a new storeId with source ID/backup position; invalidate old cursors/mutations. Normal in-place restart preserves identity. Operations after the backup may have effects absent from restored tombstones. Reconcile with retained external receipts/logs or keep unknown; never auto-retry. Restoring a backup does not undo later external actions.
 
-Event collection and state snapshots share transactional consistency. retentionFloorCursor is the last collected prefix cursor, initially 0, not the first retained event. Equality permits exclusive resume; lower values, including old 0, return CURSOR_EXPIRED. Proposed state.snapshot returns visible tasks/sessions/pending approvals, retention bounds, and a consistent cursor. Resume exclusively after it. Snapshots do not recreate deleted audit history; identify missing evidence.
+Event collection and state snapshots share transactional consistency. retentionFloorCursor is the last collected prefix cursor, initially 0, not the first retained event. Equality permits exclusive resume; lower values, including old 0, return CURSOR_EXPIRED. state.snapshot returns visible tasks/sessions/pending approvals, retention bounds, and a consistent cursor. Resume exclusively after it. Snapshots do not recreate deleted audit history; identify missing evidence.
 
 Page a fixed snapshotId/cursor within byte bounds. The default 60-second lease fixes the view/protects its resume baseline against GC. Expiry returns SNAPSHOT_EXPIRED and releases resources; restart the snapshot, never combine two. Snapshot leases do not refresh model caches and do not prevent refusal of new snapshots under global storage pressure.
 
@@ -490,24 +490,24 @@ Business lack of progress and infrastructure silence have different timers. Long
 
 ### 6.1 Transition deadlines and recovery paths
 
-A persists OperationSnapshot.lifecycle enteredAt, deadlineAt, policyVersion (replacing the draft timeoutPolicyVersion name), expectedGeneration/expectedDispatchId, lastEvidence, and mayHaveBeenSent. Dispatch stores acceptance/total deadlines and target. Use monotonic checks on events and before terminal commit; timers only wake. Restart retains deadlines and conservatively enters unknown without renewing/replaying. Current A2 defaults: acceptance 30000, turn 1800000, drain 300000, interrupt 30000, reconcile 60000 ms, each integer 1..86400000. TS/CLI share fields; Python passes --config through engine_command, without local(timeouts). SDK wait cannot change execution deadlines. The table includes unimplemented target phases.
+A persists OperationSnapshot.lifecycle enteredAt, deadlineAt, policyVersion (replacing the draft timeoutPolicyVersion name), expectedGeneration/expectedDispatchId, lastEvidence, and mayHaveBeenSent. Dispatch stores acceptance/total deadlines and target. Use monotonic checks on events and before terminal commit; timers only wake. Restart retains deadlines and conservatively enters unknown without renewing/replaying. Current A2 defaults: acceptance 30000, turn 1800000, drain 300000, interrupt 30000, reconcile 60000 ms, each integer 1..86400000. TS/CLI share fields; Python passes --config through engine_command, without local(timeouts). SDK wait cannot change execution deadlines. The table describes implemented operations and their evidence gates.
 
 | Transition / phase | Default and start | Completion evidence | Expiry |
 | --- | --- | --- | --- |
 | Dispatch acceptance (implemented) | 30 s from dispatch, bounded by total turn | Matching native acceptance or stronger terminal | Definitely unsent may fail; sent/possibly sent becomes unknown without resend |
 | pausing/drain | 300 s from closing delivery gate | Persisted current terminal and reconciled effects | Control/unreconciled dispatch/session unknown, task blocked; no implicit interrupt |
 | pausing/interrupt | 30 s from interrupt send | Matched stopped terminal, or ended turn plus explicit control no-op | Unknown without proof; receipt/PID disappearance insufficient |
-| compacting (pending) | 300 s from safe boundary and durable control | Compact-complete event or verified no-op | Sent without terminal becomes unknown; no normal idle or automatic rotate |
-| recovering/automatic inspection (pending) | 60 s from read-only investigation | Verified identity/history/dispatch with no residual execution | Unknown/blocked; fresh session cannot bypass effects |
-| rotate preparation/switch (pending) | 60 s from stopped delivery/checkpoint | New session/material confirmed, mapping atomically switched | Paused only if no switch/no unknown request proved; otherwise unknown with both references |
+| compacting | 300 s from safe boundary and durable control | Compact-complete event or verified no-op | Sent without terminal becomes unknown; no normal idle or automatic rotate |
+| read-only inspection | Default 5 s bounded request | Original identity/history observations | execution remains unknown; no automatic reconciliation |
+| rotate preparation/switch | Synchronous durable transition only at a quiet settled boundary | Generation evidence saved and binding atomically switched | Refuse active/unknown work; retain the old generation |
 | Owner reconcile (implemented) | 60 s for submission processing | Declaration/exact target agree with resource/terminal evidence | Reject/roll back before commit if expired; no model turn |
 | closing/host stopping (implemented) | 30 s per close/continue wait | Owned connections/processes reclaimed, state durable | SHUTDOWN_INCOMPLETE, lifecycle.expiredAt and shutdown.incomplete; retain query/continue handles and stopping |
 
-Future compaction with active work first completes a separate drain; reentering compact cannot renew it. Normal tools/work/approval do not use a 30-second heartbeat rule. New total turns default to 1800 seconds including startup/acceptance; owner finite limits and shorter explicit provider caps apply. Human approvals use their own expiresAt, not token silence. Preserve unknown on overrun rather than invent stop. waiting_dependency remains future dependency scheduling.
+Compaction requires a quiet completed session; active work must first complete a separate drain; reentering compact cannot renew it. Normal tools/work/approval do not use a 30-second heartbeat rule. New total turns default to 1800 seconds including startup/acceptance; owner finite limits and shorter explicit provider caps apply. Human approvals use their own expiresAt, not token silence. Preserve unknown on overrun rather than invent stop. waiting_dependency is implemented and consumes no execution slot.
 
 The host watchdog transactionally settles affected task/session/operation/dispatch/messages/outbox and events. Unknown does not mean resources stopped. Keep execution lease until complete execution/cleanup proof, then release only A while retaining Q/activeDispatchId. Avoid timeout-driven replacement workers. Definite failed/rejected requires proof no external call occurred; retry also checks evidence and original business key.
 
-Closing intentionally may remain stopping for owner intervention, but each wait is finite/observable and blocks new dispatch. Continue with the same operationId or explicitly escalate interrupt; ordinary wait timeout cannot escalate. Stdio EOF stops dispatch and triggers at most 30-second emergency close. Adapters touch only owned resources and retain unknown/incomplete on failure. Codex uses spawned handles and default one-second TERM/KILL stages. The Claude baseline uses Query.close/iterator.return contract interpretation, not measured SDK process exit. No persisted-PID cleanup or shared-runtime automatic inspection after restart; future support requires ownership evidence beyond PID/name.
+Closing intentionally may remain stopping for owner intervention, but each wait is finite/observable and blocks new dispatch. Continue with the same operationId or explicitly escalate interrupt; ordinary wait timeout cannot escalate. Stdio EOF stops dispatch and triggers at most 30-second emergency close. Adapters touch only owned resources and retain unknown/incomplete on failure. Codex uses spawned handles and default one-second TERM/KILL stages. Claude records owned spawn handles and observes actual exit independently of Query.close/iterator.return; SPEC-0008 additionally correlates streaming interrupt terminals. No persisted-PID cleanup or shared-runtime automatic inspection after restart; future support requires ownership evidence beyond PID/name.
 
 Implemented sessions.reconcile accepts owner investigation declarations without reading upstream history automatically. Only embedded TS or managed-stdio Python owners qualify; ordinary sockets fail. Record localResources, remoteExecution, sideEffects, outcome, summary, and full result for completed, with actor/original dispatch. Active resources or conflicting evidence reject stopped release; business unknown remains isolated. completed saves output/pauses for acceptance-only resume, not_executed pauses for explicit requeue, failed/interrupted fails. Preserve original unknown controls with appended resolution, never pretend on-time completion or automatically complete the Task.
 
@@ -535,7 +535,7 @@ work_delegate consumes registered child/concurrency/turn/budget limits; work_sen
 
 ### 7.1 Claude
 
-The full design uses query({prompt:AsyncIterable,options}) with sequential input and explicit resume:sessionId after interruption. Never use implicit most-recent-session continue to select a target in a multi-session environment. The current minimal adapter uses string prompts; long-lived streaming remains a target. [Sessions](https://code.claude.com/docs/en/agent-sdk/sessions), [streaming input](https://code.claude.com/docs/en/agent-sdk/streaming-vs-single-mode)
+The full design uses query({prompt:AsyncIterable,options}) with sequential input and explicit resume:sessionId after interruption. Never use implicit most-recent-session continue to select a target in a multi-session environment. The current adapter uses one open AsyncIterable prompt per turn and explicit resume, implemented in SPEC-0008. [Sessions](https://code.claude.com/docs/en/agent-sdk/sessions), [streaming input](https://code.claude.com/docs/en/agent-sdk/streaming-vs-single-mode)
 
 | Operation | Integration | Required verification |
 | --- | --- | --- |
@@ -569,7 +569,7 @@ Shell can bypass accounting by starting model processes. Enforcing host-managed 
 
 ### 7.3 Current application adapter extension point
 
-An application can already pass its own `RuntimeAdapter` through `EngineConfig.adapters`. Keep the independent Claude/Codex adapters for standalone consumers; an existing application need not replace or load them. Choosing an embedded or separate engine process does not determine which execution pipeline enforces permissions. MCP/CLI transport is not an authorization boundary, and the project MCP bridge remains unimplemented.
+An application can already pass its own `RuntimeAdapter` through `EngineConfig.adapters`. Keep the independent Claude/Codex adapters for standalone consumers; an existing application need not replace or load them. Choosing an embedded or separate engine process does not determine which execution pipeline enforces permissions. MCP/CLI transport is not an authorization boundary, and the project MCP bridge binds only an exact engine runtime grant.
 
 The current extension point has synchronous, side-effect-free `capabilities()`, `execute(input): AsyncIterable<RuntimeEvent>`, optional `close()`, and resource-observation hooks. The engine supplies the dispatch identity, generation, shared monotonic execution budget, cancellation signal, and evidence callback. Direct standalone adapter calls may omit engine-only fields; a hosted adapter must require them rather than create replacement identities, deadlines, or evidence channels. Construction, capability inspection, and preflight must not submit work, spawn processes, inspect credentials, or open host resources.
 
@@ -615,9 +615,9 @@ For Axion, the complete prompt-command pipeline is the candidate entry point. It
 2. **Concrete host integration:** implement the host's durable dispatch binding, structured admission/native receipts, origin and permission mapping, complete resource observations, and idempotent event projection. Run the suite through the actual host integration seam, then obtain separately authorized real-model acceptance on that path. A real-model run through a standalone provider adapter does not validate the host bridge.
 3. **Packaging and capacity:** define distributable package exports, verify actual bundled/installed artifacts and Electron runtime support, then measure event-loop latency, database growth, and shutdown under load. Synchronous SQLite may justify a worker or dedicated process; there is no measured application-latency conclusion yet. Pure TypeScript and built-in SQLite alone do not prove hot-update eligibility. Existing retention/GC and publication work remain separate.
 
-### 7.6 Future session-control extension
+### 7.6 Session-control implementation
 
-The following expanded session-management facade remains a future design. It is not today's `RuntimeAdapter` and is not required to implement the current extension point:
+The expanded facade below is an architectural sketch, not an additional required callable API. SPEC-0009 implements these semantics using RuntimeInput.forkSource, RuntimeInput.nativeAction, RuntimeAdapter.inspect, existing execute/control signals and durable engine session operations. Keeping the existing adapter boundary avoids requiring a second execution path:
 
 This is a proposed project interface, not official SDK class names or runnable current code:
 
@@ -879,13 +879,13 @@ N3 keeps the joint release gate with independent provider/profile development, e
 
 ### 12.2 Remaining maintenance and release constraints
 
-G4–G7 need explicit boundaries and later detailed specifications/evidence:
+SPEC-0009 implements the following engineering boundaries; their real-release evidence remains explicit:
 
 | Item | Decision and later acceptance |
 | --- | --- |
 | G4: content injection | Use 6.2 threat model. Before MCP bridge deployment test malicious files/results, forged approval, unauthorized control, and budget exhaustion. Arbitrary-shell profiles cannot claim four tools enforce all model calls |
-| G5: upstream drift | Support only exact matrix-tested versions; wide dependency ranges are not support guarantees. Maintenance plan: adapter maintainers manually run a weekly non-paid latest-stable protocol preflight. Candidates regenerate/review types and run recorded/fault tests; release adds budgeted real-model regression. Normal CI pins supported versions. Failed candidates never auto-update lockfiles/enable unknown capability. Adapter owners handle upstream breaks; core owners handle public protocol. No automation/CI was created by this plan |
-| G6: capacity | Two model sessions is a pilot safety bound; 1 MiB frames/64 pending per connection are guards, not SQLite throughput claims. A performance spec must bound total connections/global pending bytes/queues/logical sessions and measure event/dispatch rates, p95 DB wait, RSS, WAL/disk growth, and GC. Publish capacity only after fixed-hardware/load breakpoints. Section 4.5 quotas are unmeasured conservative proposals |
+| G5: upstream drift | Support only exact matrix-tested versions; wide dependency ranges are not support guarantees. Maintenance plan: adapter maintainers manually run a weekly non-paid latest-stable protocol preflight. Candidates regenerate/review types and run recorded/fault tests; release adds budgeted real-model regression. Normal CI pins supported versions. Failed candidates never auto-update lockfiles/enable unknown capability. Adapter owners handle upstream breaks; core owners handle public protocol. Pinned offline native-protocol CI is configured in .github/workflows/offline.yml; remote jobs and any weekly drift automation have not been run or scheduled by this task |
+| G6: capacity | Two model sessions is a pilot safety bound; 1 MiB frames/64 pending per connection are guards, not SQLite throughput claims. SPEC-0009 bounds total connections/pending bytes/queues/logical sessions and records event/dispatch rates, SQLite BEGIN timing, RSS, WAL/disk and GC on 1k/10k retained-task fixtures. BEGIN timing is not multi-writer contention. Publish production capacity only after representative load breakpoints; section 4.5 quotas remain policy settings |
 | G7: schedule/staffing | Retain both languages/runtimes and plan dependencies, not a mechanical 2×2×3 multiplier (Python does not embed TS). Uncalibrated placeholders: real capability/threat verification 4–8 engineer-days; retention/deadline/reconciliation 7–10; bridge/dependencies/safe parallelism 5–8; packaging/compatibility/docs 4–7; cross-stage performance/fault drills 3–5. Total 23–38 engineer-days, two engineers plus independent review, roughly 3–5 dependent weeks. This is not a delivery promise; excludes account/upstream waits, license decisions, and stage E. Reestimate after capability failures; deadlines do not waive safety gates |
 
-Keep the gap explicit: A/A2 implement durable deadlines/watchdogs, leases/quarantine, owner reconcile, shared 1800-second budgets/evidence notifications, scheduler diagnostics, and owner conflict resolution with offline fixture verification. Automatic upstream inspection, GC/tombstones/snapshot baselines, archive rollover, contextPlan, cross-task accounting, queue/routing policy remain pending. Fork/compact/rotate still reject. Continue [B/C](./docs/specs/0003-policy-retention-deadlines.md). Offline evidence is not real-model/long-lived acceptance. Implementation increments did not run paid experiments or publish packages; later repository initialization does not change those boundaries.
+Current completion is recorded in [SPEC-0009](docs/specs/0009-complete-design.md#completion-matrix): deadlines, leases/quarantine, bounded inspection, declared routing, fork/compact/rotate/stop, tools, checks, approvals, costs, retention/GC/snapshots, archive rollover and package builds are implemented with offline evidence. Automatic outcome resolution and economic optimization remain disabled. No paid experiments, production deployment, Axion changes or package publication were performed. Assumption gates A01–A08 remain real-release criteria; passing local fixtures cannot mark those gates passed.

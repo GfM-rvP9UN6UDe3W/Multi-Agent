@@ -1,6 +1,6 @@
 import { createClaudeAdapter } from '../../packages/adapter-claude/src/index.ts';
 import { startStdioHost } from '../../packages/cli/src/host.ts';
-import { createEngine, createFakeAdapter } from '../../packages/engine/src/index.ts';
+import { createEngine, createFakeAdapter } from './engine.ts';
 
 // Offline SDK seam: deliberately omits spawn observation, without creating any hidden process.
 const claude = createClaudeAdapter({

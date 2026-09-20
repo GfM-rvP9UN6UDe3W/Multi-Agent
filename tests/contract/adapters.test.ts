@@ -198,10 +198,24 @@ test('AC adapter Codex: handshake, thread and turn ack, deduplicated usage, term
           cacheWriteInputTokens: 0,
           outputTokens: 2,
           reasoningOutputTokens: 0,
+          _cumulative: {
+            totalTokens: 5,
+            inputTokens: 3,
+            cachedInputTokens: 0,
+            cacheWriteInputTokens: 0,
+            outputTokens: 2,
+            reasoningOutputTokens: 0,
+          },
+          _basis: 'last_observed_request',
         },
       },
     },
-    { type: 'result', text: 'finished', providerSessionId: 'codex-thread-1' },
+    {
+      type: 'result',
+      text: 'finished',
+      providerSessionId: 'codex-thread-1',
+      nativeCheckpoint: 'codex-turn-1',
+    },
   ]);
   assert.deepEqual(adapter.capabilities().permissionProfiles, ['read-only']);
 });
@@ -245,7 +259,12 @@ test('AC adapter Codex: failed thread start is not accepted and missing usage re
           raw: null,
         },
       },
-      { type: 'result', text: 'finished', providerSessionId: 'previous-thread' },
+      {
+        type: 'result',
+        text: 'finished',
+        providerSessionId: 'previous-thread',
+        nativeCheckpoint: 'codex-turn-1',
+      },
     ],
   );
 });

@@ -1,6 +1,6 @@
 # SPEC-0003-B: Archiving and explicit store rollover after capacity backpressure
 
-Date: 2026-09-19. Status: **design agreed; TDD implementation pending; no RED/GREEN evidence**. This supplements AC-B01–B07 of [SPEC-0003](./0003-policy-retention-deadlines.md) with AC-B08–B18. It depends on [A](./0003-a-lifecycle.md) owner reconciliation and prior [A2](./0003-a2-execution-isolation.md) execution/outcome isolation. APIs, configuration, and failure recovery described here are unimplemented. Existing passing tests do not validate this specification.
+Date: 2026-09-19; implementation status updated 2026-09-21. **Implemented in SPEC-0009 with offline storage/process-fault evidence.** This supplements B01–B07 with B08–B18 and retains A/A2 owner-reconciliation and execution-isolation requirements. See the [completion matrix](0009-complete-design.md#completion-matrix) and [actual evidence](../tdd/0009-complete-design.md); offline acceptance does not establish production capacity or real-provider safety.
 
 ## 1. Goals, scope, and exclusions
 

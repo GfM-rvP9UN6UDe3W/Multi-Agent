@@ -23,7 +23,7 @@ Use Node.js 22.18+ and Python 3.11+. Run from the repository root:
 - `npm run cli -- --help`: inspect available CLI commands.
 - `PYTHONPATH=python/src python3 examples/python/fake_roundtrip.py`: run the offline Python-to-Node example.
 
-There is no build script; Node executes erasable TypeScript directly.
+Source development executes erasable TypeScript directly. `npm run build:packages` emits locally installable JavaScript/declaration tarballs; `npm run check:generated` verifies the generated protocol contract. Python wheel/sdist and clean-install commands are documented in README.
 
 ## Coding Style & Naming Conventions
 

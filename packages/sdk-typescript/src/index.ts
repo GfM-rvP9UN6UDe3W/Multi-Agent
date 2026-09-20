@@ -1,3 +1,6 @@
+export { validateWire } from '../../engine/src/wire.ts';
+export type * as WireTypes from '../../engine/src/generated/wire.ts';
+import { requestDigest, type RetryIdentity } from '../../engine/src/identity.ts';
 import { randomUUID } from 'node:crypto';
 import { createEngine } from '../../engine/src/index.ts';
 import type {
@@ -16,6 +19,7 @@ import type {
   SchedulerSnapshot,
   SessionControlTarget,
   SessionSnapshot,
+  SessionOpenSpec,
   TaskSnapshot,
   TaskSpec,
   UsageRecord,
@@ -27,6 +31,7 @@ export type * from '../../engine/src/types.ts';
 
 export interface MutationOptions extends RequestOptions {
   idempotencyKey?: string;
+  retryIdentity?: RetryIdentity;
 }
 export interface WaitOptions {
   timeoutMs?: number;
@@ -192,6 +197,7 @@ export class Orchestrator {
   readonly info: InitializeResult;
   private caller: Caller;
   private owner: boolean;
+  private identities = new Map<string, RetryIdentity>();
   private closed = false;
   private closeResult?: { status: 'closed'; operationId: string };
   constructor(caller: Caller, info: InitializeResult, owner: boolean) {
@@ -214,9 +220,52 @@ export class Orchestrator {
     params: Record<string, unknown>,
     options?: MutationOptions,
   ): Promise<T> {
-    const idempotencyKey = key(options);
+    if (
+      this.info.protocolVersion !== '2.0' ||
+      (this.info.capabilities?.storeNamespaces as any)?.version !== 1 ||
+      !this.info.storeId
+    )
+      throw new OrchestratorError(
+        'UNSUPPORTED_CAPABILITY',
+        'Namespace-bound writes require a confirmed protocol 2.0 store',
+      );
+    const requestedKey = options?.retryIdentity?.idempotencyKey ?? key(options);
+    const identityKey = JSON.stringify([method, scope, requestedKey]);
+    const identity: RetryIdentity = options?.retryIdentity ??
+      this.identities.get(identityKey) ?? {
+        storeId: this.info.storeId,
+        method,
+        scope,
+        idempotencyKey: requestedKey,
+        digestVersion: 1,
+        requestDigest: requestDigest(method, params),
+      };
+    this.identities.set(identityKey, { ...identity });
+    const idempotencyKey = identity.idempotencyKey;
     try {
-      return await this.call<T>(method, { ...params, idempotencyKey }, options);
+      if (
+        identity.method !== method ||
+        identity.scope !== scope ||
+        identity.digestVersion !== 1 ||
+        identity.requestDigest !== requestDigest(method, params)
+      )
+        throw new OrchestratorError('IDEMPOTENCY_CONFLICT', 'Retry identity or payload changed');
+      const result = await this.call<T>(
+        method,
+        {
+          ...params,
+          idempotencyKey,
+          expectedStoreId: identity.storeId,
+          requestDigest: identity.requestDigest,
+        },
+        options,
+      );
+      if (
+        ['stores.rollover', 'stores.import'].includes(method) &&
+        (result as any)?.status === 'completed'
+      )
+        await this.refresh();
+      return result && typeof result === 'object' ? { ...result, retryIdentity: identity } : result;
     } catch (error) {
       const original = error && typeof error === 'object' ? (error as Record<string, unknown>) : {};
       const data =
@@ -229,11 +278,34 @@ export class Orchestrator {
       const failure = new OrchestratorError(
         typeof original.code === 'string' ? original.code : 'REQUEST_FAILED',
         typeof original.message === 'string' ? original.message : String(error),
-        { ...data, method, scope, idempotencyKey },
+        { ...data, method, scope, idempotencyKey, retryIdentity: identity },
       );
       failure.cause = error;
       throw failure;
     }
+  }
+  async refresh(): Promise<InitializeResult> {
+    const info = await this.call<InitializeResult>('initialize', {
+      protocolVersion: '2.0',
+      sdkVersion: '0.1.0',
+    });
+    if (
+      info.protocolVersion !== '2.0' ||
+      (info.capabilities?.storeNamespaces as any)?.version !== 1
+    )
+      throw new OrchestratorError('PROTOCOL_MISMATCH', 'Refreshed host lacks namespace support');
+    Object.assign(this.info, info);
+    return this.info;
+  }
+  retry<T = Record<string, unknown>>(
+    identity: RetryIdentity,
+    params: Record<string, unknown>,
+    options: RequestOptions = {},
+  ) {
+    return this.mutation<T>(identity.method, identity.scope, params, {
+      ...options,
+      retryIdentity: { ...identity },
+    });
   }
   private async operation(
     method: string,
@@ -299,6 +371,12 @@ export class Orchestrator {
       this.operation('tasks.cancel', taskId, { taskId }, options),
   };
   readonly sessions = {
+    inspect: (sessionId: string, options: { timeoutMs?: number; limit?: number } = {}) =>
+      this.call<
+        import('../../engine/src/types.ts').RuntimeInspection & {
+          target: import('../../engine/src/types.ts').Json;
+        }
+      >('sessions.inspect', { sessionId, ...options }),
     get: (sessionId: string, options?: RequestOptions) =>
       this.call<SessionSnapshot>('sessions.get', { sessionId }, options),
     control: (
@@ -329,34 +407,59 @@ export class Orchestrator {
       }
       return this.operation('sessions.reconcile', target.sessionId, { target, evidence }, options);
     },
-    open: (..._args: unknown[]) =>
-      Promise.reject(
-        new OrchestratorError(
+    open: async (spec: SessionOpenSpec, options?: MutationOptions) => {
+      const capability = this.info.capabilities.sessionLifecycle as { open?: boolean } | undefined;
+      if (capability?.open !== true)
+        throw new OrchestratorError(
           'UNSUPPORTED_CAPABILITY',
-          'sessions.open is not implemented in foundation 1.0',
-        ),
+          'Host does not support logical session opening',
+        );
+      return this.mutation<SessionSnapshot>('sessions.open', 'local', { spec }, options);
+    },
+    fork: (target: SessionControlTarget, snapshotRef: string, options?: MutationOptions) =>
+      this.mutation<SessionSnapshot>(
+        'sessions.fork',
+        target.sessionId,
+        { target, snapshotRef },
+        options,
       ),
-    fork: (..._args: unknown[]) =>
-      Promise.reject(
-        new OrchestratorError(
-          'UNSUPPORTED_CAPABILITY',
-          'sessions.fork is not implemented in foundation 1.0',
-        ),
+    compact: (target: SessionControlTarget, options?: MutationOptions) =>
+      this.operation('sessions.compact', target.sessionId, { target }, options),
+    rotate: (target: SessionControlTarget, options?: MutationOptions) =>
+      this.operation('sessions.rotate', target.sessionId, { target }, options),
+    stop: (
+      target: SessionControlTarget,
+      mode: 'drain' | 'interrupt' = 'drain',
+      options?: MutationOptions,
+    ) =>
+      this.operation(
+        'sessions.control',
+        target.sessionId,
+        { target, command: { action: 'stop', mode } },
+        options,
       ),
-    compact: (..._args: unknown[]) =>
-      Promise.reject(
-        new OrchestratorError(
-          'UNSUPPORTED_CAPABILITY',
-          'sessions.compact is not implemented in foundation 1.0',
-        ),
-      ),
-    rotate: (..._args: unknown[]) =>
-      Promise.reject(
-        new OrchestratorError(
-          'UNSUPPORTED_CAPABILITY',
-          'sessions.rotate is not implemented in foundation 1.0',
-        ),
-      ),
+  };
+  readonly costs = {
+    get: (taskId?: string, scope: 'direct' | 'tree' | 'host_overhead' = 'direct') =>
+      this.call('costs.get', { ...(taskId ? { taskId } : {}), scope }),
+    recordOverhead: (
+      record: {
+        billingId: string;
+        currency: string;
+        amount: string | null;
+        pricingVersion: string;
+        summary: string;
+      },
+      options?: MutationOptions,
+    ) => this.operation('costs.recordOverhead', 'host', record, options),
+  };
+  readonly context = {
+    estimate: (
+      input: Omit<
+        Parameters<typeof import('../../engine/src/accounting.ts').estimateContext>[0],
+        'pricing'
+      > & { provider: string; model: string },
+    ) => this.call('context.estimate', input),
   };
   readonly messages = {
     send: (spec: MessageSpec, options?: MutationOptions) =>
@@ -391,6 +494,82 @@ export class Orchestrator {
         typeof query === 'string' ? { taskId: query } : query,
         options,
       ),
+  };
+  readonly stores = {
+    rollover: (options?: MutationOptions) =>
+      this.mutation<import('../../engine/src/control-plane.ts').RolloverRecord>(
+        'stores.rollover',
+        'local',
+        {},
+        options,
+      ),
+    importBackup: (backupId: string, options?: MutationOptions) =>
+      this.mutation<import('../../engine/src/control-plane.ts').RolloverRecord>(
+        'stores.import',
+        'local',
+        { backupId },
+        options,
+      ),
+    rolloverStatus: (rolloverId: string, options?: RequestOptions) =>
+      this.call<import('../../engine/src/control-plane.ts').RolloverRecord>(
+        'rollovers.get',
+        { rolloverId },
+        options,
+      ),
+  };
+  readonly archives = {
+    lookup: (
+      query: {
+        storeId: string;
+        method: string;
+        scope: string;
+        idempotencyKey: string;
+        requestDigest?: string;
+      },
+      options?: RequestOptions,
+    ) => this.call<OperationSnapshot>('archives.lookup', query, options),
+    readArtifact: (
+      query: { storeId: string; artifactRef: string; maxBytes?: number },
+      options?: RequestOptions,
+    ) =>
+      this.call<{ storeId: string; artifactRef: string; text: string }>(
+        'archives.readArtifact',
+        query,
+        options,
+      ),
+  };
+  readonly storage = {
+    backup: (options?: MutationOptions) =>
+      this.mutation<{ backupId: string; storeId: string; retryIdentity: RetryIdentity }>(
+        'storage.backup',
+        'local',
+        {},
+        options,
+      ),
+    status: (options?: RequestOptions) =>
+      this.call<Record<string, unknown>>('storage.status', {}, options),
+    configure: (
+      policy: Partial<import('../../engine/src/storage.ts').StoragePolicy>,
+      options?: MutationOptions,
+    ) => this.operation('storage.configure', 'local', { policy }, options),
+    collect: (options?: MutationOptions) => this.operation('storage.gc', 'local', {}, options),
+    pin: (ref: string, reason: string, options?: MutationOptions) =>
+      this.operation('storage.pin', 'local', { ref, reason }, options),
+    unpin: (ref: string, options?: MutationOptions) =>
+      this.operation('storage.unpin', 'local', { ref }, options),
+  };
+  readonly state = {
+    snapshot: (
+      query: { snapshotId?: string; offset?: number; limit?: number } = {},
+      options?: RequestOptions,
+    ) =>
+      this.call<ReturnType<import('../../engine/src/storage.ts').StorageGovernance['snapshot']>>(
+        'state.snapshot',
+        query,
+        options,
+      ),
+    releaseSnapshot: (snapshotId: string, options?: RequestOptions) =>
+      this.call<{ released: boolean }>('state.releaseSnapshot', { snapshotId }, options),
   };
   readonly capabilities = Object.assign(
     (query: { provider?: string } = {}, options?: RequestOptions) =>
@@ -441,6 +620,7 @@ export class Orchestrator {
     }
     try {
       const params = {
+        expectedStoreId: this.info.storeId,
         mode: options.mode ?? 'drain',
         timeoutMs: options.timeoutMs ?? 30_000,
         ...(options.operationId ? { operationId: options.operationId } : {}),
@@ -456,6 +636,20 @@ export class Orchestrator {
       this.caller.disconnect();
       return result;
     } catch (error) {
+      const failure = error as {
+        code?: string;
+        data?: Record<string, unknown>;
+        details?: Record<string, unknown>;
+      };
+      const details = failure?.data ?? failure?.details;
+      if (
+        failure?.code === 'STORAGE_DEGRADED_CLOSED' &&
+        details?.status === 'closed' &&
+        details?.durableReceipt === false
+      ) {
+        this.closed = true;
+        this.caller.disconnect();
+      }
       if (
         error &&
         typeof error === 'object' &&
@@ -480,11 +674,16 @@ async function initialize(caller: Caller, owner: boolean) {
   try {
     const info = await caller.call<InitializeResult>(
       'initialize',
-      { protocolVersion: '1.0', sdkVersion: '0.1.0' },
+      { protocolVersion: '2.0', sdkVersion: '0.1.0' },
       { timeoutMs: 5000 },
     );
-    if (info.protocolVersion !== '1.0')
-      throw new OrchestratorError('PROTOCOL_MISMATCH', 'Host did not negotiate protocol 1.0');
+    if (info.protocolVersion !== '2.0')
+      throw new OrchestratorError('PROTOCOL_MISMATCH', 'Host did not negotiate protocol 2.0');
+    if ((info.capabilities?.storeNamespaces as { version?: number })?.version !== 1)
+      throw new OrchestratorError(
+        'UNSUPPORTED_CAPABILITY',
+        'Host must support namespace-bound writes',
+      );
     return new Orchestrator(caller, info, owner);
   } catch (error) {
     caller.disconnect();

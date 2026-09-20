@@ -17,8 +17,9 @@ export function createFakeAdapter(
         interrupt: true,
         permissionProfiles: ['read-only', 'workspace-write'],
         evidence: 'deterministic-test-runtime',
-        fork: false,
-        manualCompact: false,
+        fork: true,
+        compact: true,
+        manualCompact: true,
       };
     },
     async *execute(input): AsyncIterable<RuntimeEvent> {
@@ -55,7 +56,19 @@ export function createFakeAdapter(
         }
         throw error;
       }
-      yield terminal({ type: 'result', text: options.result ?? `Fake result: ${input.prompt}` });
+      yield terminal({
+        type: 'result',
+        text: options.result ?? `Fake result: ${input.prompt}`,
+        nativeCheckpoint: `fake-point-${input.dispatchId}`,
+        ...(input.nativeAction === 'compact'
+          ? {
+              compacted: {
+                kind: 'boundary' as const,
+                evidence: { source: 'deterministic-fake', dispatchId: input.dispatchId },
+              },
+            }
+          : {}),
+      });
     },
   };
 }

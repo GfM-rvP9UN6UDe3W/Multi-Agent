@@ -10,7 +10,7 @@ import {
 } from '../../packages/sdk-typescript/src/index.ts';
 import type { TaskSnapshot } from '../../packages/engine/src/types.ts';
 import { createFakeAdapter } from '../../packages/engine/src/fake.ts';
-import { createEngine } from '../../packages/engine/src/index.ts';
+import { createEngine } from '../fixtures/engine.ts';
 
 async function fixture(t: any, delayMs = 0) {
   const root = await mkdtemp(join(tmpdir(), 'orch-sdk-test-'));
@@ -102,12 +102,12 @@ test('AC06 wait deadline includes a slow status response and does not call remot
       disconnect() {},
     },
     {
-      protocolVersion: '1.0',
+      protocolVersion: '2.0',
       engineVersion: 'test',
       schemaVersion: 1,
       instanceId: 'test',
       storeId: 'test',
-      capabilities: {},
+      capabilities: { storeNamespaces: { version: 1 } },
     },
     false,
   );
@@ -134,7 +134,7 @@ test('AC02 generated mutation key survives a lost creation receipt and recovers 
   });
   let loseReceipt = true;
   const info = (await engine.call('initialize', {
-    protocolVersion: '1.0',
+    protocolVersion: '2.0',
     sdkVersion: 'test',
   })) as any;
   const client = new Orchestrator(
@@ -182,12 +182,12 @@ test('AC02 every mutation failure exposes its exact lookup scope and key', async
       disconnect() {},
     },
     {
-      protocolVersion: '1.0',
+      protocolVersion: '2.0',
       engineVersion: 'test',
       schemaVersion: 1,
       instanceId: 'test',
       storeId: 'test',
-      capabilities: {},
+      capabilities: { storeNamespaces: { version: 1 } },
     },
     false,
   );
