@@ -224,6 +224,9 @@ test(
       ApprovalRequest: [approval, approved],
       MessageSnapshot: [message],
       UsageRecord: usage.records,
+      UsageRecordedData: page.events
+        .filter((event) => event.type === 'usage.recorded')
+        .map((event) => event.data),
       OperationSnapshot: [receipt],
       SessionSnapshot: [session, currentSession],
       SchedulerSnapshot: [scheduler],
@@ -369,6 +372,12 @@ test(
         corrupt('UsageRecord', (value) => {
           value.inputTokens = Number.MAX_SAFE_INTEGER + 1;
         });
+        corrupt('UsageRecordedData', (value) => {
+          value.usageRecordId = '';
+        });
+        corrupt('UsageRecordedData', (value) => {
+          value.dispatchId = 3;
+        });
         corrupt('OperationSnapshot', (value) => {
           value.status = 'done';
         });
@@ -422,6 +431,15 @@ async def main():
         message = await orch.messages.get(sys.argv[4])
         operation = await orch.operations.get(sys.argv[5])
         usage = await orch.usage.get(task.id)
+        exact = await orch.usage.get_record(usage.records[0].id)
+        assert exact.as_dict() == usage.records[0].as_dict()
+        notifications = []
+        async for event in orch.events(task_id=task.id):
+            if event.type == 'usage.recorded':
+                assert event.data.usage_record_id
+                notifications.append(event.data)
+            if len(notifications) == 2:
+                break
         assert task.session_id == message.to_session_id
         assert task.approval_id == approval.approval_id
         assert approval.target.task_id == task.id and approval.target.task_revision >= 1
@@ -436,6 +454,7 @@ async def main():
             'TaskSnapshot': task, 'ApprovalRequest': approval,
             'MessageSnapshot': message, 'OperationSnapshot': operation,
             'UsageRecord': usage.records,
+            'UsageRecordedData': notifications,
         }.items()}))
 asyncio.run(main())
 `,
@@ -457,9 +476,14 @@ asyncio.run(main())
           MessageSnapshot: message,
           OperationSnapshot: receipt,
           UsageRecord: usage.records,
+          UsageRecordedData: page.events
+            .filter((event) => event.type === 'usage.recorded')
+            .map((event) => event.data),
         });
         for (const [name, value] of Object.entries(actual))
-          for (const item of name === 'UsageRecord' ? (value as unknown[]) : [value])
+          for (const item of ['UsageRecord', 'UsageRecordedData'].includes(name)
+            ? (value as unknown[])
+            : [value])
             validate(name, item);
       },
     );

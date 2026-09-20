@@ -270,6 +270,8 @@ export interface RuntimeInput {
   generation?: number;
   executionBudget?: ExecutionBudget;
   reportExecutionEvidence?: (evidence: ExecutionEvidence) => void;
+  /** Persists received usage even after the main iterator/deadline; never changes execution state. */
+  reportUsage?: (event: RuntimeUsageEvent) => void;
 }
 /** Required at the engine-to-host boundary; standalone provider calls retain RuntimeInput. */
 export interface EngineRuntimeInput extends RuntimeInput {
@@ -287,11 +289,27 @@ export type RuntimeEvent =
     }
   | { type: 'interrupted' }
   | { type: 'error'; message: string; outcome: 'failed' | 'unknown' };
+export type RuntimeUsageEvent = Extract<RuntimeEvent, { type: 'usage' }>;
 export interface RuntimeResourceTarget {
   sessionId: string;
   dispatchId: string;
   generation: number;
 }
+export interface RuntimeStopContext {
+  readonly target: Readonly<
+    RuntimeResourceTarget & {
+      taskId: string;
+      provider: string;
+      providerSessionId: string | null;
+      providerTurnId?: string;
+    }
+  >;
+  readonly terminal: Readonly<RuntimeTerminalEvent>;
+  readonly signal: AbortSignal;
+  readonly remainingMs: () => number;
+}
+/** True is a host observation of full execution stop, never merely receipt of a cancel request. */
+export type RuntimeStopObserver = (context: RuntimeStopContext) => boolean | Promise<boolean>;
 export interface RuntimeAdapter {
   provider: string;
   capabilities(): RuntimeCapabilities;

@@ -49,6 +49,7 @@ export function withClaudeProcess(
     try {
       const query = factory(request);
       return {
+        ...(query.interrupt ? { interrupt: query.interrupt.bind(query) } : {}),
         [Symbol.asyncIterator]() {
           const iterator = query[Symbol.asyncIterator]();
           return {

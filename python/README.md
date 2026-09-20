@@ -338,9 +338,23 @@ Python `local()` arguments. Offline fixtures do not prove real-provider stop gua
 
 ## Implemented boundary
 
+SPEC-0007 adds `await orch.usage.get_record(usage_record_id)` and durable `usage.recorded`
+events. For example, inside `async for event in orch.events(store_id=saved_store,
+after_cursor=saved_cursor)`, read `event.data.usage_record_id` and
+`event.data.dispatch_id`, then retrieve the exact record. Persist it to the host's
+outbox/ledger before advancing the checkpoint; deduplicate by `(event.store_id, record.id)`.
+Raw usage retains its provider keys. Missing record IDs return `NOT_FOUND`; malformed
+IDs return `VALIDATION_ERROR`. Historical usage rows are not backfilled into events.
+See the [offline durable forwarding example](../examples/typescript/usage-forwarding.ts).
+
+Python can consume usage from an embedded TypeScript host over the existing socket.
+It cannot serialize Claude native callbacks or `observeExecutionStop` into JSON configuration.
+Stock CLI providers remain read-only; serializable Codex `networkAccess`/`webSearch`
+settings are supported. Native tool approval remains separate from engine task acceptance.
+
 Implemented namespaces: `tasks.create/get/resume/cancel`, `sessions.get/control/reconcile`,
 `scheduler.get/get_conflict/resolve_conflict`, `messages.send/get`,
-`approvals.get/decide`, `operations.get/lookup`, `usage.get`,
+`approvals.get/decide`, `operations.get/lookup`, `usage.get/get_record`,
 `capabilities`, `events`, and owner/connection lifecycle.
 
 `sessions.open/fork`, compact/rotate/stop controls, and automatic verification return

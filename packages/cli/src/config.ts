@@ -110,11 +110,14 @@ export async function loadConfig(configPath: string): Promise<HostConfig> {
           'requestTimeoutMs',
           'turnTimeoutMs',
           'cleanupTimeoutMs',
+          'interruptTimeoutMs',
         ],
         'claude provider',
       );
       if (settings.permissionProfile === 'workspace-write')
-        invalid('Claude foundation adapter only supports read-only');
+        invalid(
+          'Claude JSON host supports read-only; workspace-write requires embedded host policy and stop observation',
+        );
     } else if (provider === 'codex') {
       fields(
         settings,
@@ -125,6 +128,8 @@ export async function loadConfig(configPath: string): Promise<HostConfig> {
           'command',
           'args',
           'env',
+          'networkAccess',
+          'webSearch',
           'requestTimeoutMs',
           'turnTimeoutMs',
           'closeTimeoutMs',
@@ -132,7 +137,16 @@ export async function loadConfig(configPath: string): Promise<HostConfig> {
         'codex provider',
       );
       if (settings.permissionProfile === 'workspace-write')
-        invalid('Codex foundation adapter only supports read-only');
+        invalid(
+          'Codex JSON host supports read-only; workspace-write requires embedded host stop observation',
+        );
+      if (settings.networkAccess !== undefined && typeof settings.networkAccess !== 'boolean')
+        invalid('codex.networkAccess must be a boolean');
+      if (
+        settings.webSearch !== undefined &&
+        !['disabled', 'cached', 'live'].includes(settings.webSearch as string)
+      )
+        invalid('codex.webSearch must be disabled, cached, or live');
       if (
         settings.command !== undefined &&
         (typeof settings.command !== 'string' || !settings.command.trim())
@@ -152,7 +166,12 @@ export async function loadConfig(configPath: string): Promise<HostConfig> {
     }
     if (provider === 'claude' || provider === 'codex') {
       const cleanupKey = provider === 'claude' ? 'cleanupTimeoutMs' : 'closeTimeoutMs';
-      for (const key of ['requestTimeoutMs', 'turnTimeoutMs', cleanupKey]) {
+      for (const key of [
+        'requestTimeoutMs',
+        'turnTimeoutMs',
+        cleanupKey,
+        ...(provider === 'claude' ? ['interruptTimeoutMs'] : []),
+      ]) {
         if (
           settings[key] !== undefined &&
           (!Number.isSafeInteger(settings[key]) ||

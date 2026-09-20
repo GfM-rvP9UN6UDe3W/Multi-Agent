@@ -383,6 +383,8 @@ export class Orchestrator {
     ) => this.operation('approvals.decide', approvalId, { approvalId, decision }, options),
   };
   readonly usage = {
+    getRecord: (usageRecordId: string, options?: RequestOptions) =>
+      this.call<UsageRecord>('usage.getRecord', { usageRecordId }, options),
     get: (query: { taskId: string } | string, options?: RequestOptions) =>
       this.call<UsageResult>(
         'usage.get',

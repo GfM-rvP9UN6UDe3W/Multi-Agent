@@ -2,7 +2,7 @@
 
 One Node.js orchestration engine, with TypeScript and Python SDKs for local applications that manage tasks, durable messages, session state, and human acceptance.
 
-**This is an unpublished development version. The foundation, SPEC-0003-A lifecycle, A2 execution isolation, SPEC-0004 reliability fixes, SPEC-0005 wire-contract tests, and SPEC-0006 host-runtime contracts are implemented.** Runnable source and offline fixture verification are available; the complete first-release design is not yet implemented. A2 evidence covers [cross-language integration](docs/tdd/0003-a2-wiring.md), [Claude](docs/tdd/0003-a2-claude.md), and [Codex](docs/tdd/0003-a2-codex.md). Earlier evidence remains in the foundation and A records. Ordinary tests use an explicitly enabled `fake` runtime or protocol fixtures, without model requests or login credentials. The Claude/Codex adapters implement a minimal protocol and bounded resource cleanup; real-model end-to-end acceptance remains unverified.
+**This is an unpublished development version. The foundation, SPEC-0003-A lifecycle, A2 execution isolation, SPEC-0004 reliability fixes, SPEC-0005 wire-contract tests, SPEC-0006 host-runtime contracts, and SPEC-0007 host policy/usage are implemented.** Runnable source and offline fixture verification are available; the complete first-release design is not yet implemented. A2 evidence covers [cross-language integration](docs/tdd/0003-a2-wiring.md), [Claude](docs/tdd/0003-a2-claude.md), and [Codex](docs/tdd/0003-a2-codex.md). Earlier evidence remains in the foundation and A records. Ordinary tests use an explicitly enabled `fake` runtime or protocol fixtures, without model requests or login credentials. The Claude/Codex adapters implement a minimal protocol and bounded resource cleanup; real-model end-to-end acceptance remains unverified.
 
 - [Foundation specification and acceptance criteria](docs/specs/0001-foundation.md)
 - [Runtime adapter specification](docs/specs/0002-runtime-adapters.md)
@@ -11,6 +11,7 @@ One Node.js orchestration engine, with TypeScript and Python SDKs for local appl
 - [Reliability fixes: scheduling, shutdown, request deadlines, and Claude cleanup](docs/specs/0004-runtime-reliability.md)
 - [Client recovery and wire-snapshot contracts](docs/specs/0005-wire-contract.md)
 - [Host runtime contract and offline conformance](docs/specs/0006-host-runtime-contract.md)
+- [Embedded host policy and durable usage replay](docs/specs/0007-host-policy-and-usage.md)
 - [Archive and namespace-transition specification — not implemented](docs/specs/0003-b-archive.md)
 - [Phased specification: A/A2 implemented; B/C retention and routing pending](docs/specs/0003-policy-retention-deadlines.md)
 - [TDD evidence](docs/tdd/0001-evidence.md)
@@ -33,7 +34,7 @@ One Node.js orchestration engine, with TypeScript and Python SDKs for local appl
 | Local protocol | JSON-RPC 2.0, stdio/Unix socket, version handshake, 1 MiB frames, 64 pending requests |
 | CLI | `host`, `doctor`, `submit`, `status`, and `approve`; other commands are explicitly rejected |
 
-The foundation automatically assigns one logical session to each task. `sessions.open/fork`, compact/rotate/stop, model tool callbacks and the MCP bridge, automatic verification commands, monetary budgets, workspace write locks, and cross-task session reuse are not implemented. The mailbox is currently exposed through the SDK; models cannot yet invoke delegation tools themselves. Human approval is the only implemented acceptance path.
+The foundation automatically assigns one logical session to each task. `sessions.open/fork`, compact/rotate/stop, engine delegation tool callbacks and the orchestration MCP bridge, automatic verification commands, monetary budgets, workspace write locks, and cross-task session reuse are not implemented. The mailbox is currently exposed through the SDK; models cannot yet invoke delegation tools themselves. Human approval is the only implemented acceptance path.
 
 SPEC-0003-A/A2 provide durable execution/control deadlines, late-evidence retention, execution leases, business-outcome quarantine, and owner-only `sessions.reconcile`. contextPlan, retention/GC, deduplication tombstones, storage-pressure protection, cross-task cost rules, and automatic policy selection remain in SPEC-0003-B/C. Long-running operation, capacity failures, and real-model acceptance are not yet validated.
 
@@ -197,6 +198,26 @@ The example uses an explicitly offline host fixture and simulated task review, c
 
 This increment is not a production Axion bridge, durable cross-store journal, authenticated multi-tenant boundary, packaged-application/hot-update acceptance, or real-model verification. A main-turn result is not proof that all owned work stopped; tool confirmation is not human task acceptance. See [the integration guide](SDK_USAGE_AND_WIRING.md#51-integrating-an-existing-applications-runtime), [SPEC-0006](docs/specs/0006-host-runtime-contract.md), and [verification evidence](docs/tdd/0006-host-runtime-contract.md).
 
+## Host policy and durable usage
+
+[SPEC-0007](docs/specs/0007-host-policy-and-usage.md) adds typed Claude `options` / `extendOptions`, configurable tools and setting sources, and opt-in `workspace-write` for both embedded adapters. Adapter-owned model, workspace, session, cancellation, and spawn fields cannot be overridden. Claude composes a workspace/private-state guard with host hooks; write mode requires native sandboxing without unsandboxed fallback. Custom/MCP tool authority remains the trusted host's responsibility. The host must select the same permission profile in the adapter config and `EngineConfig.providers`.
+
+Claude native extensions or either adapter's write profile require `observeExecutionStop` to prove full execution stop after a matched terminal. Missing, false, failed, or timed-out observations keep the execution unknown/held; independently observed local process exit is also required. A late positive observation may release execution capacity without clearing the unknown business outcome. Native `canUseTool`/hooks can support host tool confirmation; engine result approval is a separate action.
+
+Claude advertises `interrupt: true` under [SPEC-0008](docs/specs/0008-claude-interruption.md). Interrupt-mode pause and active cancel send `Query.interrupt()` through one open streaming prompt, after matching turn activity. Only a matching structured abort result plus stop/cleanup proof confirms interruption. The request receipt alone cannot pause/cancel a task. `interruptTimeoutMs` defaults to 30000; CLI values must be integers from 1 through 3600000. Host control and turn deadlines may expire sooner. [Pause, revise, and resume](SDK_USAGE_AND_WIRING.md#53-claude-interruption-and-revision) preserve the native session without restoring unsaved reasoning.
+
+Codex `networkAccess` and `webSearch` (`disabled`, `cached`, `live`) are independent controls, defaulting to false/disabled. These serializable settings also work in the JSON CLI. Native callbacks/options and workspace-write require embedded TypeScript; they cannot be sent in a Python/JSON provider configuration. Native SDK/platform enforcement still needs separate acceptance, even when fixture policy mapping passes.
+
+Every observed usage record is persisted with one `usage.recorded` event in the same transaction, including failed Claude terminals and retained late observations. Read its exact record with `orch.usage.getRecord(event.data.usageRecordId)` in TypeScript or `await orch.usage.get_record(event.data.usage_record_id)` in Python. The engine supplies adapters with `input.reportUsage` for observations beyond the iterator lifetime. Callback/yield replay deduplicates by dispatch and usage identity; conflicting payloads reject instead of overwriting.
+
+Run the durable outbox and ledger replay example:
+
+```sh
+node examples/typescript/usage-forwarding.ts
+```
+
+It uses only temporary SQLite stores and a fake runtime. It reopens the host outbox, resumes and deliberately replays cursors, and simulates a lost delivery acknowledgment: two delivery attempts produce one ledger row. A real destination must honor `(storeId, usageRecord.id)` idempotency. Commit the host outbox before advancing its checkpoint. Historical rows are not backfilled into events; abrupt loss before a provider observation remains unknown. Turn-level aggregate usage is not proof of an audit record for every native model request. This does not connect to Axion or Work Nexus. See [wiring details](SDK_USAGE_AND_WIRING.md#52-implemented-host-policy-and-usage-forwarding) and [verification evidence](docs/tdd/0007-host-policy-and-usage.md).
+
 ## Claude/Codex integration status and version baselines
 
 | Runtime | Integration used by this repository | Version baseline | Verified boundary |
@@ -206,7 +227,7 @@ This increment is not a production Axion bridge, durable cross-store journal, au
 
 These are the integration baselines for the published source, not claims about the latest upstream releases. The manifests are [Claude](packages/adapter-claude/package.json) and [Codex](packages/adapter-codex/package.json); detailed evidence and limitations are in [SPEC-0002](docs/specs/0002-runtime-adapters.md#compatibility-boundaries-and-sources). Official OpenAI documentation distinguishes [App Server](https://learn.chatgpt.com/docs/app-server) from the [Codex SDK](https://learn.chatgpt.com/docs/codex-sdk), and states that generated protocol types are specific to the CLI version used.
 
-Both adapters provide a read-only single-turn entry point, explicit native-session resume, and bounded observation/cleanup. Unconfirmed owned resources continue to block reconciliation. The optional Claude package loads only during execute; Codex starts an owned local App Server child. A version string alone does not establish runtime acceptance.
+Both adapters default to read-only and provide explicit native-session resume and bounded observation/cleanup. Embedded TypeScript can opt into workspace-write with host policy and full-stop observation; JSON CLI providers remain read-only. See [host policy and usage](#host-policy-and-durable-usage). Unconfirmed owned resources continue to block reconciliation. The optional Claude package loads only during execute; Codex starts an owned local App Server child. A version string alone does not establish runtime acceptance.
 
 Claude records owned ChildProcess handles through the SDK's `spawnClaudeCodeProcess` callback and confirms local cleanup by actual exit. Query.close returning, iterator.return(done:true), or AbortSignal is not exit evidence. The first half of cleanupTimeoutMs lets the SDK clean up; the remaining half observes owned stdin EOF/SIGTERM fallback. Missing/failed close triggers fallback immediately. Pending or invalid returns and an SDK that does not forward the signal do not skip fallback or extend the total asynchronous budget. Unexited resources remain held, and late exit updates evidence; local exit alone does not prove a remote terminal outcome. An injected query factory must launch observable fixtures through `request.options.spawnClaudeCodeProcess({command,args,cwd,env,signal})`; ignoring this callback conservatively retains unknown resources until eligible owner reconciliation. Verification uses real offline subprocesses; real-provider model acceptance is still pending.
 

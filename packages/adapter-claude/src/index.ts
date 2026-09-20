@@ -5,9 +5,34 @@ import type {
   RuntimeEvent,
   RuntimeInput,
   RuntimeTerminalEvent,
+  RuntimeUsageEvent,
 } from '../../engine/src/types.ts';
 import { performance } from 'node:perf_hooks';
+import { randomUUID } from 'node:crypto';
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
+import { observeRuntimeStop } from '../../engine/src/stop-observation.ts';
+import { buildClaudeOptions, copyClaudeOptions, validateClaudeOptions } from './options.ts';
+import type {
+  ClaudeAdapterConfig,
+  ClaudeHostOptions,
+  ClaudeQuery,
+  ClaudeQueryFactory,
+  ClaudeQueryRequest,
+  ClaudeSpawnOptions,
+  ClaudeUserMessage,
+} from './options.ts';
+export type {
+  ClaudeAdapterConfig,
+  ClaudeHostOptions,
+  ClaudeOptionsContext,
+  ClaudeOwnedOption,
+  ClaudePolicyOptions,
+  ClaudeQuery,
+  ClaudeQueryFactory,
+  ClaudeQueryRequest,
+  ClaudeSpawnOptions,
+  ClaudeUserMessage,
+} from './options.ts';
 
 type RecordValue = Record<string, unknown>;
 function record(value: unknown): RecordValue | null {
@@ -21,38 +46,25 @@ function nonnegativeInt(value: unknown): number | null {
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
-
-export interface ClaudeSpawnOptions {
-  command: string;
-  args: string[];
-  cwd?: string;
-  env: Record<string, string | undefined>;
-  signal: AbortSignal;
+function nativeTerminal(message: RecordValue, sessionId: string): RuntimeTerminalEvent {
+  if (
+    message.terminal_reason === 'aborted_streaming' ||
+    message.terminal_reason === 'aborted_tools'
+  )
+    return { type: 'interrupted' };
+  if (message.subtype !== 'success' || message.is_error === true)
+    return {
+      type: 'error',
+      message: Array.isArray(message.errors)
+        ? message.errors.map(String).join('; ') || String(message.subtype ?? 'Claude failed')
+        : String(message.subtype ?? 'Claude failed'),
+      outcome: 'failed',
+    };
+  return typeof message.result === 'string'
+    ? { type: 'result', text: message.result, providerSessionId: sessionId }
+    : { type: 'error', message: 'Claude success result lacks text', outcome: 'unknown' };
 }
 
-export interface ClaudeQueryRequest {
-  prompt: string;
-  options: {
-    model: string;
-    cwd: string;
-    resume?: string;
-    settingSources: [];
-    tools: string[];
-    allowedTools: string[];
-    disallowedTools: string[];
-    permissionMode: 'dontAsk';
-    abortController: AbortController;
-    spawnClaudeCodeProcess: (options: ClaudeSpawnOptions) => ChildProcessWithoutNullStreams;
-  };
-}
-export type ClaudeQuery = AsyncIterable<unknown> & { close?(): void | Promise<void> };
-export type ClaudeQueryFactory = (request: ClaudeQueryRequest) => ClaudeQuery;
-export interface ClaudeAdapterConfig {
-  query?: ClaudeQueryFactory;
-  requestTimeoutMs?: number;
-  turnTimeoutMs?: number;
-  cleanupTimeoutMs?: number;
-}
 export interface ClaudeRuntimeAdapter extends RuntimeAdapter {
   hasActiveResources(sessionId: string): boolean;
   close(): Promise<void>;
@@ -62,6 +74,7 @@ interface ActiveQuery {
   dispatchId: string;
   generation: number;
   controller: AbortController;
+  closeInput: () => void;
   query: ClaudeQuery | null;
   processes: Set<{ child: ChildProcessWithoutNullStreams; exited: boolean }>;
   spawnObserved: boolean;
@@ -90,6 +103,7 @@ async function withinDeadline<T>(
   stage: string,
   useLocalTimer: boolean,
   onLateValue?: (value: T) => void,
+  wakeup?: AbortSignal,
 ): Promise<T> {
   // Observe both outcomes before an already-expired deadline or signal can return early.
   const observed = work.then(
@@ -106,12 +120,14 @@ async function withinDeadline<T>(
       settled = true;
       clearTimeout(timer);
       signal.removeEventListener('abort', onAbort);
+      wakeup?.removeEventListener('abort', recheck);
       callback();
     };
     const onAbort = () => finish(() => reject(new WaitEnded(`${stage} aborted`)));
     let timer: ReturnType<typeof setTimeout> | undefined;
     const recheck = (): void => {
       if (settled) return;
+      clearTimeout(timer);
       const left = remainingMs();
       if (left <= 0) {
         finish(() => reject(new WaitEnded(`${stage} timed out`)));
@@ -121,6 +137,7 @@ async function withinDeadline<T>(
       timer = setTimeout(recheck, useLocalTimer ? left : Math.min(left, 50));
     };
     signal.addEventListener('abort', onAbort, { once: true });
+    wakeup?.addEventListener('abort', recheck, { once: true });
     if (signal.aborted) onAbort();
     if (!settled) timer = setTimeout(recheck, useLocalTimer ? remaining : Math.min(remaining, 50));
     // The observed promise cannot reject, including after timeout or cancellation wins.
@@ -146,10 +163,31 @@ async function loadDefaultQuery(): Promise<ClaudeQueryFactory> {
   return sdk.query;
 }
 
-export function createClaudeAdapter(config: ClaudeAdapterConfig = {}): ClaudeRuntimeAdapter {
+export function createClaudeAdapter<Extra extends object = object>(
+  config: ClaudeAdapterConfig<Extra> = {},
+): ClaudeRuntimeAdapter {
+  const profile = config.permissionProfile ?? 'read-only';
+  if (!['read-only', 'workspace-write'].includes(profile))
+    throw Object.assign(new Error('Invalid Claude permission profile'), {
+      code: 'INVALID_ADAPTER_CONFIG',
+    });
+  if (config.options !== undefined) validateClaudeOptions(config.options);
+  for (const callback of [config.extendOptions, config.observeExecutionStop])
+    if (callback !== undefined && typeof callback !== 'function')
+      throw Object.assign(new Error('Invalid Claude host callback'), {
+        code: 'INVALID_ADAPTER_CONFIG',
+      });
+  const initialOptions = copyClaudeOptions(config.options ?? ({} as ClaudeHostOptions<Extra>));
+  const coversExecution =
+    profile === 'read-only' && config.options === undefined && config.extendOptions === undefined;
   const requestTimeoutMs = deadlineOption(config.requestTimeoutMs, 'requestTimeoutMs', 30_000);
   const turnTimeoutMs = deadlineOption(config.turnTimeoutMs, 'turnTimeoutMs', 1_800_000);
   const cleanupTimeoutMs = deadlineOption(config.cleanupTimeoutMs, 'cleanupTimeoutMs', 1_000);
+  const interruptTimeoutMs = deadlineOption(
+    config.interruptTimeoutMs,
+    'interruptTimeoutMs',
+    30_000,
+  );
   const active = new Set<ActiveQuery>();
   let closed = false;
 
@@ -213,6 +251,7 @@ export function createClaudeAdapter(config: ClaudeAdapterConfig = {}): ClaudeRun
     if (handle.cleanupPromise) return handle.cleanupPromise;
     const startedAt = performance.now();
     handle.cleanupRequested = true;
+    handle.closeInput();
     handle.controller.abort();
     handle.cleanupPromise = (async () => {
       let recovered = false;
@@ -303,8 +342,8 @@ export function createClaudeAdapter(config: ClaudeAdapterConfig = {}): ClaudeRun
     capabilities: () => ({
       provider: 'claude',
       resume: true,
-      interrupt: false,
-      permissionProfiles: ['read-only'],
+      interrupt: true,
+      permissionProfiles: [profile],
       fork: false,
       compact: false,
       toolBridge: false,
@@ -313,7 +352,10 @@ export function createClaudeAdapter(config: ClaudeAdapterConfig = {}): ClaudeRun
         acceptanceCapMs: config.requestTimeoutMs ?? null,
         turnCapMs: config.turnTimeoutMs ?? null,
       },
-      executionEvidence: { version: 1, terminalCoversExecution: true },
+      executionEvidence: {
+        version: 1,
+        terminalCoversExecution: coversExecution || config.observeExecutionStop !== undefined,
+      },
     }),
     async close(): Promise<void> {
       closed = true;
@@ -324,7 +366,7 @@ export function createClaudeAdapter(config: ClaudeAdapterConfig = {}): ClaudeRun
     async *execute(input: RuntimeInput): AsyncIterable<RuntimeEvent> {
       const startedAt = performance.now();
       let sequence = 0;
-      let sessionId: string | null = null;
+      let sessionId: string | null = input.providerSessionId;
       let matchedTerminal: RuntimeTerminalEvent | null = null;
       const report = (
         source: ExecutionEvidence['source'],
@@ -374,11 +416,11 @@ export function createClaudeAdapter(config: ClaudeAdapterConfig = {}): ClaudeRun
         yield { type: 'error', message: 'Claude adapter is closed', outcome: 'failed' };
         return;
       }
-      if (input.permissionProfile !== 'read-only') {
+      if (input.permissionProfile !== profile) {
         preSubmission('unsupported permission profile');
         yield {
           type: 'error',
-          message: 'Claude adapter supports read-only only',
+          message: `Claude adapter supports ${profile} only`,
           outcome: 'failed',
         };
         return;
@@ -389,10 +431,52 @@ export function createClaudeAdapter(config: ClaudeAdapterConfig = {}): ClaudeRun
         return;
       }
       const controller = new AbortController();
-      const onAbort = () => controller.abort();
+      let submitted = false;
+      let turnStarted = false;
+      let interruptSent = false;
+      let interruptRequestedAt: number | undefined;
+      let handle: ActiveQuery | null = null;
+      const requestInterrupt = (): void => {
+        if (
+          interruptRequestedAt === undefined ||
+          !turnStarted ||
+          interruptSent ||
+          !handle?.query ||
+          matchedTerminal
+        )
+          return;
+        interruptSent = true;
+        try {
+          // A receipt, rejection, or missing method cannot replace a matched native terminal.
+          void Promise.resolve(handle.query.interrupt?.()).catch(() => {});
+        } catch {
+          /* Keep observing the independently authoritative terminal until the deadline. */
+        }
+      };
+      const onAbort = () => {
+        if (!submitted) controller.abort();
+        else {
+          interruptRequestedAt ??= performance.now();
+          requestInterrupt();
+        }
+      };
       input.signal.addEventListener('abort', onAbort, { once: true });
-      const request: ClaudeQueryRequest = {
-        prompt: input.prompt,
+      let closeInput!: () => void;
+      const inputClosed = new Promise<void>((resolve) => {
+        closeInput = resolve;
+      });
+      async function* prompt(): AsyncIterable<ClaudeUserMessage> {
+        yield {
+          type: 'user',
+          message: { role: 'user', content: input.prompt },
+          parent_tool_use_id: null,
+          session_id: input.providerSessionId ?? '',
+          uuid: randomUUID(),
+        };
+        await inputClosed;
+      }
+      const request: ClaudeQueryRequest<Extra> = {
+        prompt: prompt(),
         options: {
           model: input.model,
           cwd: input.workspace,
@@ -403,18 +487,70 @@ export function createClaudeAdapter(config: ClaudeAdapterConfig = {}): ClaudeRun
           disallowedTools: ['mcp__*'],
           permissionMode: 'dontAsk',
           abortController: controller,
+          includePartialMessages: true,
           spawnClaudeCodeProcess: (options) => {
             if (!handle) throw new Error('Claude process ownership is unavailable');
             return spawnOwned(handle, options);
           },
-        },
+        } as ClaudeQueryRequest<Extra>['options'],
       };
-      let submitted = false;
       let accepted = false;
       let terminal = false;
-      let handle: ActiveQuery | null = null;
+      const remainingObservation = (): number =>
+        Math.min(
+          accepted ? remainingTurn() : remainingAcceptance(),
+          interruptRequestedAt === undefined
+            ? Infinity
+            : interruptTimeoutMs - (performance.now() - interruptRequestedAt),
+        );
       let pending: RuntimeEvent[] = [];
       let cleanupConfirmed = true;
+      let hostStopped = false;
+      let stopObservation: Promise<boolean> | undefined;
+      const observeStop = (): void => {
+        if (coversExecution || !matchedTerminal || stopObservation) return;
+        stopObservation = observeRuntimeStop(
+          config.observeExecutionStop,
+          {
+            target: {
+              taskId: input.taskId,
+              sessionId: input.sessionId,
+              dispatchId: input.dispatchId,
+              generation: input.generation ?? 1,
+              provider: 'claude',
+              providerSessionId: sessionId,
+            },
+            terminal: matchedTerminal,
+          },
+          cleanupTimeoutMs,
+          () => {
+            hostStopped = true;
+            report(
+              'resource_observation',
+              handle?.cleaned ? 'stopped' : 'unknown',
+              'stopped',
+              'Host observed full Claude execution stop for this dispatch',
+            );
+          },
+        );
+      };
+      let receivedUsage: RuntimeUsageEvent | undefined;
+      const captureUsage = (message: RecordValue): void => {
+        if (receivedUsage) return;
+        const source = record(message.usage);
+        receivedUsage = {
+          type: 'usage',
+          usageId: `${input.dispatchId}:result`,
+          usage: {
+            inputTokens: nonnegativeInt(source?.input_tokens),
+            cachedInputTokens: nonnegativeInt(source?.cache_read_input_tokens),
+            cacheWriteInputTokens: nonnegativeInt(source?.cache_creation_input_tokens),
+            outputTokens: nonnegativeInt(source?.output_tokens),
+            raw: source ? (source as Json) : null,
+          },
+        };
+        input.reportUsage?.(receivedUsage);
+      };
       const observeLateStep = (step: IteratorResult<unknown>): void => {
         if (step.done || matchedTerminal) return;
         const message = record(step.value);
@@ -426,28 +562,44 @@ export function createClaudeAdapter(config: ClaudeAdapterConfig = {}): ClaudeRun
         const expectedId = sessionId ?? input.providerSessionId;
         if (!observedId || (expectedId && observedId !== expectedId)) return;
         sessionId = observedId;
-        matchedTerminal =
-          message.subtype !== 'success' || message.is_error === true
-            ? {
-                type: 'error',
-                message: Array.isArray(message.errors)
-                  ? message.errors.map(String).join('; ') ||
-                    String(message.subtype ?? 'Claude failed')
-                  : String(message.subtype ?? 'Claude failed'),
-                outcome: 'failed',
-              }
-            : typeof message.result === 'string'
-              ? { type: 'result', text: message.result, providerSessionId: observedId }
-              : { type: 'error', message: 'Claude success result lacks text', outcome: 'unknown' };
+        captureUsage(message);
+        matchedTerminal = nativeTerminal(message, observedId);
         report(
           'runtime_terminal',
           handle?.cleaned ? 'stopped' : 'unknown',
-          'stopped',
+          coversExecution || hostStopped ? 'stopped' : 'unknown',
           'late matched Claude SDK result terminal',
           matchedTerminal,
         );
+        observeStop();
       };
       try {
+        let options = copyClaudeOptions(initialOptions);
+        if (config.extendOptions) {
+          const context = Object.freeze({
+            input: Object.freeze({
+              ...input,
+              ...(input.executionBudget
+                ? { executionBudget: Object.freeze({ ...input.executionBudget }) }
+                : {}),
+            }),
+            options: Object.freeze(copyClaudeOptions(options)),
+          });
+          const extension = await withinDeadline(
+            Promise.resolve()
+              .then(() => config.extendOptions!(context))
+              .catch(() => {
+                throw new Error('Claude host option extension failed');
+              }),
+            remainingAcceptance,
+            controller.signal,
+            'Claude host options',
+            !input.executionBudget,
+          );
+          validateClaudeOptions(extension);
+          options = { ...options, ...extension };
+        }
+        request.options = buildClaudeOptions(input, options, request.options);
         const factory =
           config.query ??
           (await withinDeadline(
@@ -490,6 +642,7 @@ export function createClaudeAdapter(config: ClaudeAdapterConfig = {}): ClaudeRun
             dispatchId: input.dispatchId,
             generation: input.generation ?? 1,
             controller,
+            closeInput,
             query: null,
             processes: new Set(),
             spawnObserved: false,
@@ -504,7 +657,7 @@ export function createClaudeAdapter(config: ClaudeAdapterConfig = {}): ClaudeRun
               report(
                 'resource_observation',
                 'stopped',
-                matchedTerminal ? 'stopped' : 'unknown',
+                (matchedTerminal && coversExecution) || hostStopped ? 'stopped' : 'unknown',
                 'Claude query cleanup confirmed',
               ),
           };
@@ -517,11 +670,12 @@ export function createClaudeAdapter(config: ClaudeAdapterConfig = {}): ClaudeRun
             const stage = accepted ? 'Claude terminal' : 'Claude acceptance';
             const step = await withinDeadline(
               Promise.resolve().then(() => iterator.next()),
-              accepted ? remainingTurn : remainingAcceptance,
+              remainingObservation,
               controller.signal,
               stage,
               !input.executionBudget,
               observeLateStep,
+              input.signal,
             );
             if (step.done) break;
             const message = record(step.value);
@@ -530,10 +684,18 @@ export function createClaudeAdapter(config: ClaudeAdapterConfig = {}): ClaudeRun
               typeof message.session_id === 'string' && message.session_id.length > 0
                 ? message.session_id
                 : null;
-            if (observedId && !accepted) {
+            if (observedId && !accepted && (!sessionId || observedId === sessionId)) {
               sessionId = observedId;
               accepted = true;
               yield { type: 'accepted', providerSessionId: observedId };
+            }
+            if (
+              observedId === sessionId &&
+              !message.parent_tool_use_id &&
+              (message.type === 'assistant' || message.type === 'stream_event')
+            ) {
+              turnStarted = true;
+              requestInterrupt();
             }
             if (message.type !== 'result') continue;
             terminal = true;
@@ -545,37 +707,9 @@ export function createClaudeAdapter(config: ClaudeAdapterConfig = {}): ClaudeRun
                   outcome: 'unknown',
                 },
               ];
-            } else if (message.subtype !== 'success' || message.is_error === true) {
-              const errors = Array.isArray(message.errors)
-                ? message.errors.map(String).join('; ')
-                : null;
-              pending = [
-                {
-                  type: 'error',
-                  message: errors || String(message.subtype ?? 'Claude failed'),
-                  outcome: 'failed',
-                },
-              ];
-            } else if (typeof message.result !== 'string') {
-              pending = [
-                { type: 'error', message: 'Claude success result lacks text', outcome: 'unknown' },
-              ];
             } else {
-              const source = record(message.usage);
-              pending = [
-                {
-                  type: 'usage',
-                  usageId: `${input.dispatchId}:result`,
-                  usage: {
-                    inputTokens: nonnegativeInt(source?.input_tokens),
-                    cachedInputTokens: nonnegativeInt(source?.cache_read_input_tokens),
-                    cacheWriteInputTokens: nonnegativeInt(source?.cache_creation_input_tokens),
-                    outputTokens: nonnegativeInt(source?.output_tokens),
-                    raw: source ? (source as Json) : null,
-                  },
-                },
-                { type: 'result', text: message.result, providerSessionId: sessionId },
-              ];
+              captureUsage(message);
+              pending = [nativeTerminal(message, sessionId)];
             }
             if (sessionId && observedId === sessionId) {
               matchedTerminal =
@@ -589,10 +723,11 @@ export function createClaudeAdapter(config: ClaudeAdapterConfig = {}): ClaudeRun
                 report(
                   'runtime_terminal',
                   'unknown',
-                  'stopped',
+                  coversExecution || hostStopped ? 'stopped' : 'unknown',
                   'matched Claude SDK result terminal',
                   matchedTerminal,
                 );
+              observeStop();
             }
             break;
           }
@@ -618,12 +753,15 @@ export function createClaudeAdapter(config: ClaudeAdapterConfig = {}): ClaudeRun
                 },
               ];
       } finally {
+        closeInput();
         input.signal.removeEventListener('abort', onAbort);
         if (handle) {
-          cleanupConfirmed = await cleanup(handle);
+          [cleanupConfirmed] = await Promise.all([cleanup(handle), stopObservation]);
           handle.observationEnded = true;
         }
       }
+      // Usage is an observation, independent of business success and resource-stop certainty.
+      if (receivedUsage) yield receivedUsage;
       if (!cleanupConfirmed) {
         const reason = pending.find((event) => event.type === 'error');
         yield {

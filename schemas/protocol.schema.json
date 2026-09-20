@@ -130,6 +130,16 @@
         "expiresAt": { "type": "string", "format": "date-time" }
       }
     },
+    "UsageRecordedData": {
+      "type": "object",
+      "description": "Data in a durable usage.recorded event. Retrieve the exact immutable observation with usage.getRecord; storeId is on the event envelope.",
+      "required": ["usageRecordId", "dispatchId", "provider"],
+      "properties": {
+        "usageRecordId": { "type": "string", "minLength": 1, "maxLength": 512 },
+        "dispatchId": { "type": "string", "minLength": 1 },
+        "provider": { "type": "string", "minLength": 1 }
+      }
+    },
     "UsageRecord": {
       "type": "object",
       "description": "Reported integer token counts or null when unknown. Raw provider JSON retains its original keys and is not synthesized into zero usage or cost.",

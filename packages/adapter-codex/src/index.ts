@@ -16,7 +16,10 @@ import type {
   RuntimeEvent,
   RuntimeInput,
   RuntimeTerminalEvent,
+  RuntimeStopObserver,
+  RuntimeUsageEvent,
 } from '../../engine/src/types.ts';
+import { observeRuntimeStop } from '../../engine/src/stop-observation.ts';
 
 type Message = Record<string, unknown>;
 function record(value: unknown): Message | null {
@@ -240,6 +243,10 @@ class AppServerConnection {
 }
 
 export interface CodexAdapterConfig {
+  permissionProfile?: RuntimeInput['permissionProfile'];
+  networkAccess?: boolean;
+  webSearch?: 'disabled' | 'cached' | 'live';
+  observeExecutionStop?: RuntimeStopObserver;
   command?: string;
   args?: string[];
   env?: NodeJS.ProcessEnv;
@@ -326,6 +333,19 @@ function defensiveArgs(args: string[], workspace: string): string[] {
 }
 
 export function createCodexAdapter(config: CodexAdapterConfig = {}): RuntimeAdapter {
+  const profile = config.permissionProfile ?? 'read-only';
+  const networkAccess = config.networkAccess ?? false;
+  const webSearch = config.webSearch ?? 'disabled';
+  if (
+    !['read-only', 'workspace-write'].includes(profile) ||
+    typeof networkAccess !== 'boolean' ||
+    !['disabled', 'cached', 'live'].includes(webSearch) ||
+    (config.observeExecutionStop !== undefined && typeof config.observeExecutionStop !== 'function')
+  )
+    throw Object.assign(new Error('Invalid Codex host policy configuration'), {
+      code: 'INVALID_ADAPTER_CONFIG',
+    });
+  const coversExecution = profile === 'read-only';
   const acceptanceCapMs = timeout(config.requestTimeoutMs, 0) || null;
   const turnCapMs = timeout(config.turnTimeoutMs, 0) || null;
   const owned = new Map<string, Set<AppServerConnection>>();
@@ -345,12 +365,15 @@ export function createCodexAdapter(config: CodexAdapterConfig = {}): RuntimeAdap
       provider: 'codex',
       resume: true,
       interrupt: true,
-      permissionProfiles: ['read-only'],
+      permissionProfiles: [profile],
       fork: false,
       compact: false,
       toolBridge: false,
       executionBudget: { version: 2, acceptanceCapMs, turnCapMs },
-      executionEvidence: { version: 1, terminalCoversExecution: true },
+      executionEvidence: {
+        version: 1,
+        terminalCoversExecution: coversExecution || config.observeExecutionStop !== undefined,
+      },
     }),
     hasActiveResources: (sessionId) => prune(sessionId),
     async close() {
@@ -376,6 +399,7 @@ export function createCodexAdapter(config: CodexAdapterConfig = {}): RuntimeAdap
       let threadId = input.providerSessionId;
       let turnId: string | null = null;
       let observedTerminal: RuntimeTerminalEvent | undefined;
+      let hostStopped = false;
       const report = (
         source: ExecutionEvidence['source'],
         localResources: ExecutionEvidence['localResources'],
@@ -395,7 +419,10 @@ export function createCodexAdapter(config: CodexAdapterConfig = {}): RuntimeAdap
           source,
           observedAt: new Date().toISOString(),
           localResources,
-          remoteExecution: !turnSent || observedTerminal ? 'stopped' : 'unknown',
+          remoteExecution:
+            !turnSent || (observedTerminal && coversExecution) || hostStopped
+              ? 'stopped'
+              : 'unknown',
           detail,
           ...(terminal ? { terminal } : {}),
         };
@@ -441,10 +468,10 @@ export function createCodexAdapter(config: CodexAdapterConfig = {}): RuntimeAdap
         });
         return;
       }
-      if (input.permissionProfile !== 'read-only') {
+      if (input.permissionProfile !== profile) {
         yield preSubmission({
           type: 'error',
-          message: 'Codex adapter supports read-only only',
+          message: `Codex adapter supports ${profile} only`,
           outcome: 'failed',
         });
         return;
@@ -471,7 +498,11 @@ export function createCodexAdapter(config: CodexAdapterConfig = {}): RuntimeAdap
         workspace = realpathSync(input.workspace);
         child = spawn(
           config.command ?? 'codex',
-          defensiveArgs(config.args ?? ['app-server'], workspace),
+          [
+            ...defensiveArgs(config.args ?? ['app-server'], workspace),
+            '-c',
+            `web_search="${webSearch}"`,
+          ],
           {
             cwd: workspace,
             env: { ...isolatedEnv(config.env), CODEX_HOME: home, CODEX_SQLITE_HOME: home },
@@ -526,7 +557,7 @@ export function createCodexAdapter(config: CodexAdapterConfig = {}): RuntimeAdap
             ...(input.providerSessionId ? { threadId: input.providerSessionId } : {}),
             model: input.model,
             cwd: input.workspace,
-            sandbox: 'read-only',
+            sandbox: profile,
             approvalPolicy: 'never',
           },
         );
@@ -546,7 +577,16 @@ export function createCodexAdapter(config: CodexAdapterConfig = {}): RuntimeAdap
             input: [{ type: 'text', text: input.prompt }],
             cwd: input.workspace,
             approvalPolicy: 'never',
-            sandboxPolicy: { type: 'readOnly', networkAccess: false },
+            sandboxPolicy:
+              profile === 'read-only'
+                ? { type: 'readOnly', networkAccess }
+                : {
+                    type: 'workspaceWrite',
+                    writableRoots: [workspace],
+                    networkAccess,
+                    excludeTmpdirEnvVar: true,
+                    excludeSlashTmp: true,
+                  },
           },
           () => {
             turnSent = true;
@@ -579,7 +619,7 @@ export function createCodexAdapter(config: CodexAdapterConfig = {}): RuntimeAdap
             seenUsage.add(signature);
             sawUsage = true;
             const totalCount = nonnegativeInt(total?.totalTokens);
-            yield {
+            const observation: RuntimeUsageEvent = {
               type: 'usage',
               usageId: `${turnId}:total:${totalCount ?? 'unknown'}:${seenUsage.size}`,
               usage: {
@@ -590,6 +630,8 @@ export function createCodexAdapter(config: CodexAdapterConfig = {}): RuntimeAdap
                 raw: last as Json,
               },
             };
+            input.reportUsage?.(observation);
+            yield observation;
           } else if (message.method === 'turn/completed') {
             const completed = record(params.turn);
             if (completed?.id !== turnId) continue;
@@ -614,9 +656,39 @@ export function createCodexAdapter(config: CodexAdapterConfig = {}): RuntimeAdap
               report(
                 'runtime_terminal',
                 connection.hasActiveResources() ? 'unknown' : 'stopped',
-                'Matching native thread and turn terminal covers this read-only execution',
+                coversExecution
+                  ? 'Matching native thread and turn terminal covers this read-only execution'
+                  : 'Matching native terminal; expanded execution still requires the host stop observer',
               );
-            if (!(await connection.close())) {
+            const stopObservation =
+              !coversExecution && observedTerminal
+                ? observeRuntimeStop(
+                    config.observeExecutionStop,
+                    {
+                      target: {
+                        taskId: input.taskId,
+                        sessionId: input.sessionId,
+                        dispatchId: input.dispatchId,
+                        generation: input.generation ?? 1,
+                        provider: 'codex',
+                        providerSessionId: threadId,
+                        providerTurnId: turnId,
+                      },
+                      terminal: observedTerminal,
+                    },
+                    timeout(config.closeTimeoutMs, 1000),
+                    () => {
+                      hostStopped = true;
+                      report(
+                        'resource_observation',
+                        connection.hasActiveResources() ? 'unknown' : 'stopped',
+                        'Host observed full Codex execution stop for this dispatch',
+                      );
+                    },
+                  )
+                : Promise.resolve(true);
+            const [exited] = await Promise.all([connection.close(), stopObservation]);
+            if (!exited) {
               yield {
                 type: 'error',
                 message: 'Codex app-server process did not exit after SIGKILL',
@@ -631,8 +703,8 @@ export function createCodexAdapter(config: CodexAdapterConfig = {}): RuntimeAdap
                 outcome: 'unknown',
               };
             } else if (observedTerminal?.type === 'result') {
-              if (!sawUsage)
-                yield {
+              if (!sawUsage) {
+                const observation: RuntimeUsageEvent = {
                   type: 'usage',
                   usageId: `${turnId}:missing`,
                   usage: {
@@ -643,6 +715,9 @@ export function createCodexAdapter(config: CodexAdapterConfig = {}): RuntimeAdap
                     raw: null,
                   },
                 };
+                input.reportUsage?.(observation);
+                yield observation;
+              }
               yield observedTerminal;
             } else if (observedTerminal) {
               yield observedTerminal;

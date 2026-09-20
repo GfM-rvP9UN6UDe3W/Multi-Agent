@@ -6,6 +6,8 @@ Product: **one orchestration engine, TypeScript and Python SDKs, optional Claude
 
 The project began with documents and diagrams. It now includes the engine, both clients, host, minimal adapters, tests, and initialized Git. This document describes the complete first-version target; interfaces outside implemented specifications are neither implemented nor published merely because they appear here.
 
+[SPEC-0008](./docs/specs/0008-claude-interruption.md) implements the design's Claude Query.interrupt path with one open streaming prompt, matched structured abort terminals, bounded observation, and independent resource-stop proof. Pause/revise/resume and cancel are verified across TypeScript/Python and offline child processes. Installed SDK 0.3.274 transport is checked against an offline peer; real CLI/model acceptance remains pending.
+
 Companion: [SDK usage and detailed wiring](./SDK_USAGE_AND_WIRING.md), covering three operating modes, connection protocol, both language examples, MCP callbacks, model gateways, shutdown/recovery, and layered acceptance.
 
 The 2026-09-19 design review clarified routing responsibility, per-request cost estimates, cost ownership, failed-assumption branches, retention, and transition deadlines. [SPEC-0003](./docs/specs/0003-policy-retention-deadlines.md) A implements durable deadlines, unknown isolation, and owner attestation; see [evidence](./docs/tdd/0003-a-evidence.md). B/C GC, routing, and accounting remain future contracts. Design targets and offline tests are not real-model acceptance.
@@ -576,6 +578,12 @@ Declare `executionBudget` version 2 as a named required TypeScript capability, i
 An adapter's capability declaration is not evidence that the host actually enforces it. A reusable offline conformance suite must exercise the real engine with a controlled implementation of the host boundary: native acceptance, pre-submission rejection, ambiguous disconnection, cancellation without stop proof, live background resources after a main-turn result, late evidence, result acceptance, and conservative restart. Tests must assert persisted tasks, operations, events, and execution occupancy, not merely compare handcrafted events.
 
 ### 7.4 Existing-host execution and persistence responsibilities
+
+[SPEC-0007](./docs/specs/0007-host-policy-and-usage.md) also implements an embedded policy surface on the standalone adapters. Claude accepts generic native options and a bounded per-dispatch extension while reserving model/cwd/session/spawn ownership. Its built-in guard protects engine state and constrains native file mutations to the canonical workspace; native sandboxing is mandatory for workspace-write Bash. Custom/MCP tools remain host-authorized. Codex explicitly maps workspace-write roots and independent network/search policy. The stock JSON CLI remains read-only and cannot carry callbacks. This is not the concrete application bridge below.
+
+Expanded execution cannot inherit minimal read-only stop assumptions. A host `observeExecutionStop` callback observes the exact dispatch/native IDs after its main terminal, within a bounded wait. Only an explicit true result plus independently observed local exit can complete the adapter's stop proof. The adapter's terminal coverage capability with this callback denotes this combined proof, not main-terminal coverage by itself. Late positive proof can release A while Q remains. Claude active interruption remains unsupported; task-result approval and native tool confirmation remain independent.
+
+Usage observations are now published durably: `usage.recorded` and its `UsageRecord` share one SQLite transaction. Callback and iterator reports deduplicate by dispatch/usage ID; conflicts reject. Both clients can read one exact record by ID. The host projects with a durable outbox, advances checkpoints only with committed projection, and deduplicates by store/record identity. This guarantees replay of persisted observations, not a distributed transaction or reconstruction of unreported native requests. Aggregate turn usage cannot establish exhaustive per-request accounting. See the [offline forwarding example](./examples/typescript/usage-forwarding.ts).
 
 The integration direction is:
 

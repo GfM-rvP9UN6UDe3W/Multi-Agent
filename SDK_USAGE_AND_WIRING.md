@@ -192,7 +192,7 @@ Remove unused providers for single-runtime use. Configuring two does not invoke 
 | limits | Application developer | Central engine enforcement, not separate per-SDK concurrency accounting |
 | verificationRules | Host owner | Preregistered/versioned commands; no ad hoc agent commands |
 
-Read-only mechanisms differ by provider. Unverified permission mapping must fail initialization, not fall back to full access. Code-writing support requires an explicitly selected, verified write policy and allowed directories; it is outside the current minimal read-only adapters.
+Read-only mechanisms differ by provider. Unverified permission mapping must fail initialization, not fall back to full access. Code-writing support requires an explicitly selected, verified write policy and allowed directories; embedded adapters implement this mapping under SPEC-0007, while the JSON CLI remains read-only. See section 5.2 for host policy and native acceptance limits.
 
 JSON does not expand environment variables, ~, or placeholders automatically. Use absolute paths. Only dedicated credential fields such as apiKeyEnv read environment values. Explicit stdio may override transport; otherwise conflicting duplicate initialization fields fail instead of silently changing workspace/stateDir.
 
@@ -318,6 +318,100 @@ The optional `packages/engine/src/testing.ts` entry point exports `registerRunti
 The package exports `./testing` and `./testing-host` separately; neither is imported by normal engine startup. Use [the registration example](./tests/contract/host-runtime.test.ts) as a starting point, replacing the deterministic fixture with a driver for the actual application boundary. Passing the supplied fixture suite verifies the engine and test harness, not another application's adapter. A negative subprocess test verifies that the suite rejects a deliberately incorrect main-turn/full-stop mapping.
 
 Acceptance must distinguish: (a) SDK source running under the target Node/Electron runtime; (b) deterministic lifecycle/failure-path acceptance; (c) the actual packaged application's permissions, UI, restart, and cleanup; (d) a separately authorized real-model run through the same host adapter. An earlier source-only probe in Electron's Node mode cannot establish (c) or (d).
+
+### 5.2 Implemented host policy and usage forwarding
+
+[SPEC-0007](./docs/specs/0007-host-policy-and-usage.md) implements these source interfaces. Native callback configuration is an embedded TypeScript surface; it is not a new Python/JSON configuration language. `EngineConfig.providers` and the adapter must select the same `permissionProfile`. Each adapter advertises only its configured profile, defaulting to `read-only`.
+
+Claude `options` and `extendOptions(context)` preserve native callback types through a generic parameter. Use the types from the exact SDK installed by your host; the peer range is not a native compatibility matrix. This factory illustrates the typing without inventing full-stop observation:
+
+```ts
+import type { Options as NativeOptions } from '@anthropic-ai/claude-agent-sdk';
+import {
+  createClaudeAdapter,
+  type ClaudeHostOptions,
+  type ClaudeOwnedOption,
+} from './packages/adapter-claude/src/index.ts';
+import type { RuntimeStopObserver } from './packages/engine/src/types.ts';
+
+type HostNative = Omit<NativeOptions, ClaudeOwnedOption>;
+
+function hostClaude(
+  options: ClaudeHostOptions<HostNative>,
+  observeExecutionStop: RuntimeStopObserver,
+) {
+  return createClaudeAdapter<HostNative>({
+    permissionProfile: 'workspace-write',
+    options,
+    extendOptions: async ({ input }) => ({
+      systemPrompt: `Work only on dispatch ${input.dispatchId} in its allowed workspace.`,
+    }),
+    observeExecutionStop,
+  });
+}
+```
+
+The host can supply tools/allow/deny lists, `canUseTool`, `hooks`, `mcpServers`, `systemPrompt`, `maxTurns`, `env`, `settings`, `managedSettings`, and `settingSources`. Model, cwd, resume/session identity, prompt, abort controller, process spawn, and extra directory grants remain adapter-owned. Overrides fail at typecheck/runtime. Native options beyond the common policy fields are checked against the caller's installed SDK, not a universal compatibility promise. See the [positive/negative compilation fixture](./tests/fixtures/claude-options-types.ts).
+
+Extensions run before submission and consume the original acceptance/turn budget. Rejection, timeout, or cancellation does not start a query. Their immutable input retains identity and remaining-budget functions. Tool/source arrays and hook containers are detached per dispatch; callback and native MCP instance identities are retained. The host must keep shared native objects and policy stable. Private options are not persisted.
+
+Claude defaults to Read/Glob/Grep; write mode adds Edit/Write/Bash. Its built-in `PreToolUse` guard coexists with host hooks and blocks read-only mutation, engine-state access, outside-workspace edits including resolved symlinks, explicitly background Bash, and unsandboxed Bash. Write mode forces native sandbox availability, disables unsandboxed fallback, and restricts explicit writable roots. Host hooks/settings additionally enforce application-specific protected directories and custom/MCP authorization. `settingSources` selects native settings files; it does not replace guards, supplied settings, or confirmation policy. Symlink races, SDK scratch paths, native hook precedence, and actual OS enforcement still require native-runtime acceptance.
+
+Supplying `canUseTool` without an explicit allow list/mode selects `allowedTools: []` and `permissionMode: default`. Explicit choices are preserved. Native tool confirmation and engine task-result approval are separate; no generic tool-confirmation wire/UI protocol is added. Claude interruption follows the terminal and stop-proof contract below.
+
+Codex accepts `permissionProfile`, `networkAccess` (default false), and `webSearch` (`disabled` by default, or `cached`/`live`). Search is independent from command network access. New/resumed threads and every turn receive the selected sandbox policy. Workspace-write uses the canonical workspace as its explicit writable root and excludes general temporary roots. Managed-home feature/MCP restrictions remain. JSON CLI supports network/search, but write and host callbacks remain embedded-only.
+
+For extended Claude options or either write profile, `observeExecutionStop({ target, terminal, signal, remainingMs })` must observe complete remote/background stop for the exact dispatch/generation/native IDs. Return true only after actual host observation. False, rejection, absence, and timeout retain unknown execution. Waiting is bounded by cleanup time; late true evidence is retained without clearing business quarantine or resubmitting. Local child-process exit is independently required. With an observer configured, `terminalCoversExecution` denotes this combined proof; native-terminal evidence retains `remoteExecution: unknown` until host confirmation.
+
+Usage consumers subscribe to existing engine events and read exact records:
+
+```ts
+for await (const event of orch.events({ storeId: savedStoreId, afterCursor: savedCursor })) {
+  if (event.type === 'usage.recorded') {
+    const record = await orch.usage.getRecord(event.data.usageRecordId as string);
+    // Persist (event.storeId, record.id, record) to the host outbox transactionally.
+  }
+  // Advance the checkpoint only with/after that durable transaction.
+}
+```
+
+The full [offline example](./examples/typescript/usage-forwarding.ts) implements the outbox/checkpoint transaction and destination deduplication. It reopens both databases, resumes a saved cursor, replays older events, and simulates a lost acknowledgment. Run `node examples/typescript/usage-forwarding.ts`; two delivery attempts produce one ledger row. Replace the fixture destination with an API honoring `(storeId, record.id)` idempotency. A failed delivery leaves the outbox pending. Larger streams must continue bounded pages until caught up. Do not count native usage both in the host and in this projection.
+
+`reportUsage` plus iterator replay emits one atomic row/event per `dispatchId:usageId`; conflicting content rejects. Failed or late matching Claude results preserve usage despite cleanup uncertainty; mismatched sessions are excluded. Missing fields remain null. Python exposes `usage.get_record` and maps `usageRecordId` to `usage_record_id`, preserving raw provider keys. Wrong store/cursor pairs reject. Protocol stays 1.0/schema 2; older hosts may lack the additive method.
+
+These guarantees cover observations that reached the engine. Historical rows are not backfilled, unreported crash-time usage cannot be recovered, and turn aggregates do not prove per-native-request accounting. `usage.get(taskId).completeness` retains its prior record-field meaning, not exhaustive upstream coverage. There is no distributed transaction with Work Nexus. Real host integration, native audit completeness, native permissions, and model acceptance remain separate; no Axion files are changed by this increment.
+
+### 5.3 Claude interruption and revision
+
+[SPEC-0008](./docs/specs/0008-claude-interruption.md) implements Claude `interrupt: true` using exactly one user message per open streaming input. The adapter owns the prompt UUID and `includePartialMessages: true`; host options cannot override them. Injected factories receive `AsyncIterable<ClaudeUserMessage>` instead of a string. They must consume that input and expose native `interrupt()` for active control; a legacy factory with no method cannot confirm interruption from the request alone.
+
+After submission, the engine AbortSignal requests `Query.interrupt()` once. Startup cancellation waits for a matched main-turn assistant/stream event, because an init event can precede a running turn. The SDK controller remains alive to observe the result. A matched result with `terminal_reason: aborted_streaming` or `aborted_tools` becomes interrupted; arbitrary errors and missing reasons retain their error outcome. A success racing cancellation remains a success result for the engine's existing control rules. The adapter then closes input and cleans up owned processes. Extended host work still needs positive `observeExecutionStop` proof.
+
+For an existing task `taskId`, pause it, queue revised context, and resume:
+
+```ts
+const task = await orch.tasks.get(taskId);
+const session = await orch.sessions.get(task.sessionId);
+const pause = await orch.sessions.control({
+  sessionId: session.id,
+  expectedGeneration: session.generation,
+  expectedRevision: session.revision,
+  expectedDispatchId: session.activeDispatchId,
+  expectedState: session.status,
+}, { action: 'pause', mode: 'interrupt' });
+const paused = await pause.wait({ timeoutMs: 35000 });
+if (paused.status !== 'completed') throw new Error(`Pause requires investigation: ${paused.status}`);
+const current = await orch.sessions.get(session.id);
+await orch.messages.send({
+  taskId, toSessionId: current.id, expectedGeneration: current.generation,
+  kind: 'finding', summary: 'Use the revised requirements in the next turn.',
+});
+await orch.tasks.resume(taskId);
+```
+
+Python uses the same `sessions.control` / `messages.send` / `tasks.resume` flow with snake_case fields. `tasks.cancel` interrupts an active Claude turn using the same evidence rules. There is no new `modify` action: revision is the existing pause, queued context, and resume sequence. Resume preserves saved native history; it does not recover unsaved reasoning. Read the returned operation/task state before treating control as successful.
+
+`interruptTimeoutMs` defaults to 30000 and starts at the cancellation request, including startup waiting. It cannot extend acceptance/turn budgets or the host's `timeouts.interruptMs`. An expired host operation remains outcome_unknown/blocked even if late terminal/usage/exit evidence later releases execution capacity. No blind resend occurs. [Verification evidence](./docs/tdd/0008-claude-interruption.md) separates real local processes and installed native SDK transport from the still-unverified real CLI/model boundary.
 
 ## 6. Local Python wiring
 
@@ -799,7 +893,7 @@ Current A/A2 accounts for execution resources separately from business reconcili
 
 Host defaults are acceptanceMs=30000, turnMs=1800000, drainMs=300000, interruptMs=30000, reconcileMs=60000, each integer 1..86400000 ms. Embedded TS passes createOrchestrator configuration; CLI/Python use [README host JSON](./README.md#standalone-host-and-cross-language-integration). Python passes engine_command=[node, cli, "host", "--stdio", "--config", config_file], not local(timeouts=...). Convert LifecycleTimeouts snake_case values with agent_orch.types.to_wire. SDK wait does not renew deadlines.
 
-Total budget starts at dispatch and includes initialization/acceptance; acknowledgments/output do not renew it. Use the shorter host/explicit-provider cap; longer provider caps cannot extend host time. CLI requestTimeoutMs/turnTimeoutMs accept integer 1..3600000 ms. Cleanup fields are Claude cleanupTimeoutMs and Codex closeTimeoutMs with the same range; crossed names fail. No implicit 300-second cap remains when unspecified. Upgrades/config changes do not renew old deadlines.
+Total budget starts at dispatch and includes initialization/acceptance; acknowledgments/output do not renew it. Use the shorter host/explicit-provider cap; longer provider caps cannot extend host time. CLI requestTimeoutMs/turnTimeoutMs accept integer 1..3600000 ms. Cleanup fields are Claude cleanupTimeoutMs and Codex closeTimeoutMs with the same range; crossed names fail. Claude additionally accepts interruptTimeoutMs with the same range. No implicit 300-second cap remains when unspecified. Upgrades/config changes do not renew old deadlines.
 
 Timeout retains dispatch/control/related messages as outcome_unknown and Task blocked. Potentially executing unknown work keeps its slot. Late matched terminal/cleanup can release resources without business reconciliation. sessions.reconcile records an owner declaration after actual history/resource/side-effect investigation; it does not perform that investigation. Only embedded TS or managed-stdio Python owners qualify; ordinary sockets return UNAUTHORIZED. SDKs require initialize.capabilities.lifecycle={version:1,reconcile:"owner-attestation",durableDeadlines:true} before send, otherwise UNSUPPORTED_CAPABILITY.
 

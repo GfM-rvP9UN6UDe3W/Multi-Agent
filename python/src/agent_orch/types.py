@@ -54,6 +54,7 @@ _WIRE_TO_PYTHON = {
     "taskId": "task_id", "sessionId": "session_id", "approvalId": "approval_id",
     "operationId": "operation_id", "messageId": "message_id", "eventId": "event_id",
     "dispatchId": "dispatch_id", "storeId": "store_id", "instanceId": "instance_id",
+    "usageRecordId": "usage_record_id",
     "providerSessionId": "provider_session_id", "activeDispatchId": "active_dispatch_id",
     "targetId": "target_id", "artifactRefs": "artifact_refs", "evidenceRefs": "evidence_refs",
     "idempotencyKey": "idempotency_key", "createdAt": "created_at", "updatedAt": "updated_at",

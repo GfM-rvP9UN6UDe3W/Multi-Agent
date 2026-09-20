@@ -117,7 +117,7 @@ test('AC adapter Claude: construction is offline and unsupported write profile n
       throw new Error('should not call');
     },
   });
-  assert.equal(adapter.capabilities().interrupt, false);
+  assert.equal(adapter.capabilities().interrupt, true);
   assert.deepEqual(
     await collect(adapter.execute(input({ permissionProfile: 'workspace-write' }))),
     [{ type: 'error', message: 'Claude adapter supports read-only only', outcome: 'failed' }],

@@ -180,6 +180,9 @@ class _Usage:
     async def get(self, task_id: str) -> Snapshot:
         return await self._client._call("usage.get", {"taskId": task_id})
 
+    async def get_record(self, usage_record_id: str) -> Snapshot:
+        return await self._client._call("usage.getRecord", {"usageRecordId": usage_record_id})
+
 
 class Orchestrator:
     def __init__(self, *, engine_command: Sequence[str] | None = None, socket_path: str | None = None,

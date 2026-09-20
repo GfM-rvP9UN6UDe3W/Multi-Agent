@@ -3,6 +3,7 @@ import { Store } from './store.ts';
 import { OrchestrationError, fail } from './errors.ts';
 import { object, fields, string, integer, taskSpec, messageSpec, digest } from './validation.ts';
 import { readRuntimeCapabilities } from './runtime.ts';
+import { usageRecord } from './usage.ts';
 import type {
   Engine,
   EngineConfig,
@@ -17,6 +18,7 @@ import type {
   RuntimeCapabilities,
   EngineRuntimeInput,
   RuntimeEvent,
+  RuntimeUsageEvent,
   UsageRecord,
   Json,
   SessionControlTarget,
@@ -572,6 +574,49 @@ class LocalEngine implements Engine {
       process.emitWarning(
         `Execution evidence persistence failed; scheduler stopped: ${String(error)}`,
       );
+    }
+  }
+
+  private recordUsage(flight: Flight, provider: string, event: RuntimeUsageEvent): void {
+    if (this.closed) fail('HOST_CLOSED', 'Usage observation arrived after the host closed');
+    const value = usageRecord(event, {
+      taskId: flight.taskId,
+      dispatchId: flight.dispatchId,
+      provider,
+    });
+    try {
+      this.store.transaction(() => {
+        const dispatch = this.store.require<Dispatch>('dispatches', flight.dispatchId);
+        if (
+          dispatch.taskId !== flight.taskId ||
+          dispatch.sessionId !== flight.sessionId ||
+          dispatch.generation !== flight.generation ||
+          dispatch.provider !== provider
+        )
+          fail('INVALID_RUNTIME_CONTRACT', 'Usage observation has no matching durable dispatch');
+        const existing = this.store.get<UsageRecord>('usage', value.id);
+        if (existing) {
+          if (digest(existing) !== digest(value))
+            fail(
+              'IDEMPOTENCY_CONFLICT',
+              'Usage identity was already recorded with different content',
+            );
+          return;
+        }
+        this.store.put('usage', value.id, value);
+        this.store.event(
+          'usage.recorded',
+          {
+            usageRecordId: value.id,
+            dispatchId: value.dispatchId,
+            provider,
+          },
+          { taskId: flight.taskId, sessionId: flight.sessionId },
+        );
+      });
+    } catch (error) {
+      if (!(error instanceof OrchestrationError)) this.closing = true;
+      throw error;
     }
   }
 
@@ -1146,6 +1191,13 @@ class LocalEngine implements Engine {
               ? 'reported'
               : 'unknown',
         };
+      }
+      case 'usage.getRecord': {
+        fields(p, ['usageRecordId']);
+        return this.store.require<UsageRecord>(
+          'usage',
+          string(p.usageRecordId, 'usageRecordId', 512),
+        );
       }
       case 'capabilities.get': {
         fields(p, ['provider']);
@@ -1966,31 +2018,18 @@ class LocalEngine implements Engine {
         executionBudget: flight.budget,
         reportExecutionEvidence: (evidence: ExecutionEvidence) =>
           this.reportEvidence(flight, adapter.provider, evidence),
+        reportUsage: (event: RuntimeUsageEvent) =>
+          this.recordUsage(flight, adapter.provider, event),
       };
       for await (const event of adapter.execute(input)) {
+        if (event.type === 'usage') {
+          this.recordUsage(flight, adapter.provider, event);
+        }
         for (const check of flight.deadlineChecks) check();
         if (!this.live(flight)) break;
+        if (event.type === 'usage') continue;
         if (event.type === 'accepted')
           this.store.transaction(() => this.accepted(flight, event.providerSessionId));
-        else if (event.type === 'usage')
-          this.store.transaction(() => {
-            const id = `${flight.dispatchId}:${string(event.usageId, 'usageId', 256)}`;
-            if (this.store.get('usage', id)) return;
-            for (const key of [
-              'inputTokens',
-              'cachedInputTokens',
-              'cacheWriteInputTokens',
-              'outputTokens',
-            ] as const)
-              if (event.usage[key] !== null) integer(event.usage[key], key);
-            this.store.put('usage', id, {
-              ...event.usage,
-              id,
-              taskId: flight.taskId,
-              dispatchId: flight.dispatchId,
-              provider: adapter.provider,
-            });
-          });
         else {
           terminal = event;
           this.store.transaction(() => {

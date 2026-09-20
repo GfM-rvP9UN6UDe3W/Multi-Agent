@@ -269,6 +269,14 @@ test(
     await write('claude', { cleanupTimeoutMs: 17 });
     const config = await loadConfig(path);
     assert.equal(config.providers.claude.cleanupTimeoutMs, 17);
+    await write('claude', { interruptTimeoutMs: 29 });
+    assert.equal((await loadConfig(path)).providers.claude.interruptTimeoutMs, 29);
+    for (const value of [0, 1.5, true, '29', 3600001]) {
+      await write('claude', { interruptTimeoutMs: value });
+      await assert.rejects(loadConfig(path), { code: 'INVALID_CONFIG' });
+    }
+    await write('codex', { interruptTimeoutMs: 29 });
+    await assert.rejects(loadConfig(path), { code: 'INVALID_CONFIG' });
     await write('claude', { closeTimeoutMs: 17 });
     await assert.rejects(loadConfig(path), { code: 'INVALID_CONFIG' });
     await write('codex', { closeTimeoutMs: 17 });

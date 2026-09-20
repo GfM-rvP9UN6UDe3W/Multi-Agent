@@ -4,13 +4,17 @@ Date: 2026-09-19. Status: protocol wiring and [SPEC-0003-A](./0003-a-lifecycle.m
 
 ## Goals and interface
 
+Historical baseline: [SPEC-0007](./0007-host-policy-and-usage.md) supersedes the fixed read-only/options/network policy below for embedded adapters. It adds opt-in workspace-write, typed host options, conservative full-stop observation, and durable usage publication even for failed/cleanup-uncertain Claude results. The JSON CLI still requires read-only; default standalone behavior remains restrictive. These additions are verified with offline fixtures, not native-model acceptance.
+
 Each adapter implements internal `RuntimeAdapter.execute(input): AsyncIterable<RuntimeEvent>`. This increment permits only `read-only`; `workspace-write` requests fail immediately. `resume` reuses the provider session when `providerSessionId` exists. Fork, compact, and tool bridges are explicitly unsupported. Construction and `capabilities()` do not read credentials, start processes, or invoke models. Only `execute()` touches the official runtime.
 
 `accepted` requires explicit upstream evidence: Claude SDK `system/init.session_id` (or a terminal message with a session ID), or a successful Codex `turn/start` response. Process startup, successful `initialize`, or creating a Codex thread alone are insufficient. After submitting to Claude `query()` or Codex `turn/start`, stream/process disconnection without an upstream terminal event yields `error(outcome="unknown")`, even before acknowledgment, because execution may have occurred. A definite pre-submission failure yields `failed`.
 
 ## Claude Agent SDK
 
-Call `query()` from the installed optional peer dependency `@anthropic-ai/claude-agent-sdk`. Tests inject a query factory and require neither login nor model spending. Each execution owns its stream handle; `resume` maps to `options.resume`. Configure `settingSources: []`, `tools: [Read, Glob, Grep]`, the corresponding allow list, `disallowedTools: [mcp__*]`, and `permissionMode: dontAsk`. Do not expose write or MCP tools. `interrupt` is currently `false`: AbortSignal or an SDK exception alone cannot prove upstream termination or fabricate interrupted. Cancellation before execution can prove non-submission.
+Historical baseline below: [SPEC-0008](./0008-claude-interruption.md) supersedes unsupported interruption and string input with a single open streaming prompt, native Query.interrupt, and structured abort-terminal observation. It preserves the independent cleanup/unknown rules. Installed SDK 0.3.274 transport and native types were checked offline; real CLI/model acceptance remains pending.
+
+Call `query()` from the installed optional peer dependency `@anthropic-ai/claude-agent-sdk`. Tests inject a query factory and require neither login nor model spending. Each execution owns its stream handle; `resume` maps to `options.resume`. Configure `settingSources: []`, `tools: [Read, Glob, Grep]`, the corresponding allow list, `disallowedTools: [mcp__*]`, and `permissionMode: dontAsk`. The historical minimal adapter did not expose write or MCP tools and advertised `interrupt: false`. AbortSignal or an SDK exception alone still cannot prove upstream termination or fabricate interrupted. Cancellation before execution can prove non-submission.
 
 A successful SDK `result` yields terminal `result`. Missing usage fields remain `null`; do not infer cost or zero usage. Extract the four token categories from terminal `usage`, deduplicated by `dispatchId:result`. A started query without terminal evidence remains unknown. The SDK is an optional peer dependency and is not loaded by offline tests. Real calls require a caller-installed compatible version and officially supported authentication.
 

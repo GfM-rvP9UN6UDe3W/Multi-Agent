@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 One Node orchestration engine with thin TypeScript and Python SDKs. The engine exclusively owns SQLite state, scheduling, deadlines, and adapter calls. The SDKs use the shared JSON-RPC contract; they do not implement another scheduler, open the database, or call models themselves.
 
-Implemented scope: SPEC-0001 foundation, SPEC-0003-A lifecycle, A2 execution isolation, SPEC-0004 scheduling/shutdown/TypeScript request-deadline/Claude cleanup fixes, SPEC-0005 client recovery guidance and wire-snapshot contract tests, and SPEC-0006 typed host-runtime contracts and offline conformance. Storage schema 2, wire 1.0, event schemaVersion 1. SPEC-0003-B/C retention, GC, archival, and routing are not implemented. Git remote: `git@github.com:masonlee39/Multi-Agent.git`. No npm/PyPI packages are published.
+Implemented scope: SPEC-0001 foundation, SPEC-0003-A lifecycle, A2 execution isolation, SPEC-0004 scheduling/shutdown/TypeScript request-deadline/Claude cleanup fixes, SPEC-0005 client recovery guidance and wire-snapshot contract tests, SPEC-0006 typed host-runtime contracts and offline conformance, and SPEC-0007 embedded policy/options injection and durable usage replay. Storage schema 2, wire 1.0, event schemaVersion 1. SPEC-0003-B/C retention, GC, archival, and routing are not implemented. Git remote: `git@github.com:masonlee39/Multi-Agent.git`. No npm/PyPI packages are published.
 
 ## Common commands
 
@@ -66,11 +66,15 @@ Node 22.18+ / Python 3.11+; recorded verification used Node 24.14.0 and Python 3
 
 **SDK parity.** TypeScript Orchestrator wraps both the in-process engine and UnixRpcClient with one API. `python/src/agent_orch/client.py` mirrors it. Wire fields are camelCase; Python converts only known envelope fields to snake_case. Raw JSON such as operation.result retains camelCase, for example `result["executionReleased"]`. API changes must update both SDKs and schemas/protocol.schema.json manually; there is no code generation.
 
+**Claude interruption.** SPEC-0008 advertises interrupt support and owns one open AsyncIterable user prompt plus partial-message observation. Defer Query.interrupt until matched main-turn activity; call once, keep observing, and classify only structured aborted_streaming/aborted_tools results as interrupted. Receipt, arbitrary error text, EOF, and process exit do not establish an interrupted terminal. Cleanup and extended-host stop proof remain separate. Late evidence cannot undo an expired control. Never change this into immediate SDK-controller abort on an engine cancellation request.
+
 `tests/contract/protocol-schema.test.ts` validates task, approval, message, usage, operation, and related snapshots from an actual Unix host. A Python subprocess reads the same state to verify field mappings and preservation of raw JSON. The helper supports the schema constraints currently used, rejects unsupported assertion keywords and invalid additionalProperties values, and treats format as annotation. It is not a production validator or complete JSON Schema implementation. Wire extensions require actual payload checks and negative cases, not just assertions that definition names exist.
 
 **Relative cross-package imports.** Use paths such as `../../engine/src/types.ts`, not `@agent-orch/*`. npm workspaces create links, but current source imports use relative paths.
 
 ## Development constraints
+
+SPEC-0007 adds `adapter-claude/src/options.ts` for typed native options, reserved ownership fields, permission guards, and write sandbox configuration. `engine/src/stop-observation.ts` bounds host full-stop observations for expanded execution; false/missing/late proof cannot bypass local process evidence or business quarantine. The JSON CLI still disallows write/native callbacks. `engine/src/usage.ts` validates bounded JSON observations; `recordUsage` commits rows with `usage.recorded` atomically, rejects ID conflicts, and retains the original dispatch identity for late callbacks. Both SDKs expose exact-record reads. Keep native hooks/options/private objects out of persistence and wire payloads. Fixture policy mapping does not validate native sandbox enforcement or an application's ledger.
 
 - **TDD is required:** specification and numbered criteria, tests with an observed RED, implementation, then RED/GREEN evidence in docs/tdd. Test names reference acceptance IDs such as AC04 or 0003-A05. Regression coverage for already-correct behavior does not need fabricated RED evidence.
 - **Erasable TypeScript only:** no enum, namespace, or parameter properties. With verbatimModuleSyntax, use `import type`; imports include `.ts` extensions.
