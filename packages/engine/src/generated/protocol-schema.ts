@@ -1,4 +1,4 @@
-// Generated from schemas/protocol.schema.json; SHA-256 83e3b0b6f785f865f5b3cfd2ad2db3866a4dafa0a0f2e236ef0d51c329106a89. Do not edit.
+// Generated from schemas/protocol.schema.json; SHA-256 f8717c8ea9ef2402fe0efdb2ef256fa4df29367ec893dfe393419ae9efb05f13. Do not edit.
 export const protocolSchema = {
   $schema: 'https://json-schema.org/draft/2020-12/schema',
   $id: 'urn:agent-orch:protocol:2.0',
@@ -633,6 +633,14 @@ export const protocolSchema = {
           type: 'integer',
           minimum: 1,
           maximum: 10000,
+        },
+        defaultMaxQueueWaitMs: {
+          type: 'integer',
+          minimum: 0,
+          maximum: 604800000,
+          default: 30000,
+          description:
+            'Queue wait of a task whose contextPlan does not set maxQueueWaitMs, resolved at admission. Only time spent queued counts (SPEC-0015).',
         },
       },
       allOf: [
@@ -1770,7 +1778,7 @@ export const protocolSchema = {
         maxQueueWaitMs: {
           type: 'integer',
           minimum: 0,
-          maximum: 300000,
+          maximum: 604800000,
         },
       },
       required: ['requestedMode', 'independent'],
@@ -1805,7 +1813,7 @@ export const protocolSchema = {
         maxQueueWaitMs: {
           type: 'integer',
           minimum: 0,
-          maximum: 300000,
+          maximum: 604800000,
         },
         fallbackModes: {
           type: 'array',

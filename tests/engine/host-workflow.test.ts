@@ -1,10 +1,11 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, realpath, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createEngine, createFakeAdapter } from '../fixtures/engine.ts';
 import { loadConfig } from '../../packages/cli/src/config.ts';
+import { normalizeRules } from '../../packages/engine/src/verification.ts';
 import type {
   Engine,
   EngineConfig,
@@ -15,7 +16,15 @@ import type {
   TaskSnapshot,
 } from '../../packages/engine/src/types.ts';
 
-type Store = { db: { prepare(sql: string): { get(...args: unknown[]): unknown; all(): unknown } } };
+type Store = {
+  db: {
+    prepare(sql: string): {
+      get(...args: unknown[]): unknown;
+      all(): unknown;
+      run(...args: unknown[]): unknown;
+    };
+  };
+};
 
 /** A fake runtime that records every dispatch input; `hold` can delay a prompt's completion. */
 function recording(hold?: (input: RuntimeInput) => Promise<void> | undefined) {
@@ -572,6 +581,119 @@ test('0014-D01 the total bound applies and an interrupted dispatch repeats the b
   }
 });
 
+const DEPENDENCY = '\nUntrusted dependency result ';
+type Omission = {
+  taskId: string;
+  artifactRef: string | null;
+  bytes: number | null;
+  omitted: string;
+};
+/** Parses the blocks of a prompt made of a goal and dependency blocks; malformed JSON throws. */
+function injected(prompt: string) {
+  return prompt
+    .split(`\n${DEPENDENCY}`)
+    .slice(1)
+    .map((rest) => {
+      const bytes = Buffer.byteLength(DEPENDENCY + rest);
+      const split = rest.indexOf(':\n');
+      if (split < 0) return { bytes, omission: JSON.parse(rest) as Omission };
+      return {
+        bytes,
+        header: JSON.parse(rest.slice(0, split)) as { taskId: string; artifactRef: string },
+        text: JSON.parse(rest.slice(split + 2)) as string,
+      };
+    });
+}
+/** Bytes a block adds around the encoded text: marker, UUID/sha256 header, colon, newline, quotes. */
+const overhead = Buffer.byteLength(
+  `${DEPENDENCY}${JSON.stringify({ taskId: crypto.randomUUID(), artifactRef: `sha256:${'0'.repeat(64)}` })}:\n""`,
+);
+/** Text whose JSON encoding without quotes is exactly `encoded` bytes, mixing escaped and wide characters. */
+function encodedAs(encoded: number, seed: string) {
+  const hard = `${seed}${'中'.repeat(3000)}${'"'.repeat(1000)}${'\\'.repeat(1000)}${'\u0001'.repeat(1000)}${'\n'.repeat(500)}`;
+  return hard + 'a'.repeat(encoded - (Buffer.byteLength(JSON.stringify(hard)) - 2));
+}
+/** Completes one upstream task per result, then returns the downstream prompt's parsed blocks. */
+async function dependencyPrompt(results: Record<string, string>) {
+  const names = Object.keys(results);
+  const runtime = scripted((input) => results[input.prompt.split(/\s/)[0]] ?? 'ok');
+  const f = await setup({}, runtime.adapter);
+  try {
+    const upstream: TaskSnapshot[] = [];
+    for (const name of names) upstream.push(await create(f.engine, { goal: `${name} upstream` }));
+    const down = await create(f.engine, {
+      goal: 'downstream',
+      dependencyTaskIds: upstream.map((task) => task.id),
+    });
+    for (const [i, task] of upstream.entries()) upstream[i] = await complete(f.engine, task);
+    await wait(f.engine, down.id, 'waiting_approval');
+    const blocks = injected(runtime.inputs.find((input) => input.taskId === down.id)!.prompt);
+    assert.equal(blocks.length, names.length);
+    for (const [i, block] of blocks.entries()) {
+      assert.ok(block.bytes <= 32768, `${names[i]} block is ${block.bytes} bytes`);
+      const identity = block.header ?? block.omission!;
+      assert.equal(identity.taskId, upstream[i].id);
+      assert.equal(identity.artifactRef, upstream[i].artifactRefs[0]);
+      if (block.text !== undefined) assert.equal(block.text, results[names[i]], names[i]);
+    }
+    const total = blocks.reduce((sum, block) => sum + block.bytes, 0);
+    assert.ok(total <= 98304, `dependency blocks total ${total} bytes`);
+    return {
+      blocks,
+      outcome: blocks.map((block, i) => [
+        names[i],
+        block.omission?.omitted ?? 'included',
+        block.omission?.bytes ?? null,
+      ]),
+    };
+  } finally {
+    await f.close();
+  }
+}
+
+test('0014-D05 the 32 KiB bound counts each encoded block', async () => {
+  const results = {
+    ctrl0: `${'\u0001'.repeat(32767)}0`,
+    ctrl1: `${'\u0001'.repeat(32767)}1`,
+    ctrl2: `${'\u0001'.repeat(32767)}2`,
+    quotes: '"'.repeat(16384),
+    slashes: '\\'.repeat(16384),
+    wide: '中'.repeat(10000),
+    exact: encodedAs(32768 - overhead, 'E'),
+    over: encodedAs(32769 - overhead, 'O'),
+  };
+  const { blocks, outcome } = await dependencyPrompt(results);
+  const bound = 'exceeds the 32 KiB dependency bound';
+  assert.deepEqual(outcome, [
+    ['ctrl0', bound, 32768],
+    ['ctrl1', bound, 32768],
+    ['ctrl2', bound, 32768],
+    ['quotes', bound, 16384],
+    ['slashes', bound, 16384],
+    ['wide', 'included', null],
+    ['exact', 'included', null],
+    ['over', bound, Buffer.byteLength(results.over)],
+  ]);
+  assert.equal(blocks[6].bytes, 32768);
+});
+
+test('0014-D05 the 96 KiB bound counts every block, omission records included', async () => {
+  const results = {
+    first: encodedAs(32768 - overhead, 'F'),
+    second: encodedAs(32768 - overhead, 'S'),
+    third: encodedAs(32768 - overhead, 'T'),
+    tail: 'tail',
+  };
+  const { outcome } = await dependencyPrompt(results);
+  // Three full blocks would fill 96 KiB and leave no room for the fourth block's record.
+  assert.deepEqual(outcome, [
+    ['first', 'included', null],
+    ['second', 'included', null],
+    ['third', 'exceeds the 96 KiB total dependency bound', Buffer.byteLength(results.third)],
+    ['tail', 'included', null],
+  ]);
+});
+
 test('0014-D02 work_read reads declared dependencies and their artifacts only', async () => {
   let failure: unknown;
   let checked = false;
@@ -1052,6 +1174,280 @@ test('0014-W03 owners register persistent rule versions at runtime', async () =>
   }
 });
 
+/** A store-managed engine configuration with `lint@1` configured. */
+async function managed(prefix: string) {
+  const root = await realpath(await mkdtemp(join(tmpdir(), prefix)));
+  for (const name of ['work', 'state', 'control', 'stores', 'archives'])
+    await mkdir(join(root, name), { mode: 0o700 });
+  const config: EngineConfig = {
+    workspace: join(root, 'work'),
+    stateDir: join(root, 'state'),
+    adapters: [createFakeAdapter()],
+    verificationRules: [rule('1')] as never,
+    stores: {
+      controlDir: join(root, 'control'),
+      storesRoot: join(root, 'stores'),
+      archiveRoot: join(root, 'archives'),
+    },
+  };
+  return { root, config };
+}
+const effective = async (engine: Engine) =>
+  (
+    (await engine.call('rules.list', {})) as {
+      rules: { id: string; version: string; source: string }[];
+    }
+  ).rules.map((item) => `${item.id}/${item.version}/${item.source}`);
+const checks = (version: string, id = 'lint') =>
+  spec({ acceptance: { mode: 'checks', ruleRefs: [{ id, version }] } });
+const statusOf = async (pending: Promise<unknown>) =>
+  ((await pending) as { status: string }).status;
+const stop = (engine: Engine) => engine.close({ mode: 'interrupt', timeoutMs: 1000 });
+
+test('0014-W04 a rollover carries runtime rules into the new store and a restart agrees', async () => {
+  const { root, config } = await managed('orch-rule-rollover-');
+  let engine = await createEngine(config);
+  try {
+    await register(engine, rule('2'), 'two');
+    const old = engine.storeId;
+    const rollover = (await engine.call(
+      'stores.rollover',
+      { idempotencyKey: 'roll' },
+      { owner: true },
+    )) as { status: string };
+    assert.equal(rollover.status, 'completed');
+    assert.notEqual(engine.storeId, old);
+    for (const phase of ['switched', 'restarted']) {
+      assert.deepEqual(await effective(engine), ['lint/1/config', 'lint/2/runtime'], phase);
+      assert.equal(await statusOf(register(engine, rule('2'), `again-${phase}`)), 'noop', phase);
+      await assert.rejects(register(engine, rule('2', { timeoutMs: 2000 }), `changed-${phase}`), {
+        code: 'CONFLICT',
+      });
+      const task = (await engine.call('tasks.create', {
+        spec: checks('2'),
+        idempotencyKey: `checks-${phase}`,
+      })) as TaskSnapshot;
+      assert.equal(task.verificationRules?.[0].version, '2', phase);
+      if (phase === 'switched') {
+        await stop(engine);
+        engine = await createEngine(config);
+      }
+    }
+  } finally {
+    await stop(engine).catch(() => {});
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('0014-W04 a backup import restores exactly the backup rules and a restart agrees', async () => {
+  const { root, config } = await managed('orch-rule-import-');
+  let engine = await createEngine(config);
+  const owner = (method: string, params: Record<string, unknown>) =>
+    engine.call(method, params, { owner: true });
+  try {
+    await register(engine, rule('2'), 'two');
+    const backup = (await owner('storage.backup', { idempotencyKey: 'backup' })) as {
+      backupId: string;
+    };
+    await register(engine, rule('3'), 'three');
+    assert.deepEqual(await effective(engine), [
+      'lint/1/config',
+      'lint/2/runtime',
+      'lint/3/runtime',
+    ]);
+    await owner('stores.import', { backupId: backup.backupId, idempotencyKey: 'import' });
+    for (const phase of ['switched', 'restarted']) {
+      assert.deepEqual(await effective(engine), ['lint/1/config', 'lint/2/runtime'], phase);
+      await assert.rejects(
+        engine.call('tasks.create', { spec: checks('3'), idempotencyKey: `missing-${phase}` }),
+        { code: 'UNKNOWN_VERIFICATION_RULE' },
+      );
+      assert.equal(await statusOf(register(engine, rule('2'), `two-${phase}`)), 'noop', phase);
+      if (phase === 'switched') {
+        await stop(engine);
+        engine = await createEngine(config);
+      }
+    }
+    // The imported store never saw the old lint@3, so other content registers and persists.
+    assert.equal(
+      await statusOf(register(engine, rule('3', { timeoutMs: 2000 }), 'three-again')),
+      'completed',
+    );
+    await stop(engine);
+    engine = await createEngine(config);
+    assert.deepEqual(await effective(engine), [
+      'lint/1/config',
+      'lint/2/runtime',
+      'lint/3/runtime',
+    ]);
+  } finally {
+    await stop(engine).catch(() => {});
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('0014-W04 an import whose rules conflict with the configuration is refused before switching', async () => {
+  const { root, config } = await managed('orch-rule-conflict-');
+  let engine = await createEngine(config);
+  const owner = (method: string, params: Record<string, unknown>) =>
+    engine.call(method, params, { owner: true });
+  try {
+    const empty = (await owner('storage.backup', { idempotencyKey: 'empty' })) as {
+      backupId: string;
+    };
+    await register(engine, rule('2'), 'two');
+    const registered = (await owner('storage.backup', { idempotencyKey: 'registered' })) as {
+      backupId: string;
+    };
+    await owner('stores.import', { backupId: empty.backupId, idempotencyKey: 'import-empty' });
+    await stop(engine);
+    // The configuration now defines lint@2 differently from the backup's runtime registration.
+    const changed = {
+      ...config,
+      verificationRules: [rule('1'), rule('2', { timeoutMs: 2000 })] as never,
+    };
+    engine = await createEngine(changed);
+    const storeId = engine.storeId;
+    await assert.rejects(
+      owner('stores.import', { backupId: registered.backupId, idempotencyKey: 'import-clash' }),
+      { code: 'VALIDATION_ERROR' },
+    );
+    assert.equal(engine.storeId, storeId);
+    assert.deepEqual(await effective(engine), ['lint/1/config', 'lint/2/config']);
+    // Nothing is left half-switched: mutations and a restart still work.
+    assert.equal(await statusOf(register(engine, rule('3'), 'three')), 'completed');
+    await stop(engine);
+    engine = await createEngine(changed);
+    assert.deepEqual(await effective(engine), ['lint/1/config', 'lint/2/config', 'lint/3/runtime']);
+  } finally {
+    await stop(engine).catch(() => {});
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('0014-W04 a switch finished by a restart carries and checks rules the same way', async () => {
+  const { root, config: base } = await managed('orch-rule-resume-');
+  let crashAt: string | undefined;
+  const config: EngineConfig = {
+    ...base,
+    storageFault: (point) => {
+      if (point === crashAt) throw new Error(`simulated crash at ${point}`);
+    },
+  };
+  const active = async () =>
+    JSON.parse(await readFile(join(root, 'control', 'manifest.json'), 'utf8')).activeStoreId;
+  let engine = await createEngine(config);
+  const owner = (method: string, params: Record<string, unknown>) =>
+    engine.call(method, params, { owner: true });
+  try {
+    await register(engine, rule('2'), 'two');
+    const backup = (await owner('storage.backup', { idempotencyKey: 'backup' })) as {
+      backupId: string;
+    };
+    // A rollover interrupted before its new store is prepared completes during the next start.
+    crashAt = 'rollover.new_prepared.before';
+    const first = engine.storeId;
+    await assert.rejects(owner('stores.rollover', { idempotencyKey: 'roll' }), /simulated crash/);
+    crashAt = undefined;
+    await stop(engine);
+    engine = await createEngine(config);
+    assert.notEqual(engine.storeId, first);
+    assert.deepEqual(await effective(engine), ['lint/1/config', 'lint/2/runtime']);
+    // An interrupted import is checked again when a restart resumes it.
+    crashAt = 'rollover.new_prepared.before';
+    const second = engine.storeId;
+    await assert.rejects(
+      owner('stores.import', { backupId: backup.backupId, idempotencyKey: 'import' }),
+      /simulated crash/,
+    );
+    crashAt = undefined;
+    await stop(engine);
+    await assert.rejects(
+      createEngine({
+        ...config,
+        verificationRules: [rule('1'), rule('2', { timeoutMs: 2000 })] as never,
+      }),
+      { code: 'VALIDATION_ERROR' },
+    );
+    assert.equal(await active(), second);
+    engine = await createEngine(config);
+    assert.notEqual(engine.storeId, second);
+    assert.equal(await active(), engine.storeId);
+    assert.deepEqual(await effective(engine), ['lint/1/config', 'lint/2/runtime']);
+  } finally {
+    await stop(engine).catch(() => {});
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('0014-W05 rule identities containing @ stay distinct across restart', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'orch-rule-identity-'));
+  await mkdir(join(root, 'workspace'));
+  const config = {
+    workspace: join(root, 'workspace'),
+    stateDir: join(root, 'state'),
+    adapters: [createFakeAdapter()],
+  };
+  let engine = await createEngine(config);
+  try {
+    await register(engine, rule('c', { id: 'a@b' }), 'first');
+    await register(engine, rule('b@c', { id: 'a' }), 'second');
+    const both = ['a@b/c/runtime', 'a/b@c/runtime'];
+    assert.deepEqual(await effective(engine), both);
+    await stop(engine);
+    engine = await createEngine(config);
+    assert.deepEqual(await effective(engine), both);
+    for (const [id, version] of [
+      ['a@b', 'c'],
+      ['a', 'b@c'],
+    ]) {
+      const task = (await engine.call('tasks.create', {
+        spec: checks(version, id),
+        idempotencyKey: `${id}|${version}`,
+      })) as TaskSnapshot;
+      const frozen = task.verificationRules?.[0];
+      assert.deepEqual([frozen?.id, frozen?.version], [id, version]);
+    }
+    assert.equal(await statusOf(register(engine, rule('c', { id: 'a@b' }), 'first-again')), 'noop');
+    await assert.rejects(register(engine, rule('b@c', { id: 'a', timeoutMs: 2000 }), 'changed'), {
+      code: 'CONFLICT',
+    });
+  } finally {
+    await stop(engine).catch(() => {});
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('0014-W05 rules stored under rc.8 keys still load and are never overwritten', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'orch-rule-legacy-'));
+  await mkdir(join(root, 'workspace'));
+  const config = {
+    workspace: join(root, 'workspace'),
+    stateDir: join(root, 'state'),
+    adapters: [createFakeAdapter()],
+  };
+  let engine = await createEngine(config);
+  try {
+    // rc.8 stored each rule under the row key `${id}@${version}`.
+    const [legacy] = normalizeRules(config.workspace, [rule('c', { id: 'x@y' }) as never]);
+    (engine as unknown as { store: Store }).store.db
+      .prepare('INSERT INTO verification_rules(id,data) VALUES (?,?)')
+      .run('x@y@c', JSON.stringify(legacy));
+    await stop(engine);
+    engine = await createEngine(config);
+    assert.deepEqual(await effective(engine), ['x@y/c/runtime']);
+    assert.equal(await statusOf(register(engine, rule('c', { id: 'x@y' }), 'same')), 'noop');
+    // This identity's rc.8 key is the same string, but it is a different rule.
+    assert.equal(await statusOf(register(engine, rule('y@c', { id: 'x' }), 'other')), 'completed');
+    await stop(engine);
+    engine = await createEngine(config);
+    assert.deepEqual(await effective(engine), ['x@y/c/runtime', 'x/y@c/runtime']);
+  } finally {
+    await stop(engine).catch(() => {});
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 type Handoff = {
   handoffId: string;
   status: string;
@@ -1351,6 +1747,51 @@ test('0014-H04 handoffs survive restart and a backup import invalidates pending 
   } finally {
     await engine.close({ mode: 'interrupt', timeoutMs: 1000 }).catch(() => {});
     await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('0014-H05 handoff context may cite direct dependency results only', async () => {
+  const ids: Record<string, TaskSnapshot> = {};
+  let receipt: { handoffId: string; status: string } | undefined;
+  const runner = toolRunner('requester', async (tools) => {
+    const request = (artifactRef: string, key: string) =>
+      tools.call('work_delegate', {
+        goal: 'continue from the upstream result',
+        contextPlan: { ...reuse(ids.b.sessionId), contextRefs: [{ artifactRef, version: 1 }] },
+        idempotencyKey: key,
+      });
+    receipt = (await request(ids.upstream.artifactRefs[0], 'direct')) as typeof receipt;
+    for (const name of ['deep', 'other'])
+      await assert.rejects(
+        request(ids[name].artifactRefs[0], name),
+        { code: 'UNAUTHORIZED' },
+        name,
+      );
+  });
+  const f = await setup({ tools: handoffTools }, runner.adapter);
+  try {
+    ids.deep = await complete(f.engine, await create(f.engine, { goal: 'deep' }));
+    ids.upstream = await complete(
+      f.engine,
+      await create(f.engine, { goal: 'upstream', dependencyTaskIds: [ids.deep.id] }),
+    );
+    ids.other = await complete(f.engine, await create(f.engine, { goal: 'other' }));
+    ids.b = await complete(f.engine, await create(f.engine, { goal: 'agent b' }));
+    const requester = await create(f.engine, {
+      goal: 'requester',
+      dependencyTaskIds: [ids.upstream.id],
+    });
+    await wait(f.engine, requester.id, 'waiting_approval');
+    runner.check();
+    assert.equal(receipt?.status, 'pending');
+    const stored = (await f.engine.call('handoffs.get', {
+      handoffId: receipt!.handoffId,
+    })) as Handoff & { contextRefs: unknown };
+    assert.deepEqual(stored.contextRefs, [
+      { artifactRef: ids.upstream.artifactRefs[0], version: 1 },
+    ]);
+  } finally {
+    await f.close();
   }
 });
 

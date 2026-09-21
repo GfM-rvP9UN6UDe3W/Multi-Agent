@@ -32,7 +32,9 @@ export function strings(value: unknown, name: string, min = 0, max = 100): strin
     fail('VALIDATION_ERROR', `${name} must contain ${min}..${max} strings`);
   return value.map((v: unknown) => string(v, name));
 }
-export function contextPlan(value: unknown): ContextPlan {
+/** The longest queue wait a task or the host default may request (SPEC-0015 Q03). */
+export const MAX_QUEUE_WAIT_MS = 604800000;
+export function contextPlan(value: unknown, defaultQueueWaitMs = 30000): ContextPlan {
   const p = object(value, 'contextPlan');
   fields(p, [
     'requestedMode',
@@ -74,10 +76,15 @@ export function contextPlan(value: unknown): ContextPlan {
       ? { snapshotRef: string(p.snapshotRef, 'snapshotRef', 128) }
       : {}),
     fallbackModes,
-    maxQueueWaitMs: integer(p.maxQueueWaitMs ?? 30000, 'maxQueueWaitMs', 0, 300000),
+    maxQueueWaitMs: integer(
+      p.maxQueueWaitMs ?? defaultQueueWaitMs,
+      'maxQueueWaitMs',
+      0,
+      MAX_QUEUE_WAIT_MS,
+    ),
   };
 }
-export function taskSpec(value: unknown): TaskSpec {
+export function taskSpec(value: unknown, defaultQueueWaitMs?: number): TaskSpec {
   const s = object(value, 'spec');
   fields(s, [
     'goal',
@@ -121,7 +128,8 @@ export function taskSpec(value: unknown): TaskSpec {
         : {}),
     };
   } else fail('UNSUPPORTED_CAPABILITY', 'Unknown acceptance mode');
-  const plan = s.contextPlan === undefined ? undefined : contextPlan(s.contextPlan);
+  const plan =
+    s.contextPlan === undefined ? undefined : contextPlan(s.contextPlan, defaultQueueWaitMs);
   const dependencies =
     s.dependencyTaskIds === undefined
       ? undefined

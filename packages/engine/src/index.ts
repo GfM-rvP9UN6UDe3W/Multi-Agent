@@ -15,10 +15,18 @@ import {
   messageSpec,
   digest,
   contextPlan as validateContextPlan,
+  MAX_QUEUE_WAIT_MS,
 } from './validation.ts';
 import { readRuntimeCapabilities } from './runtime.ts';
 import { usageRecord } from './usage.ts';
-import { contains, normalizeRules, verifyRule, workspacePath } from './verification.ts';
+import {
+  contains,
+  effectiveRules,
+  normalizeRules,
+  ruleKey,
+  verifyRule,
+  workspacePath,
+} from './verification.ts';
 import type { VerificationEvidence } from './verification.ts';
 import { ORCHESTRATION_TOOLS, TOOL_NAMES } from './tools.ts';
 import { CostLedger } from './cost-ledger.ts';
@@ -168,8 +176,8 @@ class LocalEngine implements Engine {
   >();
   private clock: EngineClock;
   private timeouts: Required<LifecycleTimeouts>;
-  private verificationRules: FrozenVerificationRule[];
-  /** `id@version` of rules registered through `rules.register` (SPEC-0014 W03). */
+  private verificationRules: FrozenVerificationRule[] = [];
+  /** `ruleKey` of rules registered through `rules.register` (SPEC-0014 W03/W05). */
   private runtimeRuleKeys = new Set<string>();
   private queueTimers = new Map<string, { cancel: () => void; deadline: number }>();
   private permissionWaits = new Map<
@@ -199,6 +207,12 @@ class LocalEngine implements Engine {
     integer(config.limits?.maxTurnsPerTask ?? 20, 'maxTurnsPerTask', 1, 1000);
     integer(config.limits?.maxLogicalSessions ?? 10000, 'maxLogicalSessions', 1, 100000);
     integer(config.limits?.maxQueuedTasks ?? 1000, 'maxQueuedTasks', 1, 10000);
+    integer(
+      config.limits?.defaultMaxQueueWaitMs ?? 30000,
+      'defaultMaxQueueWaitMs',
+      0,
+      MAX_QUEUE_WAIT_MS,
+    );
     for (const [key, fallback, max] of [
       ['maxDepth', 4, 16],
       ['maxChildren', 32, 1000],
@@ -255,6 +269,8 @@ class LocalEngine implements Engine {
         config.stateDir,
         config.stores,
         config.storageFault,
+        // A store switch must not activate registered rules this configuration rejects (W04).
+        (stored) => void effectiveRules(config.workspace, config.verificationRules, stored),
       );
     const stateDir = this.controlPlane?.activeStateDir ?? config.stateDir;
     try {
@@ -271,22 +287,7 @@ class LocalEngine implements Engine {
     try {
       this.storage = new StorageGovernance(this.store, config.storage);
       this.accounting = new CostLedger(this.store, config);
-      this.verificationRules = normalizeRules(this.store.workspace, config.verificationRules);
-      for (const stored of this.store.all<FrozenVerificationRule>('verification_rules')) {
-        const { digest: _digest, ...value } = stored;
-        const [rule] = normalizeRules(this.store.workspace, [value]);
-        const key = `${rule.id}@${rule.version}`;
-        const configured = this.verificationRules.find(
-          (r) => r.id === rule.id && r.version === rule.version,
-        );
-        if (configured) {
-          if (configured.digest !== rule.digest)
-            fail('VALIDATION_ERROR', `Configured rule ${key} conflicts with a registered rule`);
-          continue;
-        }
-        this.verificationRules.push(rule);
-        this.runtimeRuleKeys.add(key);
-      }
+      this.loadRules();
       for (const paths of Object.values(config.writeScopes ?? {})) {
         if (!Array.isArray(paths) || !paths.length || paths.length > 100)
           fail('VALIDATION_ERROR', 'Write scopes must contain 1..100 workspace paths');
@@ -316,6 +317,10 @@ class LocalEngine implements Engine {
   }
   private time(): string {
     return new Date(this.clock.wallNow()).toISOString();
+  }
+  /** The queue wait of a task whose plan does not set one (SPEC-0015 Q04). */
+  private get defaultQueueWaitMs(): number {
+    return this.config.limits?.defaultMaxQueueWaitMs ?? 30000;
   }
   private deadline(session: SessionSnapshot, kind: OperationLifecycle['kind']): OperationLifecycle {
     const duration = kind === 'shutdown' ? 30000 : this.timeouts[`${kind}Ms`];
@@ -428,36 +433,49 @@ class LocalEngine implements Engine {
     if (tasks.some((t) => ['failed', 'cancelled'].includes(t.status))) return 'blocked';
     return tasks.every((t) => t.status === 'completed') ? 'queued' : 'waiting_dependency';
   }
-  /** Bounded, JSON-encoded results of completed dependencies, in declared order (SPEC-0014 D01). */
+  /**
+   * Bounded, JSON-encoded results of completed dependencies, in declared order (SPEC-0014 D01).
+   * Bounds count the UTF-8 bytes of each block as inserted, omission records included (D05).
+   */
   private dependencyBlocks(task: TaskSnapshot): string[] {
-    let remaining = 98304;
-    return (task.spec.dependencyTaskIds ?? []).map((id) => {
-      const dependency = this.task(id);
-      const artifactRef = dependency.artifactRefs[0];
+    const entries = (task.spec.dependencyTaskIds ?? []).map((id) => {
+      const artifactRef = this.task(id).artifactRefs[0];
       const header = { taskId: id, artifactRef: artifactRef ?? null };
       const omitted = (bytes: number | null, reason: string) =>
         `\nUntrusted dependency result ${JSON.stringify({ ...header, bytes, omitted: reason })}`;
-      if (!artifactRef) return omitted(null, 'no result artifact');
+      if (!artifactRef) return { record: omitted(null, 'no result artifact') };
       const record = this.store.get<{ sizeBytes: number; historyExpired?: boolean }>(
         'artifacts',
         artifactRef,
       );
-      if (!record || record.historyExpired) return omitted(null, 'result history expired');
-      if (record.sizeBytes > 32768)
-        return omitted(record.sizeBytes, 'exceeds the 32 KiB dependency bound');
-      if (record.sizeBytes > remaining)
-        return omitted(record.sizeBytes, 'exceeds the 96 KiB total dependency bound');
+      if (!record || record.historyExpired)
+        return { record: omitted(null, 'result history expired') };
+      const tooLarge = omitted(record.sizeBytes, 'exceeds the 32 KiB dependency bound');
+      // JSON encoding never shrinks text, so a larger artifact cannot fit.
+      if (record.sizeBytes > 32768) return { record: tooLarge };
       let text: string;
       try {
         text = this.store.artifactText(artifactRef, 32768);
       } catch (error) {
-        return omitted(
-          record.sizeBytes,
-          `unreadable: ${error instanceof OrchestrationError ? error.code : 'ARTIFACT_UNREADABLE'}`,
-        );
+        const code = error instanceof OrchestrationError ? error.code : 'ARTIFACT_UNREADABLE';
+        return { record: omitted(record.sizeBytes, `unreadable: ${code}`) };
       }
-      remaining -= record.sizeBytes;
-      return `\nUntrusted dependency result ${JSON.stringify(header)}:\n${JSON.stringify(text)}`;
+      const block = `\nUntrusted dependency result ${JSON.stringify(header)}:\n${JSON.stringify(text)}`;
+      if (Buffer.byteLength(block) > 32768) return { record: tooLarge };
+      return {
+        block,
+        record: omitted(record.sizeBytes, 'exceeds the 96 KiB total dependency bound'),
+      };
+    });
+    // A record is a few hundred bytes and a task has at most 200 dependencies, so all records
+    // fit. A full block is used only if every later dependency's record still fits after it.
+    let reserved = entries.reduce((sum, entry) => sum + Buffer.byteLength(entry.record), 0);
+    let used = 0;
+    return entries.map(({ block, record }) => {
+      reserved -= Buffer.byteLength(record);
+      const chosen = block && used + Buffer.byteLength(block) + reserved <= 98304 ? block : record;
+      used += Buffer.byteLength(chosen);
+      return chosen;
     });
   }
   private refreshDependencies(): void {
@@ -645,8 +663,8 @@ class LocalEngine implements Engine {
           candidateSessionId: session.id,
           expectedGeneration: 1,
           enqueuedAt: this.time(),
-          deadlineAt: new Date(this.clock.wallNow() + 30000).toISOString(),
-          maxQueueWaitMs: 30000,
+          deadlineAt: new Date(this.clock.wallNow() + this.defaultQueueWaitMs).toISOString(),
+          maxQueueWaitMs: this.defaultQueueWaitMs,
           fallbackModes: [],
           reasonCode: 'ROOT_SESSION',
         },
@@ -721,7 +739,7 @@ class LocalEngine implements Engine {
   }
   private armQueue(task: TaskSnapshot): void {
     if (
-      task.status === 'paused' ||
+      task.status !== 'queued' ||
       !task.routing ||
       task.routing.submittedAt ||
       task.routing.expiredAt ||
@@ -960,6 +978,12 @@ class LocalEngine implements Engine {
         }
         const parent = this.task(flight.taskId);
         const descendants = this.store.subtreeTasks(parent.id);
+        /** Artifacts of the bound subtree and of its declared direct dependencies (D02). */
+        const readable = (ref: string) =>
+          descendants.some((task) => task.artifactRefs.includes(ref)) ||
+          (parent.spec.dependencyTaskIds ?? []).some((id) =>
+            this.task(id).artifactRefs.includes(ref),
+          );
         const state = digest(
           descendants.map((task) => [task.id, task.status, task.revision, task.artifactRefs]),
         );
@@ -1023,8 +1047,9 @@ class LocalEngine implements Engine {
                   'A handoff request carries only a goal and context references',
                 );
               const refs = validateContextPlan(plan).contextRefs;
+              // H05: the requester may cite what it may read (D02), and nothing more.
               for (const ref of refs)
-                if (!descendants.some((task) => task.artifactRefs.includes(ref.artifactRef)))
+                if (!readable(ref.artifactRef))
                   fail('UNAUTHORIZED', 'Context artifact is outside the delegated subtree');
               result = this.requestHandoff(
                 flight,
@@ -1048,28 +1073,31 @@ class LocalEngine implements Engine {
                 (this.config.tools?.maxChildren ?? 32)
               )
                 this.toolLimit(flight, 'DELEGATION_CHILD_LIMIT');
-              const childSpec = taskSpec({
-                goal,
-                runtime: parent.spec.runtime,
-                acceptance: parent.spec.acceptance,
-                parentTaskId: parent.id,
-                contextPlan: plan,
-                ...(args.dependencyTaskIds !== undefined
-                  ? { dependencyTaskIds: args.dependencyTaskIds }
-                  : {}),
-                ...(parent.spec.budget ? { budget: parent.spec.budget } : {}),
-                ...(args.writeScope !== undefined
-                  ? { writeScope: args.writeScope }
-                  : parent.spec.writeScope
-                    ? { writeScope: parent.spec.writeScope }
+              const childSpec = taskSpec(
+                {
+                  goal,
+                  runtime: parent.spec.runtime,
+                  acceptance: parent.spec.acceptance,
+                  parentTaskId: parent.id,
+                  contextPlan: plan,
+                  ...(args.dependencyTaskIds !== undefined
+                    ? { dependencyTaskIds: args.dependencyTaskIds }
                     : {}),
-                // Children inherit a narrowed parent path unless they name their own scope.
-                ...(args.writePath !== undefined
-                  ? { writePath: args.writePath }
-                  : args.writeScope === undefined && parent.spec.writePath
-                    ? { writePath: parent.spec.writePath }
-                    : {}),
-              });
+                  ...(parent.spec.budget ? { budget: parent.spec.budget } : {}),
+                  ...(args.writeScope !== undefined
+                    ? { writeScope: args.writeScope }
+                    : parent.spec.writeScope
+                      ? { writeScope: parent.spec.writeScope }
+                      : {}),
+                  // Children inherit a narrowed parent path unless they name their own scope.
+                  ...(args.writePath !== undefined
+                    ? { writePath: args.writePath }
+                    : args.writeScope === undefined && parent.spec.writePath
+                      ? { writePath: parent.spec.writePath }
+                      : {}),
+                },
+                this.defaultQueueWaitMs,
+              );
               for (const dependency of childSpec.dependencyTaskIds ?? []) authorize(dependency);
               for (const ref of childSpec.contextPlan!.contextRefs) {
                 if (!descendants.some((task) => task.artifactRefs.includes(ref.artifactRef)))
@@ -1161,11 +1189,7 @@ class LocalEngine implements Engine {
               authorize(message.taskId);
               result = message;
             } else if (kind === 'artifact') {
-              if (
-                !descendants.some((task) => task.artifactRefs.includes(id)) &&
-                !dependencies.some((dependency) => this.task(dependency).artifactRefs.includes(id))
-              )
-                fail('UNAUTHORIZED', 'Artifact is outside the delegated subtree');
+              if (!readable(id)) fail('UNAUTHORIZED', 'Artifact is outside the delegated subtree');
               result = { artifactRef: id, text: this.store.artifactText(id, 65536) };
             } else if (kind === 'handoff') {
               this.tryExpireHandoffs();
@@ -1218,11 +1242,7 @@ class LocalEngine implements Engine {
     const route = task.routing!;
     this.store.transaction(() => {
       const current = this.task(task.id);
-      if (
-        current.routing?.submittedAt ||
-        !['queued', 'waiting_dependency'].includes(current.status)
-      )
-        return;
+      if (current.routing?.submittedAt || current.status !== 'queued') return;
       route.expiredAt = this.time();
       const fallback = route.fallbackModes.shift();
       if (fallback) {
@@ -1621,6 +1641,20 @@ class LocalEngine implements Engine {
     status?: TaskSnapshot['status'],
     reason?: string | null,
   ): void {
+    // SPEC-0015 Q01: only time spent queued counts, so each new stay in the queue restarts the wait.
+    if (
+      status === 'queued' &&
+      task.status !== 'queued' &&
+      task.routing &&
+      !task.routing.submittedAt
+    ) {
+      const wall = this.clock.wallNow();
+      task.routing.enqueuedAt = new Date(wall).toISOString();
+      task.routing.deadlineAt = new Date(wall + task.routing.maxQueueWaitMs).toISOString();
+      delete task.routing.expiredAt;
+      // A timer from an earlier stay would still carry the old deadline (Q02.3).
+      this.stopQueue(task.id);
+    }
     if (status) task.status = status;
     if (reason !== undefined) task.reason = reason;
     task.revision++;
@@ -1701,6 +1735,16 @@ class LocalEngine implements Engine {
       );
       return op;
     });
+  }
+  /** Effective rules come from configuration and the active store only (SPEC-0014 W03/W04). */
+  private loadRules(): void {
+    const loaded = effectiveRules(
+      this.store.workspace,
+      this.config.verificationRules,
+      this.store.all('verification_rules'),
+    );
+    this.verificationRules = loaded.rules;
+    this.runtimeRuleKeys = loaded.runtime;
   }
   private recover(): void {
     this.store.transaction(() => {
@@ -2012,15 +2056,7 @@ class LocalEngine implements Engine {
       if (!approveDelegation) return;
       this.admitWork();
       const status = this.dependencyState(task.spec);
-      // The routing wait starts at approval; the time spent awaiting the host never expires it.
-      if (task.routing && !task.routing.submittedAt) {
-        task.routing.enqueuedAt = this.time();
-        task.routing.deadlineAt = new Date(
-          this.clock.wallNow() + task.routing.maxQueueWaitMs,
-        ).toISOString();
-        delete task.routing.expiredAt;
-      }
-      this.stopQueue(task.id);
+      // The routing wait starts when the approved task enters the queue (SPEC-0015 Q01).
       this.saveTask(task, status, status === 'blocked' ? 'dependency_failed' : null);
       this.taskEvent(task, operationId);
       this.armQueue(task);
@@ -2102,6 +2138,7 @@ class LocalEngine implements Engine {
         this.controlPlane.bind(this.store);
         this.storage = new StorageGovernance(this.store, policy);
         this.accounting = new CostLedger(this.store, this.config);
+        this.loadRules();
       }
       return record;
     }
@@ -2276,7 +2313,7 @@ class LocalEngine implements Engine {
       }
       case 'tasks.create': {
         fields(p, ['spec', 'idempotencyKey']);
-        const spec = taskSpec(p.spec);
+        const spec = taskSpec(p.spec, this.defaultQueueWaitMs);
         const adapter = this.adapters.get(spec.runtime.provider);
         if (!adapter) fail('VALIDATION_ERROR', 'Provider is not configured');
         const capabilities = readRuntimeCapabilities(adapter);
@@ -2382,7 +2419,7 @@ class LocalEngine implements Engine {
         if (!context.owner || context.runtimeActor)
           fail('UNAUTHORIZED', 'Only the host owner can register verification rules');
         const [rule] = normalizeRules(this.store.workspace, [p.rule as VerificationRule]);
-        const key = `${rule.id}@${rule.version}`;
+        const key = ruleKey(rule.id, rule.version);
         let registered: FrozenVerificationRule | undefined;
         const op = this.operation(
           method,
@@ -2517,7 +2554,7 @@ class LocalEngine implements Engine {
         return {
           rules: this.verificationRules.map((rule) => ({
             ...rule,
-            source: this.runtimeRuleKeys.has(`${rule.id}@${rule.version}`) ? 'runtime' : 'config',
+            source: this.runtimeRuleKeys.has(ruleKey(rule.id, rule.version)) ? 'runtime' : 'config',
           })),
         };
       case 'tasks.list': {
@@ -3888,16 +3925,6 @@ class LocalEngine implements Engine {
         this.expireMessages();
         this.tryExpireHandoffs();
         this.refreshDependencies();
-        for (const task of this.store.tasksInState('waiting_dependency')) {
-          this.armQueue(task);
-          if (
-            task.routing &&
-            !task.routing.submittedAt &&
-            (Date.parse(task.routing.deadlineAt) <= this.clock.wallNow() ||
-              (this.queueTimers.get(task.id)?.deadline ?? Infinity) <= this.clock.monotonicNow())
-          )
-            this.expireQueue(task);
-        }
         const queued = this.store.queuedTasks();
         if (!queued.length) return;
         let canDispatch = this.scheduler().canDispatch && !this.storage.status().backpressured;

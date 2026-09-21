@@ -81,6 +81,10 @@ jobs:
       - name: Install exact native development dependencies (no login or model calls)
         run: npm install --ignore-scripts --no-save --package-lock=false @anthropic-ai/claude-agent-sdk@0.3.274 @openai/codex@0.153.4
       - run: node scripts/check-native-protocol.mjs
+      # The writable Claude profile requires the OS sandbox; on Linux that is bubblewrap and socat.
+      - name: Install the Linux sandbox dependencies of the writable Claude profile
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends bubblewrap socat
       - name: Real Claude binary with a scripted loopback gateway (no paid models)
         run: node scripts/native-gateway-smoke.mjs claude dist/verification/native-claude.json
       - name: Real Codex binary with a scripted loopback gateway (no paid models)

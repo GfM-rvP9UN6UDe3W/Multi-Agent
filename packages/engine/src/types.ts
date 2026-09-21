@@ -557,6 +557,8 @@ export interface EngineConfig {
     maxQuarantinedDispatches?: number;
     maxLogicalSessions?: number;
     maxQueuedTasks?: number;
+    /** Queue wait of a task whose plan does not set one; 0..604800000, default 30000 (SPEC-0015 Q04). */
+    defaultMaxQueueWaitMs?: number;
   };
   /** `model` is shorthand for a one-item `models` list; configure at most one of them. */
   providers?: Record<

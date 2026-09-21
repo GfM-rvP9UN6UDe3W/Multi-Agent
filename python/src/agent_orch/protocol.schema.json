@@ -627,6 +627,13 @@
           "type": "integer",
           "minimum": 1,
           "maximum": 10000
+        },
+        "defaultMaxQueueWaitMs": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 604800000,
+          "default": 30000,
+          "description": "Queue wait of a task whose contextPlan does not set maxQueueWaitMs, resolved at admission. Only time spent queued counts (SPEC-0015)."
         }
       },
       "allOf": [
@@ -1771,7 +1778,7 @@
         "maxQueueWaitMs": {
           "type": "integer",
           "minimum": 0,
-          "maximum": 300000
+          "maximum": 604800000
         }
       },
       "required": ["requestedMode", "independent"],
@@ -1806,7 +1813,7 @@
         "maxQueueWaitMs": {
           "type": "integer",
           "minimum": 0,
-          "maximum": 300000
+          "maximum": 604800000
         },
         "fallbackModes": {
           "type": "array",
