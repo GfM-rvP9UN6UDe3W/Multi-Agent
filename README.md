@@ -6,7 +6,7 @@ Licensed under the [MIT License](LICENSE). Commercial use, modification and redi
 
 **The five npm packages are ESM-only; direct `require()` is not exported.** Host-side single-file CJS and ESM bundles are supported through the [bundled-host integration contract](docs/acceptance/bundled-host.md). A Claude consumer installs **`@agent-orch/sdk` + `@agent-orch/engine` + `@agent-orch/adapter-claude`**. The SDK alone does not install a provider. The other packages are `@agent-orch/adapter-codex` and `@agent-orch/cli`. Local RC tarballs and their SHA-256 manifest can be installed without public npm publication.
 
-**Development packages; not published to npm or PyPI.** SPEC-0001–0012 cover storage, routing, accounting, bundled-host delivery, client-pause precedence and scoped tool queries. The current uncommitted source passed **442 Node tests and 49 Python tests** on 2026-09-21, with no skipped tests; nine package-installation/bundle modes also passed. See the [completion matrix](docs/specs/0009-complete-design.md#completion-matrix), [original implementation evidence](docs/tdd/0009-complete-design.md), [RC/bundle verification evidence](docs/tdd/0010-bundled-host-delivery.md), [release-readiness evidence](docs/tdd/0011-release-readiness.md), and [current fix evidence](docs/tdd/0012-tool-control-and-capacity.md). Real Claude/Codex binaries also pass tools, approval, saved-history fork/reuse/compact and both-client checks against a scripted loopback gateway on the previous committed source. See the [remaining-gate ledger](docs/acceptance/readiness.md). Real-model acceptance, actual OS sandbox enforcement, external application integration, economic benefit and registry publication remain unverified boundaries. Ordinary tests use explicit fake runtimes or owned protocol fixtures without login credentials or model requests.
+**Development packages; not published to npm or PyPI.** SPEC-0001–0012 cover storage, routing, accounting, bundled-host delivery, client-pause precedence and scoped tool queries. SPEC-0012 source `8ee5078` passed **442 Node tests and 49 Python tests** in each of four contract CI jobs on 2026-09-21, with no skipped tests; nine package-installation/bundle modes also passed. See the [completion matrix](docs/specs/0009-complete-design.md#completion-matrix), [original implementation evidence](docs/tdd/0009-complete-design.md), [RC/bundle verification evidence](docs/tdd/0010-bundled-host-delivery.md), [release-readiness evidence](docs/tdd/0011-release-readiness.md), [current fix evidence](docs/tdd/0012-tool-control-and-capacity.md), and [exact CI record](docs/tdd/0012-ci.json). Real Claude/Codex binaries also pass tools, approval, saved-history fork/reuse/compact and both-client checks against a scripted loopback gateway on Ubuntu and macOS. See the [remaining-gate ledger](docs/acceptance/readiness.md). Real-model acceptance, actual OS sandbox enforcement, external application integration, economic benefit and registry publication remain unverified boundaries. Ordinary tests use explicit fake runtimes or owned protocol fixtures without login credentials or model requests.
 
 ## Install and integrate
 
@@ -20,20 +20,20 @@ Choose packages for the process that will own or connect to the engine:
 | `@agent-orch/adapter-codex` | Codex App Server adapter | Codex execution |
 | `@agent-orch/cli` | Standalone/managed Node host and commands | CLI or Python-owned host operation |
 
-Use local tarballs from one candidate version. The current local MIT candidate is `0.1.0-rc.5` (Python `0.1.0rc5`), built from the uncommitted SPEC-0012 source. To reproduce it in a fresh artifact directory:
+Use local tarballs from one candidate version. The clean committed-source handoff is `0.1.0-rc.6` (Python `0.1.0rc6`). The immutable rc.5 files retain their precommit provenance and are not reused for this handoff. To reproduce rc.6 in a fresh artifact directory:
 
 ```sh
 npm ci --ignore-scripts
-npm run build:packages -- dist/release/0.1.0-rc.5 --version 0.1.0-rc.5
-/absolute/build-env/bin/python scripts/build-python.py dist/release/0.1.0-rc.5 --version 0.1.0-rc.5
+npm run build:packages -- dist/release/0.1.0-rc.6 --version 0.1.0-rc.6
+/absolute/build-env/bin/python scripts/build-python.py dist/release/0.1.0-rc.6 --version 0.1.0-rc.6
 ```
 
 This candidate is local and unpublished. The builds write five npm tarballs, a Python wheel/sdist and SHA-256 manifests. Existing candidate directories are immutable; use a new version for changed bytes. Verify hashes before installation. In the consuming project, install the three Claude packages together, substituting the absolute artifact directory:
 
 ```sh
-npm install /absolute/rc/agent-orch-sdk-0.1.0-rc.5.tgz \
-  /absolute/rc/agent-orch-engine-0.1.0-rc.5.tgz \
-  /absolute/rc/agent-orch-adapter-claude-0.1.0-rc.5.tgz
+npm install /absolute/rc/agent-orch-sdk-0.1.0-rc.6.tgz \
+  /absolute/rc/agent-orch-engine-0.1.0-rc.6.tgz \
+  /absolute/rc/agent-orch-adapter-claude-0.1.0-rc.6.tgz
 ```
 
 Keep the generated npm lockfile. Install the Codex adapter instead for Codex execution; add the CLI when running a separate Node host. Python installs its wheel separately and connects to that Node host; the Python package does not bundle or download an engine.
@@ -94,7 +94,7 @@ See the [JSON Schema](schemas/protocol.schema.json), generated TypeScript `WireT
 
 ## Local development and verification
 
-Declared minimums are Node.js 22.18+ and Python 3.11+. Recorded local verification used Node.js 22.18.0 and 24.14.0, and Python 3.14.6. Node's built-in SQLite prints an experimental warning on that verified runtime. The [CI matrix](.github/workflows/offline.yml) configures macOS/Linux and minimum/current runtime jobs. The latest committed source `597f240` passed all six jobs in [run 35530017913](https://github.com/masonlee39/Multi-Agent/actions/runs/35530017913): four full contract/package/capacity environments and two real-native scripted-gateway jobs. The uncommitted SPEC-0012 changes passed local tests and package smoke, but have not run in remote CI. See the [recorded prior CI evidence](docs/tdd/0011-ci.json).
+Declared minimums are Node.js 22.18+ and Python 3.11+. Recorded local verification used Node.js 22.18.0 and 24.14.0, and Python 3.14.6. Node's built-in SQLite prints an experimental warning on that verified runtime. The [CI matrix](.github/workflows/offline.yml) configures macOS/Linux and minimum/current runtime jobs. SPEC-0012 implementation source `8ee5078` passed all six jobs in [run 35561652769](https://github.com/masonlee39/Multi-Agent/actions/runs/35561652769): four full contract/package/capacity environments and two real-native scripted-gateway jobs. See the [recorded SPEC-0012 CI evidence](docs/tdd/0012-ci.json).
 
 Run from the repository root:
 

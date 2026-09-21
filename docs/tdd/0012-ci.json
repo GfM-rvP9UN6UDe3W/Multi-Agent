@@ -1,0 +1,2851 @@
+{
+  "schemaVersion": 1,
+  "repository": "masonlee39/Multi-Agent",
+  "workflow": "Offline contracts and packages",
+  "retrievedAt": "2026-09-21T06:07:23.809Z",
+  "scope": "SPEC-0012 source commit and three CI-hardening follow-ups",
+  "remediationCommits": [
+    {
+      "commit": "52fdafbcb5d1f23520ac6de61b9836e9aba0b371",
+      "subject": "test: wait for subprocess readiness",
+      "addresses": [
+        "poll late Claude resource release instead of sleeping 250 ms",
+        "wait for the host listening marker instead of socket-file existence"
+      ]
+    },
+    {
+      "commit": "5645d3a1982d901f5c0a1be2f975ab06c0795af9",
+      "subject": "test: harden bounded lifecycle checks",
+      "addresses": [
+        "start the 300 ms host-stop observation after child readiness",
+        "allow 15 s for the disk-heavy crash child and report child.error",
+        "use a scoped 10 s state wait",
+        "collect bounded GC batches until the asserted tombstone"
+      ]
+    },
+    {
+      "commit": "8ee507830b295c03d97845f564e727885eab8b14",
+      "subject": "test: bound subprocess readiness",
+      "addresses": [
+        "reject readiness on child error or early exit and cap it at 5 s",
+        "apply a 30 s default node:test timeout without changing the test file set or concurrency"
+      ]
+    }
+  ],
+  "attributionBoundary": "The cancelled 5645d3a job has no downloadable log archive. Its exact last test is unknown; the 8ee5078 mapping is a bounded-harness correction followed by final GREEN, not proof of the cancelled job's precise internal wait.",
+  "runs": [
+    {
+      "runId": 35558527513,
+      "commit": "9ce65e4867dcdaabe29d9277790e50fdd5dcffdc",
+      "conclusion": "failure",
+      "url": "https://github.com/masonlee39/Multi-Agent/actions/runs/35558527513",
+      "jobs": [
+        {
+          "id": 106206784713,
+          "name": "pinned-native-protocol (ubuntu-24.04)",
+          "status": "completed",
+          "conclusion": "success",
+          "steps": [
+            {
+              "name": "Set up job",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 1
+            },
+            {
+              "name": "Run actions/checkout@v4",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 2
+            },
+            {
+              "name": "Run actions/setup-node@v4",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 3
+            },
+            {
+              "name": "Run actions/setup-python@v5",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 4
+            },
+            {
+              "name": "Run npm ci --ignore-scripts",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 5
+            },
+            {
+              "name": "Install exact native development dependencies (no login or model calls)",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 6
+            },
+            {
+              "name": "Run node scripts/check-native-protocol.mjs",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 7
+            },
+            {
+              "name": "Real Claude binary with a scripted loopback gateway (no paid models)",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 8
+            },
+            {
+              "name": "Real Codex binary with a scripted loopback gateway (no paid models)",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 9
+            },
+            {
+              "name": "Run actions/upload-artifact@v4",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 10
+            },
+            {
+              "name": "Post Run actions/setup-python@v5",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 18
+            },
+            {
+              "name": "Post Run actions/setup-node@v4",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 19
+            },
+            {
+              "name": "Post Run actions/checkout@v4",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 20
+            },
+            {
+              "name": "Complete job",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 21
+            }
+          ]
+        },
+        {
+          "id": 106206784858,
+          "name": "contracts (macos-14, 22.18.0, 3.11.9)",
+          "status": "completed",
+          "conclusion": "success",
+          "steps": [
+            {
+              "name": "Set up job",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 1
+            },
+            {
+              "name": "Run actions/checkout@v4",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 2
+            },
+            {
+              "name": "Run actions/setup-node@v4",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 3
+            },
+            {
+              "name": "Run actions/setup-python@v5",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 4
+            },
+            {
+              "name": "Run npm ci --ignore-scripts",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 5
+            },
+            {
+              "name": "Run npm run check:generated && npm run typecheck && npm run format:check",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 6
+            },
+            {
+              "name": "Node contract tests",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 7
+            },
+            {
+              "name": "Python contract tests",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 8
+            },
+            {
+              "name": "Run python -m pip install setuptools==80.9.0 wheel==0.45.1 build==1.2.2.post1 packaging==25.0 pyproject_hooks==1.2.0",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 9
+            },
+            {
+              "name": "Run npm run build:packages",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 10
+            },
+            {
+              "name": "Run python scripts/build-python.py dist/release",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 11
+            },
+            {
+              "name": "Clean offline npm, wheel and sdist installation",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 12
+            },
+            {
+              "name": "Run node scripts/capacity-benchmark.ts 1000,10000 100 > dist/capacity.json",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 13
+            },
+            {
+              "name": "Run actions/upload-artifact@v4",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 14
+            },
+            {
+              "name": "Post Run actions/setup-python@v5",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 26
+            },
+            {
+              "name": "Post Run actions/setup-node@v4",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 27
+            },
+            {
+              "name": "Post Run actions/checkout@v4",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 28
+            },
+            {
+              "name": "Complete job",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 29
+            }
+          ]
+        },
+        {
+          "id": 106206784869,
+          "name": "contracts (ubuntu-24.04, 22.18.0, 3.11.13)",
+          "status": "completed",
+          "conclusion": "success",
+          "steps": [
+            {
+              "name": "Set up job",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 1
+            },
+            {
+              "name": "Run actions/checkout@v4",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 2
+            },
+            {
+              "name": "Run actions/setup-node@v4",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 3
+            },
+            {
+              "name": "Run actions/setup-python@v5",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 4
+            },
+            {
+              "name": "Run npm ci --ignore-scripts",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 5
+            },
+            {
+              "name": "Run npm run check:generated && npm run typecheck && npm run format:check",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 6
+            },
+            {
+              "name": "Node contract tests",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 7
+            },
+            {
+              "name": "Python contract tests",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 8
+            },
+            {
+              "name": "Run python -m pip install setuptools==80.9.0 wheel==0.45.1 build==1.2.2.post1 packaging==25.0 pyproject_hooks==1.2.0",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 9
+            },
+            {
+              "name": "Run npm run build:packages",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 10
+            },
+            {
+              "name": "Run python scripts/build-python.py dist/release",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 11
+            },
+            {
+              "name": "Clean offline npm, wheel and sdist installation",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 12
+            },
+            {
+              "name": "Run node scripts/capacity-benchmark.ts 1000,10000 100 > dist/capacity.json",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 13
+            },
+            {
+              "name": "Run actions/upload-artifact@v4",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 14
+            },
+            {
+              "name": "Post Run actions/setup-python@v5",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 26
+            },
+            {
+              "name": "Post Run actions/setup-node@v4",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 27
+            },
+            {
+              "name": "Post Run actions/checkout@v4",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 28
+            },
+            {
+              "name": "Complete job",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 29
+            }
+          ]
+        },
+        {
+          "id": 106206784946,
+          "name": "contracts (macos-14, 24.14.0, 3.14.6)",
+          "status": "completed",
+          "conclusion": "success",
+          "steps": [
+            {
+              "name": "Set up job",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 1
+            },
+            {
+              "name": "Run actions/checkout@v4",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 2
+            },
+            {
+              "name": "Run actions/setup-node@v4",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 3
+            },
+            {
+              "name": "Run actions/setup-python@v5",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 4
+            },
+            {
+              "name": "Run npm ci --ignore-scripts",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 5
+            },
+            {
+              "name": "Run npm run check:generated && npm run typecheck && npm run format:check",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 6
+            },
+            {
+              "name": "Node contract tests",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 7
+            },
+            {
+              "name": "Python contract tests",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 8
+            },
+            {
+              "name": "Run python -m pip install setuptools==80.9.0 wheel==0.45.1 build==1.2.2.post1 packaging==25.0 pyproject_hooks==1.2.0",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 9
+            },
+            {
+              "name": "Run npm run build:packages",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 10
+            },
+            {
+              "name": "Run python scripts/build-python.py dist/release",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 11
+            },
+            {
+              "name": "Clean offline npm, wheel and sdist installation",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 12
+            },
+            {
+              "name": "Run node scripts/capacity-benchmark.ts 1000,10000 100 > dist/capacity.json",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 13
+            },
+            {
+              "name": "Run actions/upload-artifact@v4",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 14
+            },
+            {
+              "name": "Post Run actions/setup-python@v5",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 26
+            },
+            {
+              "name": "Post Run actions/setup-node@v4",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 27
+            },
+            {
+              "name": "Post Run actions/checkout@v4",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 28
+            },
+            {
+              "name": "Complete job",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 29
+            }
+          ]
+        },
+        {
+          "id": 106206784950,
+          "name": "contracts (ubuntu-24.04, 24.14.0, 3.14.6)",
+          "status": "completed",
+          "conclusion": "failure",
+          "steps": [
+            {
+              "name": "Set up job",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 1
+            },
+            {
+              "name": "Run actions/checkout@v4",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 2
+            },
+            {
+              "name": "Run actions/setup-node@v4",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 3
+            },
+            {
+              "name": "Run actions/setup-python@v5",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 4
+            },
+            {
+              "name": "Run npm ci --ignore-scripts",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 5
+            },
+            {
+              "name": "Run npm run check:generated && npm run typecheck && npm run format:check",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 6
+            },
+            {
+              "name": "Node contract tests",
+              "status": "completed",
+              "conclusion": "failure",
+              "number": 7
+            },
+            {
+              "name": "Python contract tests",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 8
+            },
+            {
+              "name": "Run python -m pip install setuptools==80.9.0 wheel==0.45.1 build==1.2.2.post1 packaging==25.0 pyproject_hooks==1.2.0",
+              "status": "completed",
+              "conclusion": "skipped",
+              "number": 9
+            },
+            {
+              "name": "Run npm run build:packages",
+              "status": "completed",
+              "conclusion": "skipped",
+              "number": 10
+            },
+            {
+              "name": "Run python scripts/build-python.py dist/release",
+              "status": "completed",
+              "conclusion": "skipped",
+              "number": 11
+            },
+            {
+              "name": "Clean offline npm, wheel and sdist installation",
+              "status": "completed",
+              "conclusion": "skipped",
+              "number": 12
+            },
+            {
+              "name": "Run node scripts/capacity-benchmark.ts 1000,10000 100 > dist/capacity.json",
+              "status": "completed",
+              "conclusion": "skipped",
+              "number": 13
+            },
+            {
+              "name": "Run actions/upload-artifact@v4",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 14
+            },
+            {
+              "name": "Post Run actions/setup-python@v5",
+              "status": "completed",
+              "conclusion": "skipped",
+              "number": 26
+            },
+            {
+              "name": "Post Run actions/setup-node@v4",
+              "status": "completed",
+              "conclusion": "skipped",
+              "number": 27
+            },
+            {
+              "name": "Post Run actions/checkout@v4",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 28
+            },
+            {
+              "name": "Complete job",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 29
+            }
+          ],
+          "failureProof": [
+            "2026-09-21T03:45:32.5712301Z ℹ tests 442",
+            "2026-09-21T03:45:32.5712880Z ℹ pass 440",
+            "2026-09-21T03:45:32.5713214Z ℹ fail 2",
+            "2026-09-21T03:45:32.5713514Z ℹ cancelled 0",
+            "2026-09-21T03:45:32.5713819Z ℹ skipped 0",
+            "2026-09-21T03:45:53.7735954Z Ran 49 tests in 20.930s",
+            "2026-09-21T03:45:53.7738970Z OK",
+            "2026-09-21T03:45:32.5714797Z ✖ failing tests:",
+            "2026-09-21T03:45:32.5714950Z ",
+            "2026-09-21T03:45:32.5715313Z test at tests/contract/claude-interrupt-lifecycle.test.ts:196:1",
+            "2026-09-21T03:45:32.5716424Z ✖ AC-I04 late native terminal releases capacity without completing expired pause or replaying (2361.103205ms)",
+            "2026-09-21T03:45:32.5717601Z   AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:",
+            "2026-09-21T03:45:32.5718111Z   ",
+            "2026-09-21T03:45:32.5718642Z   1 !== 0",
+            "2026-09-21T03:45:32.5718899Z   ",
+            "2026-09-21T03:45:32.5719770Z       at TestContext.<anonymous> (file:///home/runner/work/Multi-Agent/Multi-Agent/tests/contract/claude-interrupt-lifecycle.test.ts:212:12)",
+            "2026-09-21T03:45:32.5720874Z       at process.processTicksAndRejections (node:internal/process/task_queues:104:5)",
+            "2026-09-21T03:45:32.5721591Z       at async Test.run (node:internal/test_runner/test:1125:7)",
+            "2026-09-21T03:45:32.5722277Z       at async Test.processPendingSubtests (node:internal/test_runner/test:787:7) {",
+            "2026-09-21T03:45:32.5722881Z     generatedMessage: true,",
+            "2026-09-21T03:45:32.5723228Z     code: 'ERR_ASSERTION',",
+            "2026-09-21T03:45:32.5723511Z     actual: 1,",
+            "2026-09-21T03:45:32.5723807Z     expected: 0,",
+            "2026-09-21T03:45:32.5724109Z     operator: 'strictEqual',",
+            "2026-09-21T03:45:32.5724607Z     diff: 'simple'",
+            "2026-09-21T03:45:32.5724899Z   }",
+            "2026-09-21T03:45:32.5725038Z ",
+            "2026-09-21T03:45:32.5725296Z test at tests/contract/cross-language.test.ts:10:1",
+            "2026-09-21T03:45:32.5726261Z ✖ AC12 TS submits, Python replays and approves, TS observes the same completed task (3886.94942ms)",
+            "2026-09-21T03:45:32.5727344Z   Error: Host startup failed: (node:3010) ExperimentalWarning: SQLite is an experimental feature and might change at any time",
+            "2026-09-21T03:45:32.5728263Z   (Use `node --trace-warnings ...` to show where the warning was created)",
+            "2026-09-21T03:45:32.5728910Z   ",
+            "2026-09-21T03:45:32.5729675Z       at TestContext.<anonymous> (file:///home/runner/work/Multi-Agent/Multi-Agent/tests/contract/cross-language.test.ts:50:17)",
+            "2026-09-21T03:45:32.5730547Z       at async Test.run (node:internal/test_runner/test:1125:7)",
+            "2026-09-21T03:45:32.5731221Z       at async startSubtestAfterBootstrap (node:internal/test_runner/harness:358:3)",
+            "2026-09-21T03:45:32.5823370Z ##[error]Process completed with exit code 1."
+          ]
+        },
+        {
+          "id": 106206784991,
+          "name": "pinned-native-protocol (macos-14)",
+          "status": "completed",
+          "conclusion": "success",
+          "steps": [
+            {
+              "name": "Set up job",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 1
+            },
+            {
+              "name": "Run actions/checkout@v4",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 2
+            },
+            {
+              "name": "Run actions/setup-node@v4",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 3
+            },
+            {
+              "name": "Run actions/setup-python@v5",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 4
+            },
+            {
+              "name": "Run npm ci --ignore-scripts",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 5
+            },
+            {
+              "name": "Install exact native development dependencies (no login or model calls)",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 6
+            },
+            {
+              "name": "Run node scripts/check-native-protocol.mjs",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 7
+            },
+            {
+              "name": "Real Claude binary with a scripted loopback gateway (no paid models)",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 8
+            },
+            {
+              "name": "Real Codex binary with a scripted loopback gateway (no paid models)",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 9
+            },
+            {
+              "name": "Run actions/upload-artifact@v4",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 10
+            },
+            {
+              "name": "Post Run actions/setup-python@v5",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 18
+            },
+            {
+              "name": "Post Run actions/setup-node@v4",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 19
+            },
+            {
+              "name": "Post Run actions/checkout@v4",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 20
+            },
+            {
+              "name": "Complete job",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 21
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "runId": 35559024815,
+      "commit": "52fdafbcb5d1f23520ac6de61b9836e9aba0b371",
+      "conclusion": "failure",
+      "url": "https://github.com/masonlee39/Multi-Agent/actions/runs/35559024815",
+      "jobs": [
+        {
+          "id": 106208176037,
+          "name": "pinned-native-protocol (ubuntu-24.04)",
+          "status": "completed",
+          "conclusion": "success",
+          "steps": [
+            {
+              "name": "Set up job",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 1
+            },
+            {
+              "name": "Run actions/checkout@v4",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 2
+            },
+            {
+              "name": "Run actions/setup-node@v4",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 3
+            },
+            {
+              "name": "Run actions/setup-python@v5",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 4
+            },
+            {
+              "name": "Run npm ci --ignore-scripts",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 5
+            },
+            {
+              "name": "Install exact native development dependencies (no login or model calls)",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 6
+            },
+            {
+              "name": "Run node scripts/check-native-protocol.mjs",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 7
+            },
+            {
+              "name": "Real Claude binary with a scripted loopback gateway (no paid models)",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 8
+            },
+            {
+              "name": "Real Codex binary with a scripted loopback gateway (no paid models)",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 9
+            },
+            {
+              "name": "Run actions/upload-artifact@v4",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 10
+            },
+            {
+              "name": "Post Run actions/setup-python@v5",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 18
+            },
+            {
+              "name": "Post Run actions/setup-node@v4",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 19
+            },
+            {
+              "name": "Post Run actions/checkout@v4",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 20
+            },
+            {
+              "name": "Complete job",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 21
+            }
+          ]
+        },
+        {
+          "id": 106208176159,
+          "name": "pinned-native-protocol (macos-14)",
+          "status": "completed",
+          "conclusion": "success",
+          "steps": [
+            {
+              "name": "Set up job",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 1
+            },
+            {
+              "name": "Run actions/checkout@v4",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 2
+            },
+            {
+              "name": "Run actions/setup-node@v4",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 3
+            },
+            {
+              "name": "Run actions/setup-python@v5",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 4
+            },
+            {
+              "name": "Run npm ci --ignore-scripts",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 5
+            },
+            {
+              "name": "Install exact native development dependencies (no login or model calls)",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 6
+            },
+            {
+              "name": "Run node scripts/check-native-protocol.mjs",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 7
+            },
+            {
+              "name": "Real Claude binary with a scripted loopback gateway (no paid models)",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 8
+            },
+            {
+              "name": "Real Codex binary with a scripted loopback gateway (no paid models)",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 9
+            },
+            {
+              "name": "Run actions/upload-artifact@v4",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 10
+            },
+            {
+              "name": "Post Run actions/setup-python@v5",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 18
+            },
+            {
+              "name": "Post Run actions/setup-node@v4",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 19
+            },
+            {
+              "name": "Post Run actions/checkout@v4",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 20
+            },
+            {
+              "name": "Complete job",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 21
+            }
+          ]
+        },
+        {
+          "id": 106208176189,
+          "name": "contracts (ubuntu-24.04, 22.18.0, 3.11.13)",
+          "status": "completed",
+          "conclusion": "failure",
+          "steps": [
+            {
+              "name": "Set up job",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 1
+            },
+            {
+              "name": "Run actions/checkout@v4",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 2
+            },
+            {
+              "name": "Run actions/setup-node@v4",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 3
+            },
+            {
+              "name": "Run actions/setup-python@v5",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 4
+            },
+            {
+              "name": "Run npm ci --ignore-scripts",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 5
+            },
+            {
+              "name": "Run npm run check:generated && npm run typecheck && npm run format:check",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 6
+            },
+            {
+              "name": "Node contract tests",
+              "status": "completed",
+              "conclusion": "failure",
+              "number": 7
+            },
+            {
+              "name": "Python contract tests",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 8
+            },
+            {
+              "name": "Run python -m pip install setuptools==80.9.0 wheel==0.45.1 build==1.2.2.post1 packaging==25.0 pyproject_hooks==1.2.0",
+              "status": "completed",
+              "conclusion": "skipped",
+              "number": 9
+            },
+            {
+              "name": "Run npm run build:packages",
+              "status": "completed",
+              "conclusion": "skipped",
+              "number": 10
+            },
+            {
+              "name": "Run python scripts/build-python.py dist/release",
+              "status": "completed",
+              "conclusion": "skipped",
+              "number": 11
+            },
+            {
+              "name": "Clean offline npm, wheel and sdist installation",
+              "status": "completed",
+              "conclusion": "skipped",
+              "number": 12
+            },
+            {
+              "name": "Run node scripts/capacity-benchmark.ts 1000,10000 100 > dist/capacity.json",
+              "status": "completed",
+              "conclusion": "skipped",
+              "number": 13
+            },
+            {
+              "name": "Run actions/upload-artifact@v4",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 14
+            },
+            {
+              "name": "Post Run actions/setup-python@v5",
+              "status": "completed",
+              "conclusion": "skipped",
+              "number": 26
+            },
+            {
+              "name": "Post Run actions/setup-node@v4",
+              "status": "completed",
+              "conclusion": "skipped",
+              "number": 27
+            },
+            {
+              "name": "Post Run actions/checkout@v4",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 28
+            },
+            {
+              "name": "Complete job",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 29
+            }
+          ],
+          "failureProof": [
+            "2026-09-21T03:54:46.9634217Z # tests 442",
+            "2026-09-21T03:54:46.9634529Z # pass 441",
+            "2026-09-21T03:54:46.9634687Z # fail 1",
+            "2026-09-21T03:54:46.9634842Z # cancelled 0",
+            "2026-09-21T03:54:46.9635004Z # skipped 0",
+            "2026-09-21T03:55:11.6382572Z Ran 49 tests in 24.457s",
+            "2026-09-21T03:55:11.6382996Z OK",
+            "2026-09-21T03:54:36.6532096Z # Subtest: B15 actual owner crash at rollover.new_prepared.before recovers only the original switch",
+            "2026-09-21T03:54:36.6533205Z not ok 232 - B15 actual owner crash at rollover.new_prepared.before recovers only the original switch",
+            "2026-09-21T03:54:36.6533923Z   ---",
+            "2026-09-21T03:54:36.6534354Z   duration_ms: 5291.802102",
+            "2026-09-21T03:54:36.6534805Z   type: 'test'",
+            "2026-09-21T03:54:36.6535818Z   location: '/home/runner/work/Multi-Agent/Multi-Agent/tests/contract/rollover-crashes.test.ts:19:3'",
+            "2026-09-21T03:54:36.6536648Z   failureType: 'testCodeFailure'",
+            "2026-09-21T03:54:36.6537283Z   error: |-",
+            "2026-09-21T03:54:36.6537742Z     Expected values to be strictly equal:",
+            "2026-09-21T03:54:36.6538240Z     ",
+            "2026-09-21T03:54:36.6538625Z     null !== 73",
+            "2026-09-21T03:54:36.6539030Z     ",
+            "2026-09-21T03:54:36.6539447Z   code: 'ERR_ASSERTION'",
+            "2026-09-21T03:54:36.6539897Z   name: 'AssertionError'",
+            "2026-09-21T03:54:36.6540345Z   expected: 73",
+            "2026-09-21T03:54:36.6540864Z   actual: ~",
+            "2026-09-21T03:54:36.6541348Z   operator: 'strictEqual'",
+            "2026-09-21T03:54:36.6541670Z   stack: |-",
+            "2026-09-21T03:54:36.6542438Z     TestContext.<anonymous> (file:///home/runner/work/Multi-Agent/Multi-Agent/tests/contract/rollover-crashes.test.ts:46:14)",
+            "2026-09-21T03:54:36.6543254Z     Test.runInAsyncScope (node:async_hooks:214:14)",
+            "2026-09-21T03:54:36.6543737Z     Test.run (node:internal/test_runner/test:1047:25)",
+            "2026-09-21T03:54:36.6544339Z     Test.processPendingSubtests (node:internal/test_runner/test:744:18)",
+            "2026-09-21T03:54:36.6544946Z     Test.postRun (node:internal/test_runner/test:1173:19)",
+            "2026-09-21T03:54:36.6545437Z     Test.run (node:internal/test_runner/test:1101:12)",
+            "2026-09-21T03:54:36.6546041Z     async Test.processPendingSubtests (node:internal/test_runner/test:744:7)",
+            "2026-09-21T03:54:36.6546545Z   ..."
+          ]
+        },
+        {
+          "id": 106208176191,
+          "name": "contracts (macos-14, 22.18.0, 3.11.9)",
+          "status": "completed",
+          "conclusion": "success",
+          "steps": [
+            {
+              "name": "Set up job",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 1
+            },
+            {
+              "name": "Run actions/checkout@v4",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 2
+            },
+            {
+              "name": "Run actions/setup-node@v4",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 3
+            },
+            {
+              "name": "Run actions/setup-python@v5",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 4
+            },
+            {
+              "name": "Run npm ci --ignore-scripts",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 5
+            },
+            {
+              "name": "Run npm run check:generated && npm run typecheck && npm run format:check",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 6
+            },
+            {
+              "name": "Node contract tests",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 7
+            },
+            {
+              "name": "Python contract tests",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 8
+            },
+            {
+              "name": "Run python -m pip install setuptools==80.9.0 wheel==0.45.1 build==1.2.2.post1 packaging==25.0 pyproject_hooks==1.2.0",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 9
+            },
+            {
+              "name": "Run npm run build:packages",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 10
+            },
+            {
+              "name": "Run python scripts/build-python.py dist/release",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 11
+            },
+            {
+              "name": "Clean offline npm, wheel and sdist installation",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 12
+            },
+            {
+              "name": "Run node scripts/capacity-benchmark.ts 1000,10000 100 > dist/capacity.json",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 13
+            },
+            {
+              "name": "Run actions/upload-artifact@v4",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 14
+            },
+            {
+              "name": "Post Run actions/setup-python@v5",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 26
+            },
+            {
+              "name": "Post Run actions/setup-node@v4",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 27
+            },
+            {
+              "name": "Post Run actions/checkout@v4",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 28
+            },
+            {
+              "name": "Complete job",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 29
+            }
+          ]
+        },
+        {
+          "id": 106208176220,
+          "name": "contracts (macos-14, 24.14.0, 3.14.6)",
+          "status": "completed",
+          "conclusion": "success",
+          "steps": [
+            {
+              "name": "Set up job",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 1
+            },
+            {
+              "name": "Run actions/checkout@v4",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 2
+            },
+            {
+              "name": "Run actions/setup-node@v4",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 3
+            },
+            {
+              "name": "Run actions/setup-python@v5",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 4
+            },
+            {
+              "name": "Run npm ci --ignore-scripts",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 5
+            },
+            {
+              "name": "Run npm run check:generated && npm run typecheck && npm run format:check",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 6
+            },
+            {
+              "name": "Node contract tests",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 7
+            },
+            {
+              "name": "Python contract tests",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 8
+            },
+            {
+              "name": "Run python -m pip install setuptools==80.9.0 wheel==0.45.1 build==1.2.2.post1 packaging==25.0 pyproject_hooks==1.2.0",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 9
+            },
+            {
+              "name": "Run npm run build:packages",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 10
+            },
+            {
+              "name": "Run python scripts/build-python.py dist/release",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 11
+            },
+            {
+              "name": "Clean offline npm, wheel and sdist installation",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 12
+            },
+            {
+              "name": "Run node scripts/capacity-benchmark.ts 1000,10000 100 > dist/capacity.json",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 13
+            },
+            {
+              "name": "Run actions/upload-artifact@v4",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 14
+            },
+            {
+              "name": "Post Run actions/setup-python@v5",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 26
+            },
+            {
+              "name": "Post Run actions/setup-node@v4",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 27
+            },
+            {
+              "name": "Post Run actions/checkout@v4",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 28
+            },
+            {
+              "name": "Complete job",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 29
+            }
+          ]
+        },
+        {
+          "id": 106208176248,
+          "name": "contracts (ubuntu-24.04, 24.14.0, 3.14.6)",
+          "status": "completed",
+          "conclusion": "failure",
+          "steps": [
+            {
+              "name": "Set up job",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 1
+            },
+            {
+              "name": "Run actions/checkout@v4",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 2
+            },
+            {
+              "name": "Run actions/setup-node@v4",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 3
+            },
+            {
+              "name": "Run actions/setup-python@v5",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 4
+            },
+            {
+              "name": "Run npm ci --ignore-scripts",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 5
+            },
+            {
+              "name": "Run npm run check:generated && npm run typecheck && npm run format:check",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 6
+            },
+            {
+              "name": "Node contract tests",
+              "status": "completed",
+              "conclusion": "failure",
+              "number": 7
+            },
+            {
+              "name": "Python contract tests",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 8
+            },
+            {
+              "name": "Run python -m pip install setuptools==80.9.0 wheel==0.45.1 build==1.2.2.post1 packaging==25.0 pyproject_hooks==1.2.0",
+              "status": "completed",
+              "conclusion": "skipped",
+              "number": 9
+            },
+            {
+              "name": "Run npm run build:packages",
+              "status": "completed",
+              "conclusion": "skipped",
+              "number": 10
+            },
+            {
+              "name": "Run python scripts/build-python.py dist/release",
+              "status": "completed",
+              "conclusion": "skipped",
+              "number": 11
+            },
+            {
+              "name": "Clean offline npm, wheel and sdist installation",
+              "status": "completed",
+              "conclusion": "skipped",
+              "number": 12
+            },
+            {
+              "name": "Run node scripts/capacity-benchmark.ts 1000,10000 100 > dist/capacity.json",
+              "status": "completed",
+              "conclusion": "skipped",
+              "number": 13
+            },
+            {
+              "name": "Run actions/upload-artifact@v4",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 14
+            },
+            {
+              "name": "Post Run actions/setup-python@v5",
+              "status": "completed",
+              "conclusion": "skipped",
+              "number": 26
+            },
+            {
+              "name": "Post Run actions/setup-node@v4",
+              "status": "completed",
+              "conclusion": "skipped",
+              "number": 27
+            },
+            {
+              "name": "Post Run actions/checkout@v4",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 28
+            },
+            {
+              "name": "Complete job",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 29
+            }
+          ],
+          "failureProof": [
+            "2026-09-21T03:55:11.8292755Z ℹ tests 442",
+            "2026-09-21T03:55:11.8293534Z ℹ pass 439",
+            "2026-09-21T03:55:11.8293808Z ℹ fail 3",
+            "2026-09-21T03:55:11.8294156Z ℹ cancelled 0",
+            "2026-09-21T03:55:11.8294447Z ℹ skipped 0",
+            "2026-09-21T03:55:38.3254814Z Ran 49 tests in 26.267s",
+            "2026-09-21T03:55:38.3268510Z OK",
+            "2026-09-21T03:55:11.8295459Z ✖ failing tests:",
+            "2026-09-21T03:55:11.8295647Z ",
+            "2026-09-21T03:55:11.8295864Z test at tests/contract/host-policy.test.ts:306:3",
+            "2026-09-21T03:55:11.8296772Z ✖ AC-P05 extended main terminal requires a matching host stop observation: true (1789.203136ms)",
+            "2026-09-21T03:55:11.8297344Z   AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:",
+            "2026-09-21T03:55:11.8298104Z   + actual - expected",
+            "2026-09-21T03:55:11.8298419Z   ",
+            "2026-09-21T03:55:11.8298665Z   + 'blocked'",
+            "2026-09-21T03:55:11.8298946Z   - 'waiting_approval'",
+            "2026-09-21T03:55:11.8299323Z   ",
+            "2026-09-21T03:55:11.8299857Z       at TestContext.<anonymous> (file:///home/runner/work/Multi-Agent/Multi-Agent/tests/contract/host-policy.test.ts:353:12)",
+            "2026-09-21T03:55:11.8300490Z       at async Test.run (node:internal/test_runner/test:1125:7)",
+            "2026-09-21T03:55:11.8301065Z       at async Test.processPendingSubtests (node:internal/test_runner/test:787:7) {",
+            "2026-09-21T03:55:11.8301509Z     generatedMessage: true,",
+            "2026-09-21T03:55:11.8301812Z     code: 'ERR_ASSERTION',",
+            "2026-09-21T03:55:11.8302108Z     actual: 'blocked',",
+            "2026-09-21T03:55:11.8302537Z     expected: 'waiting_approval',",
+            "2026-09-21T03:55:11.8303613Z     operator: 'strictEqual',",
+            "2026-09-21T03:55:11.8303988Z     diff: 'simple'",
+            "2026-09-21T03:55:11.8304265Z   }",
+            "2026-09-21T03:55:11.8304420Z ",
+            "2026-09-21T03:55:11.8304615Z test at tests/engine/foundation.test.ts:872:1",
+            "2026-09-21T03:55:11.8305364Z ✖ AC05 event replay is bounded by encoded bytes without losing the next cursor (6467.9443ms)",
+            "2026-09-21T03:55:11.8305805Z   AssertionError [ERR_ASSERTION]: Expected state was not reached",
+            "2026-09-21T03:55:11.8306319Z       at until (file:///home/runner/work/Multi-Agent/Multi-Agent/tests/engine/foundation.test.ts:80:10)",
+            "2026-09-21T03:55:11.8306756Z       at runNextTicks (node:internal/process/task_queues:65:5)",
+            "2026-09-21T03:55:11.8307125Z       at process.processTimers (node:internal/timers:538:9)",
+            "2026-09-21T03:55:11.8307846Z       at async TestContext.<anonymous> (file:///home/runner/work/Multi-Agent/Multi-Agent/tests/engine/foundation.test.ts:879:7)",
+            "2026-09-21T03:55:11.8308349Z       at async Test.run (node:internal/test_runner/test:1125:7)",
+            "2026-09-21T03:55:11.8308796Z       at async Test.processPendingSubtests (node:internal/test_runner/test:787:7) {",
+            "2026-09-21T03:55:11.8309178Z     generatedMessage: false,",
+            "2026-09-21T03:55:11.8309456Z     code: 'ERR_ASSERTION',",
+            "2026-09-21T03:55:11.8309695Z     actual: undefined,",
+            "2026-09-21T03:55:11.8309960Z     expected: undefined,",
+            "2026-09-21T03:55:11.8310210Z     operator: 'fail',",
+            "2026-09-21T03:55:11.8310434Z     diff: 'simple'",
+            "2026-09-21T03:55:11.8310700Z   }",
+            "2026-09-21T03:55:11.8310799Z ",
+            "2026-09-21T03:55:11.8310992Z test at tests/engine/storage-governance.test.ts:90:1",
+            "2026-09-21T03:55:11.8311559Z ✖ B01/B02 retained details expire into lifetime tombstones, protected shared artifacts survive (324.528056ms)",
+            "2026-09-21T03:55:11.8312067Z   AssertionError [ERR_ASSERTION]: Missing expected exception.",
+            "2026-09-21T03:55:11.8312575Z       at TestContext.<anonymous> (file:///home/runner/work/Multi-Agent/Multi-Agent/tests/engine/storage-governance.test.ts:101:12)",
+            "2026-09-21T03:55:11.8313102Z       at Test.runInAsyncScope (node:async_hooks:228:14)",
+            "2026-09-21T03:55:11.8313470Z       at Test.run (node:internal/test_runner/test:1118:25)",
+            "2026-09-21T03:55:11.8313859Z       at Test.processPendingSubtests (node:internal/test_runner/test:787:18)",
+            "2026-09-21T03:55:11.8314277Z       at Test.postRun (node:internal/test_runner/test:1247:19)",
+            "2026-09-21T03:55:11.8314639Z       at Test.run (node:internal/test_runner/test:1175:12)",
+            "2026-09-21T03:55:11.8315055Z       at process.processTicksAndRejections (node:internal/process/task_queues:104:5)",
+            "2026-09-21T03:55:11.8315530Z       at async startSubtestAfterBootstrap (node:internal/test_runner/harness:358:3) {",
+            "2026-09-21T03:55:11.8315904Z     generatedMessage: false,",
+            "2026-09-21T03:55:11.8316150Z     code: 'ERR_ASSERTION',",
+            "2026-09-21T03:55:11.8316438Z     actual: undefined,",
+            "2026-09-21T03:55:11.8316715Z     expected: { code: 'OPERATION_HISTORY_EXPIRED' },",
+            "2026-09-21T03:55:11.8316979Z     operator: 'throws',",
+            "2026-09-21T03:55:11.8317250Z     diff: 'simple'",
+            "2026-09-21T03:55:11.8317597Z   }",
+            "2026-09-21T03:55:11.8394863Z ##[error]Process completed with exit code 1."
+          ]
+        }
+      ]
+    },
+    {
+      "runId": 35559738575,
+      "commit": "5645d3a1982d901f5c0a1be2f975ab06c0795af9",
+      "conclusion": "cancelled",
+      "url": "https://github.com/masonlee39/Multi-Agent/actions/runs/35559738575",
+      "jobs": [
+        {
+          "id": 106210188246,
+          "name": "pinned-native-protocol (ubuntu-24.04)",
+          "status": "completed",
+          "conclusion": "success",
+          "steps": [
+            {
+              "name": "Set up job",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 1
+            },
+            {
+              "name": "Run actions/checkout@v4",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 2
+            },
+            {
+              "name": "Run actions/setup-node@v4",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 3
+            },
+            {
+              "name": "Run actions/setup-python@v5",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 4
+            },
+            {
+              "name": "Run npm ci --ignore-scripts",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 5
+            },
+            {
+              "name": "Install exact native development dependencies (no login or model calls)",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 6
+            },
+            {
+              "name": "Run node scripts/check-native-protocol.mjs",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 7
+            },
+            {
+              "name": "Real Claude binary with a scripted loopback gateway (no paid models)",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 8
+            },
+            {
+              "name": "Real Codex binary with a scripted loopback gateway (no paid models)",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 9
+            },
+            {
+              "name": "Run actions/upload-artifact@v4",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 10
+            },
+            {
+              "name": "Post Run actions/setup-python@v5",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 18
+            },
+            {
+              "name": "Post Run actions/setup-node@v4",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 19
+            },
+            {
+              "name": "Post Run actions/checkout@v4",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 20
+            },
+            {
+              "name": "Complete job",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 21
+            }
+          ]
+        },
+        {
+          "id": 106210188247,
+          "name": "contracts (ubuntu-24.04, 24.14.0, 3.14.6)",
+          "status": "completed",
+          "conclusion": "success",
+          "steps": [
+            {
+              "name": "Set up job",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 1
+            },
+            {
+              "name": "Run actions/checkout@v4",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 2
+            },
+            {
+              "name": "Run actions/setup-node@v4",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 3
+            },
+            {
+              "name": "Run actions/setup-python@v5",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 4
+            },
+            {
+              "name": "Run npm ci --ignore-scripts",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 5
+            },
+            {
+              "name": "Run npm run check:generated && npm run typecheck && npm run format:check",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 6
+            },
+            {
+              "name": "Node contract tests",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 7
+            },
+            {
+              "name": "Python contract tests",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 8
+            },
+            {
+              "name": "Run python -m pip install setuptools==80.9.0 wheel==0.45.1 build==1.2.2.post1 packaging==25.0 pyproject_hooks==1.2.0",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 9
+            },
+            {
+              "name": "Run npm run build:packages",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 10
+            },
+            {
+              "name": "Run python scripts/build-python.py dist/release",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 11
+            },
+            {
+              "name": "Clean offline npm, wheel and sdist installation",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 12
+            },
+            {
+              "name": "Run node scripts/capacity-benchmark.ts 1000,10000 100 > dist/capacity.json",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 13
+            },
+            {
+              "name": "Run actions/upload-artifact@v4",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 14
+            },
+            {
+              "name": "Post Run actions/setup-python@v5",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 26
+            },
+            {
+              "name": "Post Run actions/setup-node@v4",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 27
+            },
+            {
+              "name": "Post Run actions/checkout@v4",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 28
+            },
+            {
+              "name": "Complete job",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 29
+            }
+          ]
+        },
+        {
+          "id": 106210188262,
+          "name": "contracts (macos-14, 22.18.0, 3.11.9)",
+          "status": "completed",
+          "conclusion": "success",
+          "steps": [
+            {
+              "name": "Set up job",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 1
+            },
+            {
+              "name": "Run actions/checkout@v4",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 2
+            },
+            {
+              "name": "Run actions/setup-node@v4",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 3
+            },
+            {
+              "name": "Run actions/setup-python@v5",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 4
+            },
+            {
+              "name": "Run npm ci --ignore-scripts",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 5
+            },
+            {
+              "name": "Run npm run check:generated && npm run typecheck && npm run format:check",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 6
+            },
+            {
+              "name": "Node contract tests",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 7
+            },
+            {
+              "name": "Python contract tests",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 8
+            },
+            {
+              "name": "Run python -m pip install setuptools==80.9.0 wheel==0.45.1 build==1.2.2.post1 packaging==25.0 pyproject_hooks==1.2.0",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 9
+            },
+            {
+              "name": "Run npm run build:packages",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 10
+            },
+            {
+              "name": "Run python scripts/build-python.py dist/release",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 11
+            },
+            {
+              "name": "Clean offline npm, wheel and sdist installation",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 12
+            },
+            {
+              "name": "Run node scripts/capacity-benchmark.ts 1000,10000 100 > dist/capacity.json",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 13
+            },
+            {
+              "name": "Run actions/upload-artifact@v4",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 14
+            },
+            {
+              "name": "Post Run actions/setup-python@v5",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 26
+            },
+            {
+              "name": "Post Run actions/setup-node@v4",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 27
+            },
+            {
+              "name": "Post Run actions/checkout@v4",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 28
+            },
+            {
+              "name": "Complete job",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 29
+            }
+          ]
+        },
+        {
+          "id": 106210188265,
+          "name": "pinned-native-protocol (macos-14)",
+          "status": "completed",
+          "conclusion": "success",
+          "steps": [
+            {
+              "name": "Set up job",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 1
+            },
+            {
+              "name": "Run actions/checkout@v4",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 2
+            },
+            {
+              "name": "Run actions/setup-node@v4",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 3
+            },
+            {
+              "name": "Run actions/setup-python@v5",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 4
+            },
+            {
+              "name": "Run npm ci --ignore-scripts",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 5
+            },
+            {
+              "name": "Install exact native development dependencies (no login or model calls)",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 6
+            },
+            {
+              "name": "Run node scripts/check-native-protocol.mjs",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 7
+            },
+            {
+              "name": "Real Claude binary with a scripted loopback gateway (no paid models)",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 8
+            },
+            {
+              "name": "Real Codex binary with a scripted loopback gateway (no paid models)",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 9
+            },
+            {
+              "name": "Run actions/upload-artifact@v4",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 10
+            },
+            {
+              "name": "Post Run actions/setup-python@v5",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 18
+            },
+            {
+              "name": "Post Run actions/setup-node@v4",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 19
+            },
+            {
+              "name": "Post Run actions/checkout@v4",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 20
+            },
+            {
+              "name": "Complete job",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 21
+            }
+          ]
+        },
+        {
+          "id": 106210188267,
+          "name": "contracts (ubuntu-24.04, 22.18.0, 3.11.13)",
+          "status": "completed",
+          "conclusion": "cancelled",
+          "steps": [
+            {
+              "name": "Set up job",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 1
+            },
+            {
+              "name": "Run actions/checkout@v4",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 2
+            },
+            {
+              "name": "Run actions/setup-node@v4",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 3
+            },
+            {
+              "name": "Run actions/setup-python@v5",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 4
+            },
+            {
+              "name": "Run npm ci --ignore-scripts",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 5
+            },
+            {
+              "name": "Run npm run check:generated && npm run typecheck && npm run format:check",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 6
+            },
+            {
+              "name": "Node contract tests",
+              "status": "in_progress",
+              "conclusion": null,
+              "number": 7
+            },
+            {
+              "name": "Python contract tests",
+              "status": "pending",
+              "conclusion": null,
+              "number": 8
+            },
+            {
+              "name": "Run python -m pip install setuptools==80.9.0 wheel==0.45.1 build==1.2.2.post1 packaging==25.0 pyproject_hooks==1.2.0",
+              "status": "pending",
+              "conclusion": null,
+              "number": 9
+            },
+            {
+              "name": "Run npm run build:packages",
+              "status": "pending",
+              "conclusion": null,
+              "number": 10
+            },
+            {
+              "name": "Run python scripts/build-python.py dist/release",
+              "status": "pending",
+              "conclusion": null,
+              "number": 11
+            },
+            {
+              "name": "Clean offline npm, wheel and sdist installation",
+              "status": "pending",
+              "conclusion": null,
+              "number": 12
+            },
+            {
+              "name": "Run node scripts/capacity-benchmark.ts 1000,10000 100 > dist/capacity.json",
+              "status": "pending",
+              "conclusion": null,
+              "number": 13
+            },
+            {
+              "name": "Run actions/upload-artifact@v4",
+              "status": "pending",
+              "conclusion": null,
+              "number": 14
+            },
+            {
+              "name": "Post Run actions/setup-python@v5",
+              "status": "pending",
+              "conclusion": null,
+              "number": 26
+            },
+            {
+              "name": "Post Run actions/setup-node@v4",
+              "status": "pending",
+              "conclusion": null,
+              "number": 27
+            },
+            {
+              "name": "Post Run actions/checkout@v4",
+              "status": "pending",
+              "conclusion": null,
+              "number": 28
+            }
+          ],
+          "annotation": "The job has exceeded the maximum execution time of 20m0s",
+          "logArchive": {
+            "status": "unavailable",
+            "errorCode": "NOT_FOUND",
+            "error": "GitHub API error 404: ﻿<?xml version=\"1.0\" encoding=\"utf-8\"?><Error><Code>BlobNotFound</Code><Message>The specified blob does not exist.\nRequestId:7ab4813a-501e-00af-558f-49653c000000\nTime:2026-09-21T06:07:22.7465752Z</Message></Error>"
+          }
+        },
+        {
+          "id": 106210188299,
+          "name": "contracts (macos-14, 24.14.0, 3.14.6)",
+          "status": "completed",
+          "conclusion": "success",
+          "steps": [
+            {
+              "name": "Set up job",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 1
+            },
+            {
+              "name": "Run actions/checkout@v4",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 2
+            },
+            {
+              "name": "Run actions/setup-node@v4",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 3
+            },
+            {
+              "name": "Run actions/setup-python@v5",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 4
+            },
+            {
+              "name": "Run npm ci --ignore-scripts",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 5
+            },
+            {
+              "name": "Run npm run check:generated && npm run typecheck && npm run format:check",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 6
+            },
+            {
+              "name": "Node contract tests",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 7
+            },
+            {
+              "name": "Python contract tests",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 8
+            },
+            {
+              "name": "Run python -m pip install setuptools==80.9.0 wheel==0.45.1 build==1.2.2.post1 packaging==25.0 pyproject_hooks==1.2.0",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 9
+            },
+            {
+              "name": "Run npm run build:packages",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 10
+            },
+            {
+              "name": "Run python scripts/build-python.py dist/release",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 11
+            },
+            {
+              "name": "Clean offline npm, wheel and sdist installation",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 12
+            },
+            {
+              "name": "Run node scripts/capacity-benchmark.ts 1000,10000 100 > dist/capacity.json",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 13
+            },
+            {
+              "name": "Run actions/upload-artifact@v4",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 14
+            },
+            {
+              "name": "Post Run actions/setup-python@v5",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 26
+            },
+            {
+              "name": "Post Run actions/setup-node@v4",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 27
+            },
+            {
+              "name": "Post Run actions/checkout@v4",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 28
+            },
+            {
+              "name": "Complete job",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 29
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "runId": 35561652769,
+      "commit": "8ee507830b295c03d97845f564e727885eab8b14",
+      "conclusion": "success",
+      "url": "https://github.com/masonlee39/Multi-Agent/actions/runs/35561652769",
+      "jobs": [
+        {
+          "id": 106215506204,
+          "name": "pinned-native-protocol (ubuntu-24.04)",
+          "status": "completed",
+          "conclusion": "success",
+          "steps": [
+            {
+              "name": "Set up job",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 1
+            },
+            {
+              "name": "Run actions/checkout@v4",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 2
+            },
+            {
+              "name": "Run actions/setup-node@v4",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 3
+            },
+            {
+              "name": "Run actions/setup-python@v5",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 4
+            },
+            {
+              "name": "Run npm ci --ignore-scripts",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 5
+            },
+            {
+              "name": "Install exact native development dependencies (no login or model calls)",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 6
+            },
+            {
+              "name": "Run node scripts/check-native-protocol.mjs",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 7
+            },
+            {
+              "name": "Real Claude binary with a scripted loopback gateway (no paid models)",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 8
+            },
+            {
+              "name": "Real Codex binary with a scripted loopback gateway (no paid models)",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 9
+            },
+            {
+              "name": "Run actions/upload-artifact@v4",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 10
+            },
+            {
+              "name": "Post Run actions/setup-python@v5",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 18
+            },
+            {
+              "name": "Post Run actions/setup-node@v4",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 19
+            },
+            {
+              "name": "Post Run actions/checkout@v4",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 20
+            },
+            {
+              "name": "Complete job",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 21
+            }
+          ],
+          "proof": [
+            "2026-09-21T04:37:12.4306480Z {\"sdkVersion\":\"0.3.274\",\"cliVersion\":\"codex-cli 0.153.4\",\"modelsInvoked\":0,\"credentialsInspected\":false}",
+            "2026-09-21T04:37:15.5408639Z {\"provider\":\"claude\",\"status\":\"passed\",\"cases\":[\"engine-task-native-mcp-human-approval-resource-release\",\"retained-native-history-read-only-inspection\",\"fork-distinct-native-identity-and-inherited-history\",\"serial-reuse-preserves-native-identity\",\"manual-compact-native-boundary-and-resource-release\",\"python-client-native-task-approval-history-and-usage\"],\"evidence\":\"/home/runner/work/Multi-Agent/Multi-Agent/dist/verification/native-claude.json\"}",
+            "2026-09-21T04:37:17.8695165Z {\"provider\":\"codex\",\"status\":\"passed\",\"cases\":[\"engine-task-native-mcp-human-approval-resource-release\",\"retained-native-history-read-only-inspection\",\"fork-distinct-native-identity-and-inherited-history\",\"serial-reuse-preserves-native-identity\",\"manual-compact-native-boundary-and-resource-release\",\"python-client-native-task-approval-history-and-usage\"],\"evidence\":\"/home/runner/work/Multi-Agent/Multi-Agent/dist/verification/native-codex.json\"}"
+          ]
+        },
+        {
+          "id": 106215506339,
+          "name": "contracts (ubuntu-24.04, 22.18.0, 3.11.13)",
+          "status": "completed",
+          "conclusion": "success",
+          "steps": [
+            {
+              "name": "Set up job",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 1
+            },
+            {
+              "name": "Run actions/checkout@v4",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 2
+            },
+            {
+              "name": "Run actions/setup-node@v4",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 3
+            },
+            {
+              "name": "Run actions/setup-python@v5",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 4
+            },
+            {
+              "name": "Run npm ci --ignore-scripts",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 5
+            },
+            {
+              "name": "Run npm run check:generated && npm run typecheck && npm run format:check",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 6
+            },
+            {
+              "name": "Node contract tests",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 7
+            },
+            {
+              "name": "Python contract tests",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 8
+            },
+            {
+              "name": "Run python -m pip install setuptools==80.9.0 wheel==0.45.1 build==1.2.2.post1 packaging==25.0 pyproject_hooks==1.2.0",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 9
+            },
+            {
+              "name": "Run npm run build:packages",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 10
+            },
+            {
+              "name": "Run python scripts/build-python.py dist/release",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 11
+            },
+            {
+              "name": "Clean offline npm, wheel and sdist installation",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 12
+            },
+            {
+              "name": "Run node scripts/capacity-benchmark.ts 1000,10000 100 > dist/capacity.json",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 13
+            },
+            {
+              "name": "Run actions/upload-artifact@v4",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 14
+            },
+            {
+              "name": "Post Run actions/setup-python@v5",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 26
+            },
+            {
+              "name": "Post Run actions/setup-node@v4",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 27
+            },
+            {
+              "name": "Post Run actions/checkout@v4",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 28
+            },
+            {
+              "name": "Complete job",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 29
+            }
+          ],
+          "proof": [
+            "2026-09-21T04:38:11.2826403Z # tests 442",
+            "2026-09-21T04:38:11.2826750Z # pass 442",
+            "2026-09-21T04:38:11.2826969Z # fail 0",
+            "2026-09-21T04:38:11.2827184Z # cancelled 0",
+            "2026-09-21T04:38:11.2827388Z # skipped 0",
+            "2026-09-21T04:38:33.1727734Z Ran 49 tests in 21.689s",
+            "2026-09-21T04:38:33.1728170Z OK",
+            "2026-09-21T04:38:46.7912091Z {\"offline\":true,\"node\":\"v22.18.0\",\"results\":[{\"mode\":\"installed-embedded\",\"status\":\"completed\",\"modelCalls\":0},{\"mode\":\"installed-codex-private-mcp\",\"tools\":4,\"modelCalls\":0},{\"mode\":\"installed-codex-only\",\"imported\":true,\"modelCalls\":0,\"nativeDependency\":\"not_installed_or_invoked\"},{\"mode\":\"installed-claude-mcp\",\"taskStatuses\":[\"completed\",\"completed\"],\"mcpCalls\":4,\"queryCalls\":1,\"inspectionCalls\":1,\"modelCalls\":0,\"electronRuntime\":false},{\"mode\":\"bundled-cjs-no-node-modules\",\"taskStatuses\":[\"completed\",\"completed\"],\"mcpCalls\":4,\"queryCalls\":1,\"inspectionCalls\":1,\"modelCalls\":0,\"electronRuntime\":false,\"nativeSdkVersion\":\"0.3.274\",\"nodeModulesRemoved\":true},{\"mode\":\"bundled-esm-no-node-modules\",\"taskStatuses\":[\"completed\",\"completed\"],\"mcpCalls\":4,\"queryCalls\":1,\"inspectionCalls\":1,\"modelCalls\":0,\"electronRuntime\":false,\"nativeSdkVersion\":\"0.3.274\",\"nodeModulesRemoved\":true},{\"mode\":\"installed-claude-only\",\"imported\":true,\"modelCalls\":0,\"nativeDependency\":\"pinned-sdk-mcp-with-offline-peer\"},{\"mode\":\"installed-python-managed\",\"status\":\"completed\",\"modelCalls\":0},{\"mode\":\"installed-wheel-rebuilt-from-sdist\",\"status\":\"completed\",\"modelCalls\":0}]}"
+          ]
+        },
+        {
+          "id": 106215506351,
+          "name": "contracts (macos-14, 24.14.0, 3.14.6)",
+          "status": "completed",
+          "conclusion": "success",
+          "steps": [
+            {
+              "name": "Set up job",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 1
+            },
+            {
+              "name": "Run actions/checkout@v4",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 2
+            },
+            {
+              "name": "Run actions/setup-node@v4",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 3
+            },
+            {
+              "name": "Run actions/setup-python@v5",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 4
+            },
+            {
+              "name": "Run npm ci --ignore-scripts",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 5
+            },
+            {
+              "name": "Run npm run check:generated && npm run typecheck && npm run format:check",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 6
+            },
+            {
+              "name": "Node contract tests",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 7
+            },
+            {
+              "name": "Python contract tests",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 8
+            },
+            {
+              "name": "Run python -m pip install setuptools==80.9.0 wheel==0.45.1 build==1.2.2.post1 packaging==25.0 pyproject_hooks==1.2.0",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 9
+            },
+            {
+              "name": "Run npm run build:packages",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 10
+            },
+            {
+              "name": "Run python scripts/build-python.py dist/release",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 11
+            },
+            {
+              "name": "Clean offline npm, wheel and sdist installation",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 12
+            },
+            {
+              "name": "Run node scripts/capacity-benchmark.ts 1000,10000 100 > dist/capacity.json",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 13
+            },
+            {
+              "name": "Run actions/upload-artifact@v4",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 14
+            },
+            {
+              "name": "Post Run actions/setup-python@v5",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 26
+            },
+            {
+              "name": "Post Run actions/setup-node@v4",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 27
+            },
+            {
+              "name": "Post Run actions/checkout@v4",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 28
+            },
+            {
+              "name": "Complete job",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 29
+            }
+          ],
+          "proof": [
+            "2026-09-21T04:37:51.2211710Z ℹ tests 442",
+            "2026-09-21T04:37:51.2212110Z ℹ pass 442",
+            "2026-09-21T04:37:51.2212330Z ℹ fail 0",
+            "2026-09-21T04:37:51.2212480Z ℹ cancelled 0",
+            "2026-09-21T04:37:51.2212680Z ℹ skipped 0",
+            "2026-09-21T04:38:01.6184370Z Ran 49 tests in 10.014s",
+            "2026-09-21T04:38:01.6184800Z OK",
+            "2026-09-21T04:38:14.9688520Z {\"offline\":true,\"node\":\"v24.14.0\",\"results\":[{\"mode\":\"installed-embedded\",\"status\":\"completed\",\"modelCalls\":0},{\"mode\":\"installed-codex-private-mcp\",\"tools\":4,\"modelCalls\":0},{\"mode\":\"installed-codex-only\",\"imported\":true,\"modelCalls\":0,\"nativeDependency\":\"not_installed_or_invoked\"},{\"mode\":\"installed-claude-mcp\",\"taskStatuses\":[\"completed\",\"completed\"],\"mcpCalls\":4,\"queryCalls\":1,\"inspectionCalls\":1,\"modelCalls\":0,\"electronRuntime\":false},{\"mode\":\"bundled-cjs-no-node-modules\",\"taskStatuses\":[\"completed\",\"completed\"],\"mcpCalls\":4,\"queryCalls\":1,\"inspectionCalls\":1,\"modelCalls\":0,\"electronRuntime\":false,\"nativeSdkVersion\":\"0.3.274\",\"nodeModulesRemoved\":true},{\"mode\":\"bundled-esm-no-node-modules\",\"taskStatuses\":[\"completed\",\"completed\"],\"mcpCalls\":4,\"queryCalls\":1,\"inspectionCalls\":1,\"modelCalls\":0,\"electronRuntime\":false,\"nativeSdkVersion\":\"0.3.274\",\"nodeModulesRemoved\":true},{\"mode\":\"installed-claude-only\",\"imported\":true,\"modelCalls\":0,\"nativeDependency\":\"pinned-sdk-mcp-with-offline-peer\"},{\"mode\":\"installed-python-managed\",\"status\":\"completed\",\"modelCalls\":0},{\"mode\":\"installed-wheel-rebuilt-from-sdist\",\"status\":\"completed\",\"modelCalls\":0}]}"
+          ]
+        },
+        {
+          "id": 106215506381,
+          "name": "pinned-native-protocol (macos-14)",
+          "status": "completed",
+          "conclusion": "success",
+          "steps": [
+            {
+              "name": "Set up job",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 1
+            },
+            {
+              "name": "Run actions/checkout@v4",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 2
+            },
+            {
+              "name": "Run actions/setup-node@v4",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 3
+            },
+            {
+              "name": "Run actions/setup-python@v5",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 4
+            },
+            {
+              "name": "Run npm ci --ignore-scripts",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 5
+            },
+            {
+              "name": "Install exact native development dependencies (no login or model calls)",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 6
+            },
+            {
+              "name": "Run node scripts/check-native-protocol.mjs",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 7
+            },
+            {
+              "name": "Real Claude binary with a scripted loopback gateway (no paid models)",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 8
+            },
+            {
+              "name": "Real Codex binary with a scripted loopback gateway (no paid models)",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 9
+            },
+            {
+              "name": "Run actions/upload-artifact@v4",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 10
+            },
+            {
+              "name": "Post Run actions/setup-python@v5",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 18
+            },
+            {
+              "name": "Post Run actions/setup-node@v4",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 19
+            },
+            {
+              "name": "Post Run actions/checkout@v4",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 20
+            },
+            {
+              "name": "Complete job",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 21
+            }
+          ],
+          "proof": [
+            "2026-09-21T04:37:17.8349680Z {\"sdkVersion\":\"0.3.274\",\"cliVersion\":\"codex-cli 0.153.4\",\"modelsInvoked\":0,\"credentialsInspected\":false}",
+            "2026-09-21T04:37:21.5816170Z {\"provider\":\"claude\",\"status\":\"passed\",\"cases\":[\"engine-task-native-mcp-human-approval-resource-release\",\"retained-native-history-read-only-inspection\",\"fork-distinct-native-identity-and-inherited-history\",\"serial-reuse-preserves-native-identity\",\"manual-compact-native-boundary-and-resource-release\",\"python-client-native-task-approval-history-and-usage\"],\"evidence\":\"/Users/runner/work/Multi-Agent/Multi-Agent/dist/verification/native-claude.json\"}",
+            "2026-09-21T04:37:24.0145920Z {\"provider\":\"codex\",\"status\":\"passed\",\"cases\":[\"engine-task-native-mcp-human-approval-resource-release\",\"retained-native-history-read-only-inspection\",\"fork-distinct-native-identity-and-inherited-history\",\"serial-reuse-preserves-native-identity\",\"manual-compact-native-boundary-and-resource-release\",\"python-client-native-task-approval-history-and-usage\"],\"evidence\":\"/Users/runner/work/Multi-Agent/Multi-Agent/dist/verification/native-codex.json\"}"
+          ]
+        },
+        {
+          "id": 106215506396,
+          "name": "contracts (ubuntu-24.04, 24.14.0, 3.14.6)",
+          "status": "completed",
+          "conclusion": "success",
+          "steps": [
+            {
+              "name": "Set up job",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 1
+            },
+            {
+              "name": "Run actions/checkout@v4",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 2
+            },
+            {
+              "name": "Run actions/setup-node@v4",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 3
+            },
+            {
+              "name": "Run actions/setup-python@v5",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 4
+            },
+            {
+              "name": "Run npm ci --ignore-scripts",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 5
+            },
+            {
+              "name": "Run npm run check:generated && npm run typecheck && npm run format:check",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 6
+            },
+            {
+              "name": "Node contract tests",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 7
+            },
+            {
+              "name": "Python contract tests",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 8
+            },
+            {
+              "name": "Run python -m pip install setuptools==80.9.0 wheel==0.45.1 build==1.2.2.post1 packaging==25.0 pyproject_hooks==1.2.0",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 9
+            },
+            {
+              "name": "Run npm run build:packages",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 10
+            },
+            {
+              "name": "Run python scripts/build-python.py dist/release",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 11
+            },
+            {
+              "name": "Clean offline npm, wheel and sdist installation",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 12
+            },
+            {
+              "name": "Run node scripts/capacity-benchmark.ts 1000,10000 100 > dist/capacity.json",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 13
+            },
+            {
+              "name": "Run actions/upload-artifact@v4",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 14
+            },
+            {
+              "name": "Post Run actions/setup-python@v5",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 26
+            },
+            {
+              "name": "Post Run actions/setup-node@v4",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 27
+            },
+            {
+              "name": "Post Run actions/checkout@v4",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 28
+            },
+            {
+              "name": "Complete job",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 29
+            }
+          ],
+          "proof": [
+            "2026-09-21T04:37:49.7155912Z ℹ tests 442",
+            "2026-09-21T04:37:49.7156439Z ℹ pass 442",
+            "2026-09-21T04:37:49.7156701Z ℹ fail 0",
+            "2026-09-21T04:37:49.7156974Z ℹ cancelled 0",
+            "2026-09-21T04:37:49.7157249Z ℹ skipped 0",
+            "2026-09-21T04:38:05.7135184Z Ran 49 tests in 15.661s",
+            "2026-09-21T04:38:05.7138989Z OK",
+            "2026-09-21T04:38:23.5056169Z {\"offline\":true,\"node\":\"v24.14.0\",\"results\":[{\"mode\":\"installed-embedded\",\"status\":\"completed\",\"modelCalls\":0},{\"mode\":\"installed-codex-private-mcp\",\"tools\":4,\"modelCalls\":0},{\"mode\":\"installed-codex-only\",\"imported\":true,\"modelCalls\":0,\"nativeDependency\":\"not_installed_or_invoked\"},{\"mode\":\"installed-claude-mcp\",\"taskStatuses\":[\"completed\",\"completed\"],\"mcpCalls\":4,\"queryCalls\":1,\"inspectionCalls\":1,\"modelCalls\":0,\"electronRuntime\":false},{\"mode\":\"bundled-cjs-no-node-modules\",\"taskStatuses\":[\"completed\",\"completed\"],\"mcpCalls\":4,\"queryCalls\":1,\"inspectionCalls\":1,\"modelCalls\":0,\"electronRuntime\":false,\"nativeSdkVersion\":\"0.3.274\",\"nodeModulesRemoved\":true},{\"mode\":\"bundled-esm-no-node-modules\",\"taskStatuses\":[\"completed\",\"completed\"],\"mcpCalls\":4,\"queryCalls\":1,\"inspectionCalls\":1,\"modelCalls\":0,\"electronRuntime\":false,\"nativeSdkVersion\":\"0.3.274\",\"nodeModulesRemoved\":true},{\"mode\":\"installed-claude-only\",\"imported\":true,\"modelCalls\":0,\"nativeDependency\":\"pinned-sdk-mcp-with-offline-peer\"},{\"mode\":\"installed-python-managed\",\"status\":\"completed\",\"modelCalls\":0},{\"mode\":\"installed-wheel-rebuilt-from-sdist\",\"status\":\"completed\",\"modelCalls\":0}]}"
+          ]
+        },
+        {
+          "id": 106215506466,
+          "name": "contracts (macos-14, 22.18.0, 3.11.9)",
+          "status": "completed",
+          "conclusion": "success",
+          "steps": [
+            {
+              "name": "Set up job",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 1
+            },
+            {
+              "name": "Run actions/checkout@v4",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 2
+            },
+            {
+              "name": "Run actions/setup-node@v4",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 3
+            },
+            {
+              "name": "Run actions/setup-python@v5",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 4
+            },
+            {
+              "name": "Run npm ci --ignore-scripts",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 5
+            },
+            {
+              "name": "Run npm run check:generated && npm run typecheck && npm run format:check",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 6
+            },
+            {
+              "name": "Node contract tests",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 7
+            },
+            {
+              "name": "Python contract tests",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 8
+            },
+            {
+              "name": "Run python -m pip install setuptools==80.9.0 wheel==0.45.1 build==1.2.2.post1 packaging==25.0 pyproject_hooks==1.2.0",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 9
+            },
+            {
+              "name": "Run npm run build:packages",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 10
+            },
+            {
+              "name": "Run python scripts/build-python.py dist/release",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 11
+            },
+            {
+              "name": "Clean offline npm, wheel and sdist installation",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 12
+            },
+            {
+              "name": "Run node scripts/capacity-benchmark.ts 1000,10000 100 > dist/capacity.json",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 13
+            },
+            {
+              "name": "Run actions/upload-artifact@v4",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 14
+            },
+            {
+              "name": "Post Run actions/setup-python@v5",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 26
+            },
+            {
+              "name": "Post Run actions/setup-node@v4",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 27
+            },
+            {
+              "name": "Post Run actions/checkout@v4",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 28
+            },
+            {
+              "name": "Complete job",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 29
+            }
+          ],
+          "proof": [
+            "2026-09-21T04:37:46.4884170Z # tests 442",
+            "2026-09-21T04:37:46.4884560Z # pass 442",
+            "2026-09-21T04:37:46.4884820Z # fail 0",
+            "2026-09-21T04:37:46.4885160Z # cancelled 0",
+            "2026-09-21T04:37:46.4885420Z # skipped 0",
+            "2026-09-21T04:38:03.4711840Z Ran 49 tests in 16.360s",
+            "2026-09-21T04:38:03.4712970Z OK",
+            "2026-09-21T04:38:25.2322880Z {\"offline\":true,\"node\":\"v22.18.0\",\"results\":[{\"mode\":\"installed-embedded\",\"status\":\"completed\",\"modelCalls\":0},{\"mode\":\"installed-codex-private-mcp\",\"tools\":4,\"modelCalls\":0},{\"mode\":\"installed-codex-only\",\"imported\":true,\"modelCalls\":0,\"nativeDependency\":\"not_installed_or_invoked\"},{\"mode\":\"installed-claude-mcp\",\"taskStatuses\":[\"completed\",\"completed\"],\"mcpCalls\":4,\"queryCalls\":1,\"inspectionCalls\":1,\"modelCalls\":0,\"electronRuntime\":false},{\"mode\":\"bundled-cjs-no-node-modules\",\"taskStatuses\":[\"completed\",\"completed\"],\"mcpCalls\":4,\"queryCalls\":1,\"inspectionCalls\":1,\"modelCalls\":0,\"electronRuntime\":false,\"nativeSdkVersion\":\"0.3.274\",\"nodeModulesRemoved\":true},{\"mode\":\"bundled-esm-no-node-modules\",\"taskStatuses\":[\"completed\",\"completed\"],\"mcpCalls\":4,\"queryCalls\":1,\"inspectionCalls\":1,\"modelCalls\":0,\"electronRuntime\":false,\"nativeSdkVersion\":\"0.3.274\",\"nodeModulesRemoved\":true},{\"mode\":\"installed-claude-only\",\"imported\":true,\"modelCalls\":0,\"nativeDependency\":\"pinned-sdk-mcp-with-offline-peer\"},{\"mode\":\"installed-python-managed\",\"status\":\"completed\",\"modelCalls\":0},{\"mode\":\"installed-wheel-rebuilt-from-sdist\",\"status\":\"completed\",\"modelCalls\":0}]}"
+          ]
+        }
+      ]
+    }
+  ]
+}

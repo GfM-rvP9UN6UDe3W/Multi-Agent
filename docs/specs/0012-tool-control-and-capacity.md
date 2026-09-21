@@ -1,6 +1,6 @@
 # SPEC-0012: Tool control precedence and scoped capacity
 
-Date: 2026-09-21. Status: implemented and verified locally; remote CI on this source is pending. This increment addresses three verified findings in the current repository without changing the provider or publication gates in the readiness ledger.
+Date: 2026-09-21. Status: implemented and verified locally and in all six remote CI jobs for source `8ee5078` ([run 35561652769](https://github.com/masonlee39/Multi-Agent/actions/runs/35561652769)). This increment addresses three verified findings in the current repository without changing the provider or publication gates in the readiness ledger.
 
 ## Acceptance criteria
 
@@ -12,4 +12,4 @@ Date: 2026-09-21. Status: implemented and verified locally; remote CI on this so
 
 Record a failing behavioral regression for R01 and a failing global-scan regression for R02 before changing runtime code. Run focused Node and Python/actual-host tests, generated-contract, type and format checks, then full suites. Run the bounded capacity benchmark separately and record its exact configuration and measured tool latency. Package artifacts, if rebuilt, receive a new immutable candidate version. Git submission and registry publication remain separate actions.
 
-Local RED/GREEN and measurement evidence is in [TDD-0012](../tdd/0012-tool-control-and-capacity.md) and [the capacity result](../tdd/0012-capacity.json).
+Local RED/GREEN, CI chronology and measurement evidence is in [TDD-0012](../tdd/0012-tool-control-and-capacity.md), [the CI record](../tdd/0012-ci.json) and [the capacity result](../tdd/0012-capacity.json).
