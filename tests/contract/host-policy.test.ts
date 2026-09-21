@@ -327,10 +327,14 @@ for (const proof of [true, false, 'late', 'missing', 'throws'] as const) {
               return proof === 'late' ? late : proof;
             },
           }),
-      query: withClaudeProcess(() =>
-        (async function* () {
-          yield terminal();
-        })(),
+      query: withClaudeProcess(
+        () =>
+          (async function* () {
+            yield terminal();
+          })(),
+        // Wait for the offline child to install its handlers before cleanup starts. This keeps
+        // the 300 ms assertion scoped to process exit instead of including cold process startup.
+        Promise.resolve(),
       ),
     });
     const engine = await createEngine({ ...paths, adapters: [adapter] });

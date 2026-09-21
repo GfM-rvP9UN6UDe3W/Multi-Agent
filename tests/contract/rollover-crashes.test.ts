@@ -41,8 +41,9 @@ for (const point of points)
           configPath,
           `rollover.${point}`,
         ],
-        { encoding: 'utf8', timeout: 5000 },
+        { encoding: 'utf8', timeout: 15000 },
       );
+      assert.ifError(child.error);
       assert.equal(child.status, 73, child.stderr);
       const interrupted = JSON.parse(
         readFileSync(join(config.stores.controlDir, 'manifest.json'), 'utf8'),

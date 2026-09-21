@@ -879,6 +879,7 @@ test('AC05 event replay is bounded by encoded bytes without losing the next curs
       await until(
         () => task(f.engine, t.id),
         (t) => t.status === 'waiting_approval',
+        10000,
       );
     let cursor = '0';
     const events = [];

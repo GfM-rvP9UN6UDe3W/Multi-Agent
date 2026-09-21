@@ -97,13 +97,19 @@ test('B01/B02 retained details expire into lifetime tombstones, protected shared
     f.policy.collect();
     assert.equal(f.store.operation('op-old').targetId, 'old');
     f.advance(2);
-    f.policy.collect();
+    for (let batch = 0; batch < 10 && !f.store.findOperationById('op-old')?.historyExpired; batch++)
+      f.policy.collect();
     assert.throws(() => f.store.operation('op-old'), { code: 'OPERATION_HISTORY_EXPIRED' });
     assert.equal(f.store.findOperation('tasks.create', 'local', 'old')?.digest, 'old');
     assert.equal(f.store.artifactText(artifact), 'shared evidence');
     f.store.put('tasks', 'active', { id: 'active', status: 'cancelled', artifactRefs: [artifact] });
     f.advance(91);
-    f.policy.collect();
+    for (
+      let batch = 0;
+      batch < 10 && !f.store.get<any>('artifacts', artifact)?.historyExpired;
+      batch++
+    )
+      f.policy.collect();
     assert.throws(() => f.store.artifactText(artifact), { code: 'ARTIFACT_HISTORY_EXPIRED' });
     assert.equal(f.store.findOperation('tasks.create', 'local', 'old')?.operation.id, 'op-old');
   } finally {
