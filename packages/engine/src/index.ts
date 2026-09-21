@@ -6,7 +6,16 @@ const requestIdentity = new AsyncLocalStorage<RetryIdentity>();
 import { randomUUID } from 'node:crypto';
 import { Store } from './store.ts';
 import { OrchestrationError, fail } from './errors.ts';
-import { object, fields, string, integer, taskSpec, messageSpec, digest } from './validation.ts';
+import {
+  object,
+  fields,
+  string,
+  integer,
+  taskSpec,
+  messageSpec,
+  digest,
+  contextPlan as validateContextPlan,
+} from './validation.ts';
 import { readRuntimeCapabilities } from './runtime.ts';
 import { usageRecord } from './usage.ts';
 import { contains, normalizeRules, verifyRule, workspacePath } from './verification.ts';
@@ -42,6 +51,8 @@ import type {
   ExecutionConflict,
   SchedulerSnapshot,
   FrozenVerificationRule,
+  HandoffRequest,
+  VerificationRule,
   TaskSpec,
   RuntimeSpec,
   RoutingDecision,
@@ -158,6 +169,8 @@ class LocalEngine implements Engine {
   private clock: EngineClock;
   private timeouts: Required<LifecycleTimeouts>;
   private verificationRules: FrozenVerificationRule[];
+  /** `id@version` of rules registered through `rules.register` (SPEC-0014 W03). */
+  private runtimeRuleKeys = new Set<string>();
   private queueTimers = new Map<string, { cancel: () => void; deadline: number }>();
   private permissionWaits = new Map<
     string,
@@ -176,7 +189,7 @@ class LocalEngine implements Engine {
       if (this.adapters.has(adapter.provider)) fail('VALIDATION_ERROR', 'Duplicate provider');
       this.adapters.set(adapter.provider, adapter);
     }
-    integer(config.limits?.maxActiveSessions ?? 2, 'maxActiveSessions', 1, 2);
+    integer(config.limits?.maxActiveSessions ?? 2, 'maxActiveSessions', 1, 8);
     integer(
       config.limits?.maxQuarantinedDispatches ?? 32,
       'maxQuarantinedDispatches',
@@ -193,8 +206,10 @@ class LocalEngine implements Engine {
       ['maxRepeatedCalls', 6, 100],
     ] as const)
       integer(config.tools?.[key] ?? fallback, `tools.${key}`, 1, max);
-    if (config.tools?.enabled !== undefined && typeof config.tools.enabled !== 'boolean')
-      fail('VALIDATION_ERROR', 'tools.enabled must be boolean');
+    integer(config.tools?.handoffTtlMs ?? 86400000, 'tools.handoffTtlMs', 60000, 604800000);
+    for (const key of ['enabled', 'approveDelegation', 'handoffs'] as const)
+      if (config.tools?.[key] !== undefined && typeof config.tools[key] !== 'boolean')
+        fail('VALIDATION_ERROR', `tools.${key} must be boolean`);
     integer(config.approvalTtlMs ?? 86400000, 'approvalTtlMs', 1, 604800000);
     integer(config.runtimeApprovals?.ttlMs ?? 300000, 'runtimeApprovals.ttlMs', 1, 86400000);
     integer(config.messages?.ttlMs ?? 86400000, 'messages.ttlMs', 1, 604800000);
@@ -257,6 +272,21 @@ class LocalEngine implements Engine {
       this.storage = new StorageGovernance(this.store, config.storage);
       this.accounting = new CostLedger(this.store, config);
       this.verificationRules = normalizeRules(this.store.workspace, config.verificationRules);
+      for (const stored of this.store.all<FrozenVerificationRule>('verification_rules')) {
+        const { digest: _digest, ...value } = stored;
+        const [rule] = normalizeRules(this.store.workspace, [value]);
+        const key = `${rule.id}@${rule.version}`;
+        const configured = this.verificationRules.find(
+          (r) => r.id === rule.id && r.version === rule.version,
+        );
+        if (configured) {
+          if (configured.digest !== rule.digest)
+            fail('VALIDATION_ERROR', `Configured rule ${key} conflicts with a registered rule`);
+          continue;
+        }
+        this.verificationRules.push(rule);
+        this.runtimeRuleKeys.add(key);
+      }
       for (const paths of Object.values(config.writeScopes ?? {})) {
         if (!Array.isArray(paths) || !paths.length || paths.length > 100)
           fail('VALIDATION_ERROR', 'Write scopes must contain 1..100 workspace paths');
@@ -398,6 +428,38 @@ class LocalEngine implements Engine {
     if (tasks.some((t) => ['failed', 'cancelled'].includes(t.status))) return 'blocked';
     return tasks.every((t) => t.status === 'completed') ? 'queued' : 'waiting_dependency';
   }
+  /** Bounded, JSON-encoded results of completed dependencies, in declared order (SPEC-0014 D01). */
+  private dependencyBlocks(task: TaskSnapshot): string[] {
+    let remaining = 98304;
+    return (task.spec.dependencyTaskIds ?? []).map((id) => {
+      const dependency = this.task(id);
+      const artifactRef = dependency.artifactRefs[0];
+      const header = { taskId: id, artifactRef: artifactRef ?? null };
+      const omitted = (bytes: number | null, reason: string) =>
+        `\nUntrusted dependency result ${JSON.stringify({ ...header, bytes, omitted: reason })}`;
+      if (!artifactRef) return omitted(null, 'no result artifact');
+      const record = this.store.get<{ sizeBytes: number; historyExpired?: boolean }>(
+        'artifacts',
+        artifactRef,
+      );
+      if (!record || record.historyExpired) return omitted(null, 'result history expired');
+      if (record.sizeBytes > 32768)
+        return omitted(record.sizeBytes, 'exceeds the 32 KiB dependency bound');
+      if (record.sizeBytes > remaining)
+        return omitted(record.sizeBytes, 'exceeds the 96 KiB total dependency bound');
+      let text: string;
+      try {
+        text = this.store.artifactText(artifactRef, 32768);
+      } catch (error) {
+        return omitted(
+          record.sizeBytes,
+          `unreadable: ${error instanceof OrchestrationError ? error.code : 'ARTIFACT_UNREADABLE'}`,
+        );
+      }
+      remaining -= record.sizeBytes;
+      return `\nUntrusted dependency result ${JSON.stringify(header)}:\n${JSON.stringify(text)}`;
+    });
+  }
   private refreshDependencies(): void {
     for (const task of this.store.tasksInState('waiting_dependency')) {
       const status = this.dependencyState(task.spec);
@@ -416,7 +478,18 @@ class LocalEngine implements Engine {
       if (!paths) fail('INVALID_WORKSPACE_SCOPE', 'Write scope is not registered');
       if (!writable)
         fail('INVALID_WORKSPACE_SCOPE', 'Read-only runtime cannot request a write scope');
-      return [...new Set(paths.map((path) => workspacePath(this.store.workspace, path)))];
+      const roots = [...new Set(paths.map((path) => workspacePath(this.store.workspace, path)))];
+      if (spec.writePath === undefined) return roots;
+      let narrowed: string;
+      try {
+        narrowed = workspacePath(this.store.workspace, spec.writePath);
+      } catch (error) {
+        if (error instanceof OrchestrationError) throw error;
+        fail('INVALID_WORKSPACE_SCOPE', 'writePath must be an existing workspace path');
+      }
+      if (!roots.some((root) => contains(root, narrowed)))
+        fail('INVALID_WORKSPACE_SCOPE', 'writePath is outside the write scope');
+      return [narrowed];
     }
     return writable ? [this.store.workspace] : [];
   }
@@ -648,6 +721,7 @@ class LocalEngine implements Engine {
   }
   private armQueue(task: TaskSnapshot): void {
     if (
+      task.status === 'paused' ||
       !task.routing ||
       task.routing.submittedAt ||
       task.routing.expiredAt ||
@@ -674,6 +748,113 @@ class LocalEngine implements Engine {
   private stopQueue(taskId: string): void {
     this.queueTimers.get(taskId)?.cancel();
     this.queueTimers.delete(taskId);
+  }
+  /** The out-of-subtree session a reuse delegation may ask the host to hand work to. */
+  private handoffTarget(
+    plan: Record<string, unknown>,
+    flight: Flight,
+  ): SessionSnapshot | undefined {
+    if (
+      this.config.tools?.handoffs !== true ||
+      plan.requestedMode !== 'reuse' ||
+      plan.candidateSessionId === undefined
+    )
+      return undefined;
+    const target = this.session(string(plan.candidateSessionId, 'candidateSessionId', 128));
+    if (
+      target.status === 'closed' ||
+      (target.taskId && this.inSubtree(target.taskId, flight.taskId))
+    )
+      return undefined;
+    return target;
+  }
+  /** Records a pending request; it grants nothing until the host resolves it (SPEC-0014 H01). */
+  private requestHandoff(
+    flight: Flight,
+    parent: TaskSnapshot,
+    target: SessionSnapshot,
+    goal: string,
+    contextRefs: { artifactRef: string; version: 1 }[],
+    callId: string,
+  ): Json {
+    // A retried tool call maps to the same request instead of creating another.
+    const handoffId = digest(`handoff:${callId}`).slice(0, 32);
+    const receipt = (value: HandoffRequest) => ({
+      handoffId: value.handoffId,
+      status: value.status,
+      targetSessionId: value.targetSessionId,
+    });
+    const existing = this.store.get<HandoffRequest>('handoffs', handoffId);
+    if (existing) return receipt(existing);
+    this.tryExpireHandoffs();
+    const rootTaskId = parent.rootTaskId ?? parent.id;
+    const record: HandoffRequest = {
+      handoffId,
+      status: 'pending',
+      revision: 1,
+      fromTaskId: parent.id,
+      fromSessionId: flight.sessionId,
+      fromDispatchId: flight.dispatchId,
+      fromGeneration: flight.generation,
+      rootTaskId,
+      targetSessionId: target.id,
+      goal,
+      contextRefs,
+      createdAt: this.time(),
+      expiresAt: new Date(
+        this.clock.wallNow() + (this.config.tools?.handoffTtlMs ?? 86400000),
+      ).toISOString(),
+    };
+    this.store.transaction(() => {
+      const pending = (
+        this.store.db
+          .prepare(
+            "SELECT COUNT(*) AS n FROM handoffs WHERE json_extract(data,'$.status')='pending' AND json_extract(data,'$.rootTaskId')=?",
+          )
+          .get(rootTaskId) as { n: number }
+      ).n;
+      if (pending >= 100)
+        fail('HANDOFF_LIMIT', 'This root task already has 100 pending handoff requests');
+      this.store.put('handoffs', handoffId, record);
+      this.store.event(
+        'handoff.requested',
+        { handoffId, targetSessionId: target.id, fromSessionId: flight.sessionId, revision: 1 },
+        { taskId: parent.id, sessionId: target.id },
+      );
+    });
+    return receipt(record);
+  }
+  private expireHandoffs(): void {
+    const now = this.clock.wallNow();
+    const due = (
+      this.store.db
+        .prepare("SELECT data FROM handoffs WHERE json_extract(data,'$.status')='pending'")
+        .all() as { data: string }[]
+    )
+      .map((row) => JSON.parse(row.data) as HandoffRequest)
+      .filter((handoff) => Date.parse(handoff.expiresAt) <= now);
+    if (!due.length) return;
+    this.store.transaction(() => {
+      for (const handoff of due) {
+        handoff.status = 'expired';
+        handoff.revision++;
+        handoff.resolvedAt = this.time();
+        this.store.put('handoffs', handoff.handoffId, handoff);
+        this.store.event(
+          'handoff.expired',
+          { handoffId: handoff.handoffId, revision: handoff.revision },
+          { taskId: handoff.fromTaskId, sessionId: handoff.targetSessionId },
+        );
+      }
+    });
+  }
+  /** Reads apply expiry when the store accepts writes; a read-only store reports stored state. */
+  private tryExpireHandoffs(): void {
+    try {
+      this.expireHandoffs();
+    } catch {
+      // Expiry is retried by the next scheduler pass or mutation.
+    }
   }
   private inSubtree(taskId: string, rootId: string): boolean {
     const seen = new Set<string>();
@@ -735,7 +916,14 @@ class LocalEngine implements Engine {
         const request = object(JSON.parse(encoded), 'request');
         const allowed =
           name === 'work_delegate'
-            ? ['goal', 'contextPlan', 'dependencyTaskIds', 'writeScope', 'idempotencyKey']
+            ? [
+                'goal',
+                'contextPlan',
+                'dependencyTaskIds',
+                'writeScope',
+                'writePath',
+                'idempotencyKey',
+              ]
             : name === 'work_send'
               ? [
                   'taskId',
@@ -828,6 +1016,24 @@ class LocalEngine implements Engine {
                 delegated: false,
                 instruction: goal,
               };
+            } else if (this.handoffTarget(plan, flight)) {
+              if (['dependencyTaskIds', 'writeScope', 'writePath'].some((key) => key in args))
+                fail(
+                  'VALIDATION_ERROR',
+                  'A handoff request carries only a goal and context references',
+                );
+              const refs = validateContextPlan(plan).contextRefs;
+              for (const ref of refs)
+                if (!descendants.some((task) => task.artifactRefs.includes(ref.artifactRef)))
+                  fail('UNAUTHORIZED', 'Context artifact is outside the delegated subtree');
+              result = this.requestHandoff(
+                flight,
+                parent,
+                this.handoffTarget(plan, flight)!,
+                goal,
+                refs,
+                callId,
+              );
             } else {
               let depth = 0;
               for (
@@ -857,6 +1063,12 @@ class LocalEngine implements Engine {
                   : parent.spec.writeScope
                     ? { writeScope: parent.spec.writeScope }
                     : {}),
+                // Children inherit a narrowed parent path unless they name their own scope.
+                ...(args.writePath !== undefined
+                  ? { writePath: args.writePath }
+                  : args.writeScope === undefined && parent.spec.writePath
+                    ? { writePath: parent.spec.writePath }
+                    : {}),
               });
               for (const dependency of childSpec.dependencyTaskIds ?? []) authorize(dependency);
               for (const ref of childSpec.contextPlan!.contextRefs) {
@@ -878,11 +1090,11 @@ class LocalEngine implements Engine {
                 )
               )
                 fail('UNAUTHORIZED', 'Child write scope exceeds its parent');
-              result = await this.call('tasks.create', {
-                spec: childSpec,
-                idempotencyKey: mutationKey,
-                expectedStoreId: this.storeId,
-              });
+              result = await this.call(
+                'tasks.create',
+                { spec: childSpec, idempotencyKey: mutationKey, expectedStoreId: this.storeId },
+                { delegationGate: this.config.tools?.approveDelegation === true },
+              );
             }
           } else if (name === 'work_send') {
             const taskId = string(args.taskId, 'taskId', 128);
@@ -935,8 +1147,9 @@ class LocalEngine implements Engine {
           } else {
             const kind = string(args.kind, 'kind', 32),
               id = string(args.id, 'id', 512);
+            const dependencies = parent.spec.dependencyTaskIds ?? [];
             if (kind === 'task') {
-              authorize(id);
+              if (!dependencies.includes(id)) authorize(id);
               result = this.task(id);
             } else if (kind === 'session') {
               const session = this.session(id);
@@ -948,9 +1161,18 @@ class LocalEngine implements Engine {
               authorize(message.taskId);
               result = message;
             } else if (kind === 'artifact') {
-              if (!descendants.some((task) => task.artifactRefs.includes(id)))
+              if (
+                !descendants.some((task) => task.artifactRefs.includes(id)) &&
+                !dependencies.some((dependency) => this.task(dependency).artifactRefs.includes(id))
+              )
                 fail('UNAUTHORIZED', 'Artifact is outside the delegated subtree');
               result = { artifactRef: id, text: this.store.artifactText(id, 65536) };
+            } else if (kind === 'handoff') {
+              this.tryExpireHandoffs();
+              const handoff = this.store.require<HandoffRequest>('handoffs', id);
+              if (!descendants.some((task) => task.id === handoff.fromTaskId))
+                fail('UNAUTHORIZED', 'Handoff is outside the delegated subtree');
+              result = handoff as unknown as Json;
             } else if (kind === 'usage') {
               authorize(id);
               result = await this.call('usage.get', { taskId: id });
@@ -1782,7 +2004,28 @@ class LocalEngine implements Engine {
     task: TaskSnapshot,
     session: SessionSnapshot,
     operationId: string,
+    approveDelegation = false,
   ): void {
+    if (task.status === 'paused' && task.reason === 'DELEGATION_APPROVAL_REQUIRED') {
+      if (session.taskId === task.id && session.status === 'paused')
+        this.saveSession(session, 'idle');
+      if (!approveDelegation) return;
+      this.admitWork();
+      const status = this.dependencyState(task.spec);
+      // The routing wait starts at approval; the time spent awaiting the host never expires it.
+      if (task.routing && !task.routing.submittedAt) {
+        task.routing.enqueuedAt = this.time();
+        task.routing.deadlineAt = new Date(
+          this.clock.wallNow() + task.routing.maxQueueWaitMs,
+        ).toISOString();
+        delete task.routing.expiredAt;
+      }
+      this.stopQueue(task.id);
+      this.saveTask(task, status, status === 'blocked' ? 'dependency_failed' : null);
+      this.taskEvent(task, operationId);
+      this.armQueue(task);
+      return;
+    }
     if (
       task.status === 'paused' &&
       !(
@@ -2009,6 +2252,16 @@ class LocalEngine implements Engine {
               rotate: true,
               stop: true,
             },
+            workflow: {
+              version: 1,
+              dependencyResults: true,
+              revise: true,
+              delegationApproval: true,
+              handoffs: true,
+              writePath: true,
+              runtimeRules: true,
+              taskList: true,
+            },
             providers: [...this.adapters.keys()],
             lifecycle: { version: 1, reconcile: 'owner-attestation', durableDeadlines: true },
             executionIsolation: {
@@ -2047,7 +2300,12 @@ class LocalEngine implements Engine {
             ).n;
             if (queued >= (this.config.limits?.maxQueuedTasks ?? 1000))
               fail('QUEUE_CAPACITY_EXHAUSTED', 'Queued task capacity reached');
-            const status = this.dependencyState(spec);
+            const dependencyStatus = this.dependencyState(spec);
+            // A gated child is paused in its creating transaction, so no scheduler pass sees it queued.
+            const status =
+              context.delegationGate && dependencyStatus !== 'blocked'
+                ? 'paused'
+                : dependencyStatus;
             const parent = spec.parentTaskId ? this.task(spec.parentTaskId) : undefined;
             if (parent?.spec.budget && !spec.budget)
               spec.budget = structuredClone(parent.spec.budget);
@@ -2087,7 +2345,12 @@ class LocalEngine implements Engine {
               revision: 1,
               artifactRefs: [],
               result: null,
-              reason: status === 'blocked' ? 'dependency_failed' : null,
+              reason:
+                status === 'blocked'
+                  ? 'dependency_failed'
+                  : status === 'paused'
+                    ? 'DELEGATION_APPROVAL_REQUIRED'
+                    : null,
               approvalId: null,
               createdAt: time,
               updatedAt: time,
@@ -2102,7 +2365,7 @@ class LocalEngine implements Engine {
             op.result = { taskId: id };
             this.store.event(
               'task.created',
-              { status: task.status },
+              { status: task.status, parentTaskId: spec.parentTaskId ?? null, rootTaskId },
               { taskId: id, sessionId, operationId: op.id },
             );
           },
@@ -2114,6 +2377,171 @@ class LocalEngine implements Engine {
       case 'tasks.get':
         fields(p, ['taskId']);
         return this.task(string(p.taskId, 'taskId', 128));
+      case 'rules.register': {
+        fields(p, ['rule', 'idempotencyKey']);
+        if (!context.owner || context.runtimeActor)
+          fail('UNAUTHORIZED', 'Only the host owner can register verification rules');
+        const [rule] = normalizeRules(this.store.workspace, [p.rule as VerificationRule]);
+        const key = `${rule.id}@${rule.version}`;
+        let registered: FrozenVerificationRule | undefined;
+        const op = this.operation(
+          method,
+          'local',
+          string(p.idempotencyKey, 'idempotencyKey'),
+          { rule },
+          (op) => {
+            const existing = this.verificationRules.find(
+              (r) => r.id === rule.id && r.version === rule.version,
+            );
+            if (existing && existing.digest !== rule.digest)
+              fail('CONFLICT', 'This rule id/version is registered with different content');
+            if (existing) op.status = 'noop';
+            else {
+              if (this.verificationRules.length >= 1000)
+                fail('VALIDATION_ERROR', 'At most 1000 verification rules may be effective');
+              this.store.put('verification_rules', key, rule);
+              registered = rule;
+            }
+            op.targetId = key;
+            op.result = { id: rule.id, version: rule.version, digest: rule.digest };
+          },
+        );
+        // Admission sees the rule only after its registration committed.
+        if (registered) {
+          this.verificationRules.push(registered);
+          this.runtimeRuleKeys.add(key);
+        }
+        return op;
+      }
+      case 'handoffs.get':
+        fields(p, ['handoffId']);
+        this.tryExpireHandoffs();
+        return this.store.require<HandoffRequest>(
+          'handoffs',
+          string(p.handoffId, 'handoffId', 128),
+        );
+      case 'handoffs.list': {
+        fields(p, ['status', 'targetSessionId', 'limit', 'afterCursor']);
+        if (
+          p.status !== undefined &&
+          !['pending', 'accepted', 'rejected', 'expired', 'invalidated'].includes(
+            p.status as string,
+          )
+        )
+          fail('VALIDATION_ERROR', 'Unknown handoff status');
+        let after = 0;
+        if (p.afterCursor !== undefined) {
+          const raw = string(p.afterCursor, 'afterCursor', 19);
+          after = Number(raw);
+          if (!/^\d+$/.test(raw) || !Number.isSafeInteger(after))
+            fail('VALIDATION_ERROR', 'afterCursor must come from a previous page');
+        }
+        this.tryExpireHandoffs();
+        const page = this.store.listHandoffs(
+          {
+            ...(p.status !== undefined ? { status: p.status as string } : {}),
+            ...(p.targetSessionId !== undefined
+              ? { targetSessionId: string(p.targetSessionId, 'targetSessionId', 128) }
+              : {}),
+          },
+          after,
+          p.limit === undefined ? 50 : integer(p.limit, 'limit', 1, 100),
+        );
+        return {
+          handoffs: page.handoffs,
+          nextCursor: page.next === null ? null : String(page.next),
+        };
+      }
+      case 'handoffs.resolve': {
+        fields(p, [
+          'handoffId',
+          'expectedRevision',
+          'outcome',
+          'taskId',
+          'comment',
+          'idempotencyKey',
+        ]);
+        if (context.runtimeActor) fail('UNAUTHORIZED', 'Only a client can resolve handoffs');
+        const id = string(p.handoffId, 'handoffId', 128);
+        const expectedRevision = integer(p.expectedRevision, 'expectedRevision', 1);
+        if (!['accepted', 'rejected'].includes(p.outcome as string))
+          fail('VALIDATION_ERROR', 'outcome must be accepted or rejected');
+        if (p.outcome === 'accepted' && p.taskId === undefined)
+          fail('VALIDATION_ERROR', 'Accepting a handoff requires the task the host created');
+        if (p.outcome === 'rejected' && p.taskId !== undefined)
+          fail('VALIDATION_ERROR', 'A rejected handoff has no task');
+        const taskId = p.taskId === undefined ? undefined : string(p.taskId, 'taskId', 128);
+        if (
+          p.comment !== undefined &&
+          (typeof p.comment !== 'string' || !p.comment || Buffer.byteLength(p.comment) > 16384)
+        )
+          fail('VALIDATION_ERROR', 'comment must be 1 to 16384 UTF-8 bytes');
+        const comment = p.comment as string | undefined;
+        this.tryExpireHandoffs();
+        return this.operation(
+          method,
+          id,
+          string(p.idempotencyKey, 'idempotencyKey'),
+          { handoffId: id, expectedRevision, outcome: p.outcome, taskId, comment },
+          (op) => {
+            const handoff = this.store.require<HandoffRequest>('handoffs', id);
+            if (handoff.status !== 'pending' || handoff.revision !== expectedRevision)
+              fail('STALE_TARGET', 'Handoff request is no longer pending at this revision');
+            if (taskId !== undefined) this.task(taskId);
+            handoff.status = p.outcome as 'accepted' | 'rejected';
+            handoff.revision++;
+            handoff.resolvedAt = this.time();
+            if (taskId !== undefined) handoff.taskId = taskId;
+            if (comment !== undefined) handoff.comment = comment;
+            this.store.put('handoffs', id, handoff);
+            op.targetId = id;
+            op.result = { handoffId: id, status: handoff.status };
+            this.store.event(
+              `handoff.${handoff.status}`,
+              {
+                handoffId: id,
+                revision: handoff.revision,
+                ...(taskId !== undefined ? { taskId } : {}),
+              },
+              {
+                taskId: handoff.fromTaskId,
+                sessionId: handoff.targetSessionId,
+                operationId: op.id,
+              },
+            );
+          },
+        );
+      }
+      case 'rules.list':
+        fields(p, []);
+        return {
+          rules: this.verificationRules.map((rule) => ({
+            ...rule,
+            source: this.runtimeRuleKeys.has(`${rule.id}@${rule.version}`) ? 'runtime' : 'config',
+          })),
+        };
+      case 'tasks.list': {
+        fields(p, ['parentTaskId', 'sessionId', 'limit', 'afterCursor']);
+        if (p.parentTaskId !== undefined && p.sessionId !== undefined)
+          fail('VALIDATION_ERROR', 'Use at most one of parentTaskId and sessionId');
+        let after = 0;
+        if (p.afterCursor !== undefined) {
+          const raw = string(p.afterCursor, 'afterCursor', 19);
+          after = Number(raw);
+          if (!/^\d+$/.test(raw) || !Number.isSafeInteger(after))
+            fail('VALIDATION_ERROR', 'afterCursor must come from a previous page');
+        }
+        const page = this.store.listTasks(
+          p.parentTaskId !== undefined
+            ? { parentTaskId: string(p.parentTaskId, 'parentTaskId', 128) }
+            : p.sessionId !== undefined
+              ? { sessionId: string(p.sessionId, 'sessionId', 128) }
+              : {},
+          after,
+          p.limit === undefined ? 50 : integer(p.limit, 'limit', 1, 100),
+        );
+        return { tasks: page.tasks, nextCursor: page.next === null ? null : String(page.next) };
+      }
       case 'sessions.get':
         fields(p, ['sessionId']);
         return this.sessionSnapshot(string(p.sessionId, 'sessionId', 128));
@@ -2222,7 +2650,7 @@ class LocalEngine implements Engine {
               op.status = 'noop';
               return;
             }
-            this.resumePausedTask(task, session, op.id);
+            this.resumePausedTask(task, session, op.id, true);
             op.result = { taskId: id };
           },
         );
@@ -2420,10 +2848,20 @@ class LocalEngine implements Engine {
         fields(p, ['approvalId', 'decision', 'idempotencyKey']);
         const id = string(p.approvalId, 'approvalId', 128),
           decision = object(p.decision, 'decision');
-        fields(decision, ['choice', 'expectedRevision']);
-        if (!['approve', 'deny'].includes(decision.choice as string))
-          fail('VALIDATION_ERROR', 'choice must be approve or deny');
+        fields(decision, ['choice', 'expectedRevision', 'comment']);
+        if (!['approve', 'deny', 'revise'].includes(decision.choice as string))
+          fail('VALIDATION_ERROR', 'choice must be approve, deny or revise');
         integer(decision.expectedRevision, 'expectedRevision', 1);
+        if (
+          decision.comment !== undefined &&
+          (typeof decision.comment !== 'string' ||
+            !decision.comment ||
+            Buffer.byteLength(decision.comment) > 16384)
+        )
+          fail('VALIDATION_ERROR', 'comment must be 1 to 16384 UTF-8 bytes');
+        if (decision.choice === 'revise' && decision.comment === undefined)
+          fail('VALIDATION_ERROR', 'revise requires a comment for the next dispatch');
+        const comment = decision.comment as string | undefined;
         const op = this.operation(
           method,
           id,
@@ -2433,6 +2871,8 @@ class LocalEngine implements Engine {
             const approval = this.store.require<ApprovalRequest>('approvals', id);
             const task = this.task(approval.taskId);
             if (approval.purpose === 'runtime_permission') {
+              if (decision.choice === 'revise')
+                fail('VALIDATION_ERROR', 'revise applies only to task acceptance');
               const target = approval.target;
               const session = this.session(task.sessionId);
               if (
@@ -2448,6 +2888,7 @@ class LocalEngine implements Engine {
               )
                 fail('STALE_TARGET', 'Runtime permission request is no longer current');
               approval.status = decision.choice === 'approve' ? 'approved' : 'denied';
+              if (comment !== undefined) approval.comment = comment;
               approval.revision++;
               this.store.put('approvals', id, approval);
               task.approvalId = null;
@@ -2474,17 +2915,26 @@ class LocalEngine implements Engine {
               approval.target.taskRevision !== task.revision
             )
               fail('STALE_TARGET', 'Approval is no longer current');
-            approval.status = decision.choice === 'approve' ? 'approved' : 'denied';
+            approval.status =
+              decision.choice === 'approve'
+                ? 'approved'
+                : decision.choice === 'revise'
+                  ? 'revised'
+                  : 'denied';
+            if (comment !== undefined) approval.comment = comment;
             approval.revision++;
             this.store.put('approvals', id, approval);
             op.targetId = id;
             op.result = { taskId: task.id, choice: decision.choice as string };
+            // The request rides on the task until a dispatch that carried it returns a result.
+            if (decision.choice === 'revise')
+              task.revisionRequest = { approvalId: id, comment: comment! };
             const pending = this.pendingMessages(task.sessionId);
             const session = this.session(task.sessionId);
             const nextStatus =
               decision.choice === 'deny'
                 ? 'failed'
-                : pending.length
+                : pending.length || decision.choice === 'revise'
                   ? ['paused', 'closed'].includes(session.status)
                     ? 'paused'
                     : 'queued'
@@ -2496,7 +2946,9 @@ class LocalEngine implements Engine {
                 ? 'acceptance_denied'
                 : nextStatus === 'paused'
                   ? 'paused_by_client'
-                  : null,
+                  : decision.choice === 'revise'
+                    ? 'revision_requested'
+                    : null,
             );
             if (nextStatus === 'queued') this.saveSession(session, 'idle');
             this.store.event(
@@ -2652,7 +3104,7 @@ class LocalEngine implements Engine {
       case 'sessions.open': {
         fields(p, ['spec', 'idempotencyKey']);
         const raw = object(p.spec, 'spec');
-        fields(raw, ['runtime', 'writeScope']);
+        fields(raw, ['runtime', 'writeScope', 'writePath']);
         const spec = taskSpec({
           ...raw,
           goal: 'Open a logical session',
@@ -2937,7 +3389,11 @@ class LocalEngine implements Engine {
             session.pauseOrigin =
               context.runtimeActor && session.pauseOrigin !== 'client' ? 'runtime' : 'client';
           this.saveSession(session, 'paused');
-          if (task.status !== 'waiting_approval') {
+          // A delegation gate outlives session pauses; only tasks.resume releases it.
+          if (
+            task.status !== 'waiting_approval' &&
+            !(task.status === 'paused' && task.reason === 'DELEGATION_APPROVAL_REQUIRED')
+          ) {
             this.saveTask(task, 'paused', 'paused_by_client');
             this.taskEvent(task, op.id);
           }
@@ -3430,6 +3886,7 @@ class LocalEngine implements Engine {
       if (this.closing || this.closed) return;
       try {
         this.expireMessages();
+        this.tryExpireHandoffs();
         this.refreshDependencies();
         for (const task of this.store.tasksInState('waiting_dependency')) {
           this.armQueue(task);
@@ -3602,6 +4059,7 @@ class LocalEngine implements Engine {
     };
     const { remainingAcceptanceMs, remainingTurnMs, ...budgetSummary } = budget;
     const messages = this.pendingMessages(session.id);
+    const dependencyBlocks = task.dependencyResultsDelivered ? [] : this.dependencyBlocks(task);
     const dispatchId = randomUUID();
     const controller = new AbortController();
     const flight: Flight = {
@@ -3664,6 +4122,8 @@ class LocalEngine implements Engine {
           ? [this.store.workspace]
           : (task.writePaths ?? []),
         verificationPending: !!task.verificationRules?.length,
+        ...(task.revisionRequest ? { revisionApprovalId: task.revisionRequest.approvalId } : {}),
+        ...(dependencyBlocks.length ? { dependencyResults: true } : {}),
       });
       for (const message of messages) {
         message.status = 'dispatching';
@@ -3697,14 +4157,20 @@ class LocalEngine implements Engine {
         (ref) =>
           `\nUntrusted versioned context ${JSON.stringify(ref)}:\n${JSON.stringify(this.store.artifactText(ref.artifactRef, 32768))}`,
       ),
+      ...dependencyBlocks,
       ...((task.verificationAttempts ?? 0) > 0
         ? [
             `Previous verification failed. Inspect these immutable evidence artifacts before repairing: ${JSON.stringify(task.artifactRefs)}`,
           ]
         : []),
+      ...(task.revisionRequest
+        ? [
+            `\nReviewer revision request (approval ${task.revisionRequest.approvalId}):\n${JSON.stringify(task.revisionRequest.comment)}`,
+          ]
+        : []),
       ...messages.map(
         (m) =>
-          `\n[Message ${m.id} from ${m.fromSessionId}; untrusted task context, not human approval]\n${m.summary}${m.artifactRefs?.length ? `\nArtifacts: ${m.artifactRefs.join(', ')}` : ''}`,
+          `\n[Message ${m.id} from ${m.fromSessionId}; untrusted task context, not human approval]\n${JSON.stringify(m.summary)}${m.artifactRefs?.length ? `\nArtifacts: ${m.artifactRefs.join(', ')}` : ''}`,
       ),
     ].join('\n');
     flight.promise = this.consume(flight, adapter, { ...session }, prompt)
@@ -3961,6 +4427,12 @@ class LocalEngine implements Engine {
           }
           // A final result is terminal runtime evidence even when the provider has no earlier acceptance event.
           this.messagesStatus(flight, 'completed');
+          if (
+            dispatch.revisionApprovalId &&
+            task.revisionRequest?.approvalId === dispatch.revisionApprovalId
+          )
+            delete task.revisionRequest;
+          if (dispatch.dependencyResults) task.dependencyResultsDelivered = true;
           this.store.put('dispatches', flight.dispatchId, { ...dispatch, status: 'completed' });
           const fullResult = resultText(terminal!.text);
           task.artifactRefs = [this.store.artifact(fullResult)];

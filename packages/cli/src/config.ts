@@ -267,7 +267,7 @@ export async function loadConfig(configPath: string): Promise<HostConfig> {
       'limits',
     );
     const bounds: Record<string, number> = {
-      maxActiveSessions: 2,
+      maxActiveSessions: 8,
       maxTurnsPerTask: 1000,
       maxQuarantinedDispatches: 1024,
       maxLogicalSessions: 100000,
@@ -286,11 +286,27 @@ export async function loadConfig(configPath: string): Promise<HostConfig> {
     if (!object(parsed.tools)) invalid('tools must be an object');
     fields(
       parsed.tools,
-      ['enabled', 'maxDepth', 'maxChildren', 'maxCallsPerDispatch', 'maxRepeatedCalls'],
+      [
+        'enabled',
+        'maxDepth',
+        'maxChildren',
+        'maxCallsPerDispatch',
+        'maxRepeatedCalls',
+        'approveDelegation',
+        'handoffs',
+        'handoffTtlMs',
+      ],
       'tools',
     );
-    if (parsed.tools.enabled !== undefined && typeof parsed.tools.enabled !== 'boolean')
-      invalid('tools.enabled must be boolean');
+    for (const key of ['enabled', 'approveDelegation', 'handoffs'])
+      if (parsed.tools[key] !== undefined && typeof parsed.tools[key] !== 'boolean')
+        invalid(`tools.${key} must be boolean`);
+    const ttl = parsed.tools.handoffTtlMs;
+    if (
+      ttl !== undefined &&
+      (!Number.isSafeInteger(ttl) || (ttl as number) < 60000 || (ttl as number) > 604800000)
+    )
+      invalid('tools.handoffTtlMs must be an integer from 60000 through 604800000');
     for (const [key, max] of Object.entries({
       maxDepth: 16,
       maxChildren: 1000,

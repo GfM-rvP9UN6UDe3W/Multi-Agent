@@ -166,7 +166,8 @@ test('CLI rejects unsupported commands, implicit fake, arbitrary adapter module 
 test('doctor rejects limits and deadlines that the engine cannot accept', async (t) => {
   const { config, configPath } = await fixture(t);
   for (const invalid of [
-    { limits: { maxActiveSessions: 3 } },
+    // SPEC-0014 C01 raised the owner limit to eight.
+    { limits: { maxActiveSessions: 9 } },
     { limits: { maxTurnsPerTask: 1001 } },
     { approvalTtlMs: 0.5 },
     { approvalTtlMs: 604800001 },

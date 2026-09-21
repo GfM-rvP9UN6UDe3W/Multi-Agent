@@ -60,6 +60,15 @@ function snapshot(value: unknown): Json {
 }
 
 /** No model or host work is performed by this synchronous capability preflight. */
+/** Validates the provider name a bundled adapter registers under; `fallback` is its default. */
+export function adapterProviderName(value: unknown, fallback: string): string {
+  if (value === undefined) return fallback;
+  if (typeof value !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(value))
+    throw Object.assign(new Error('Invalid adapter provider name'), {
+      code: 'INVALID_ADAPTER_CONFIG',
+    });
+  return value;
+}
 export function readRuntimeCapabilities(adapter: RuntimeAdapter): RuntimeCapabilities {
   if (!nonempty(adapter.provider)) invalid('provider');
   let raw: unknown;
@@ -111,8 +120,8 @@ export function readRuntimeCapabilities(adapter: RuntimeAdapter): RuntimeCapabil
     if (typeof evidence.terminalCoversExecution !== 'boolean')
       invalid('executionEvidence.terminalCoversExecution');
   }
-  if (Object.hasOwn(value, 'forkModelChange') && typeof value.forkModelChange !== 'boolean')
-    invalid('forkModelChange');
+  for (const key of ['forkModelChange', 'readFence'])
+    if (Object.hasOwn(value, key) && typeof value[key] !== 'boolean') invalid(key);
   return value as unknown as RuntimeCapabilities;
 }
 

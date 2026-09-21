@@ -23,6 +23,8 @@ export const MUTATIONS = new Set([
   'storage.backup',
   'stores.rollover',
   'stores.import',
+  'rules.register',
+  'handoffs.resolve',
 ]);
 export interface RetryIdentity {
   storeId: string;
@@ -71,6 +73,7 @@ export function requestScope(method: string, params: Record<string, unknown>): s
   if (method === 'messages.send') return String((params.spec as any)?.toSessionId);
   if (method === 'approvals.decide') return String(params.approvalId);
   if (method === 'scheduler.resolveConflict') return String(params.conflictId);
+  if (method === 'handoffs.resolve') return String(params.handoffId);
   if (method === 'costs.recordOverhead') return 'host';
   return 'local';
 }

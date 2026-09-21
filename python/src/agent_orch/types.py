@@ -32,6 +32,7 @@ class TaskSpec:
     dependency_task_ids: list[str] = field(default_factory=list)
     parent_task_id: str | None = None
     write_scope: str | None = None
+    write_path: str | None = None
     context_plan: dict[str, Any] | None = None
     budget: dict[str, Any] | None = None
     context_estimate: dict[str, Any] | None = None
@@ -74,6 +75,12 @@ _WIRE_TO_PYTHON = {
     "providerTurnId": "provider_turn_id", "requestId": "request_id", "toolName": "tool_name",
     "requestDigest": "request_digest", "runtimeApprovals": "runtime_approvals", "ttlMs": "ttl_ms",
     "sessionLifecycle": "session_lifecycle", "forkModel": "fork_model",
+    "writePath": "write_path", "revisionRequest": "revision_request",
+    "dependencyResultsDelivered": "dependency_results_delivered", "dependencyResults": "dependency_results",
+    "delegationApproval": "delegation_approval", "runtimeRules": "runtime_rules", "taskList": "task_list",
+    "handoffId": "handoff_id", "targetSessionId": "target_session_id", "fromTaskId": "from_task_id",
+    "fromSessionId": "from_session_id", "fromDispatchId": "from_dispatch_id",
+    "fromGeneration": "from_generation", "resolvedAt": "resolved_at", "nextCursor": "next_cursor",
     "contextPlan": "context_plan", "requestedMode": "requested_mode", "candidateSessionId": "candidate_session_id",
     "contextRefs": "context_refs", "artifactRef": "artifact_ref", "snapshotRef": "snapshot_ref",
     "fallbackModes": "fallback_modes", "maxQueueWaitMs": "max_queue_wait_ms", "enqueuedAt": "enqueued_at",
@@ -131,8 +138,9 @@ _WIRE_TO_PYTHON = {
 _PYTHON_TO_WIRE = {value: key for key, value in _WIRE_TO_PYTHON.items()}
 _OBJECT_FIELDS = {"spec", "runtime", "acceptance", "target", "data", "error", "capabilities",
                   "lifecycle", "resolution", "evidence", "timeouts", "executionIsolation",
-                  "execution", "lease", "budget", "routing", "contextPlan", "sessionLifecycle", "retryIdentity", "storeNamespaces"}
-_OBJECT_LIST_FIELDS = {"records", "events", "occupants", "conflicts"}
+                  "execution", "lease", "budget", "routing", "contextPlan", "sessionLifecycle", "retryIdentity", "storeNamespaces",
+                  "workflow", "revisionRequest"}
+_OBJECT_LIST_FIELDS = {"records", "events", "occupants", "conflicts", "tasks", "handoffs", "rules"}
 
 
 class Snapshot(Mapping[str, Any]):

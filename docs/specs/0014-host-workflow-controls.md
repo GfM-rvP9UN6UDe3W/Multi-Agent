@@ -1,0 +1,76 @@
+# SPEC-0014: Host workflow controls
+
+Date: 2026-09-21. Status: implemented; remote CI pending. Evidence: [TDD-0014](../tdd/0014-host-workflow-controls.md). Origin: an embedding host's product requests, delivered together with [SPEC-0013](0013-fork-model-change.md) in one release candidate. Every behavior applies to every caller; features that change existing behavior say so.
+
+## Problem and scope
+
+Hosts that run several role-specific agents hit nine gaps: two permission profiles of one runtime cannot share an engine; a dependent task cannot see its dependencies' results; the read-only profile can read any local file; at most two sessions run at once; acceptance can only approve or deny; hosts cannot gate model delegation; a model cannot ask to hand work to another agent's session; writable agents cannot get separate write directories without rebuilding the engine; and hosts cannot list a task tree. `approvals.decide` also rejects the `comment` field that the schema allows.
+
+Non-goals, because they conflict with the design: hot updates of limits, tool limits or message limits (SPEC-0003-A2: "No hot-update API is added"); task-supplied verification commands; a client registering a new write root; a model placing work in a session outside its subtree or running with another session's permissions; cross-provider continuity. The JSON CLI keeps fixed provider names. Event types and cursors keep their semantics; `usage.recorded`, `usage.getRecord`, the Claude adapter's `query`/`createMcpServer`/`inspectSession` injection points and storage configuration do not change. Storage schema stays 3: new tables are additive, and an older engine ignores them.
+
+## Acceptance criteria
+
+### P — Provider names
+
+- **P01 — Configurable name:** `createClaudeAdapter` and `createCodexAdapter` accept `provider`, 1–128 characters of `[A-Za-z0-9._-]` starting with a letter or digit, defaulting to `claude` and `codex`. The adapter object, its capabilities, every execution-evidence report and every stop-observation target use that name. Pricing, `contextLimits` and provider configuration are keyed by it.
+- **P02 — Two profiles, one engine:** One engine can register two Claude adapters under different names, for example a read-only and a workspace-write profile. Tasks on each name complete and release their leases with no `execution.evidence_rejected`. Duplicate names still fail with `VALIDATION_ERROR`.
+
+### D — Dependency results
+
+- **D01 — Injection:** When a task with dependencies is dispatched, the prompt includes one block per `dependencyTaskIds` entry, in declared order, after the goal and `contextRefs`: `Untrusted dependency result {"taskId":…,"artifactRef":…}` followed by the JSON-encoded text of the dependency's result artifact (`artifactRefs[0]`). Each block is bounded to 32 KiB and all blocks together to 96 KiB. A dependency whose result exceeds the remaining bound, or that has no result artifact, contributes only its identifiers, byte size and the reason. The dispatch record notes that it carried the blocks. Later dispatches of the task repeat them only until one dispatch that carried them reaches a terminal runtime result, so a dispatch that never reached the runtime cannot lose them.
+- **D02 — Reading dependencies:** Bound `work_read` may read, with kinds `task` and `artifact`, the tasks listed in the bound task's own `spec.dependencyTaskIds` and the artifacts in their `artifactRefs`. Reads do not extend to dependencies of dependencies, and every other kind keeps subtree authorization.
+- **D03 — Encoded messages:** Delivered message summaries are JSON-encoded in the prompt, like context references, so model-produced text cannot forge a message header. This changes the prompt text for every message delivery.
+- **D04 — Timing:** Injection reads completed dependencies' immutable artifacts inside the dispatch that the scheduler selects after `refreshDependencies()` has moved the task out of `waiting_dependency`. No host action is involved, so no host timing can lose the handoff.
+
+### R — Revise and comment
+
+- **R01 — Comment:** `approvals.decide` accepts `decision.comment`, a string of 1–16,384 UTF-8 bytes, for any choice. The approval snapshot records it as `comment`.
+- **R02 — Revise:** `choice: "revise"` requires `comment` and applies only to `task_acceptance` approvals. The approval becomes `revised` (event `approval.revised`), and the task returns to `queued` with reason `revision_requested`, or `paused` if its session is paused, in the same session. The next dispatch prompt includes `Reviewer revision request (approval <id>)` followed by the JSON-encoded comment, and pending messages as today. The request stays attached to the task until a dispatch that included it reaches a terminal runtime result. Downstream tasks keep waiting. Each revision dispatch counts toward `maxTurnsPerTask`.
+- **R03 — Guards:** `revise` on a `runtime_permission` approval, without a comment, or on a stale approval fails with the existing codes (`VALIDATION_ERROR`, `STALE_TARGET`) and changes nothing.
+
+### F — Read fence
+
+- **F01 — Default fence:** By default the Claude adapter denies `Read`, `Glob` and `Grep` targets whose canonical path is outside the workspace and the configured `readRoots`, or inside `denyRead` or the state directory. A search root that contains a denied path is also denied, as the state-directory rule does today. Both permission profiles use the fence. It is enforced in the adapter's existing guard, so it does not change `terminalCoversExecution`.
+- **F02 — Configuration:** Adapter options `readRoots` (existing absolute directories, canonicalized when the adapter is created) and `denyRead` (absolute paths, or workspace-relative paths resolved against each dispatch's workspace). `readFence: false` restores the previous behavior for hosts that need it. Capabilities declare `readFence: true` for Claude and `false` for Codex, whose sandbox does not restrict reads.
+- **F03 — Bash in the writable profile:** The writable profile's OS sandbox receives `denyRead` = the host process's home directory (`os.homedir()`), the state directory and configured `denyRead`, and `allowRead` = the workspace and `readRoots`. System paths outside the home directory stay readable so toolchains keep working. This is a behavior change for commands that read home-directory configuration; hosts add such paths to `readRoots`. `readRoots` that overlap the state directory, and a host-supplied `sandbox.filesystem.allowRead` that overlaps it, are rejected because `allowRead` takes precedence over `denyRead`.
+- **F04 — Native evidence:** With the installed Claude binary and the scripted gateway, show that a scripted `Read` of a file outside the workspace is denied and a workspace file is read. On a host with an available sandbox, also show that a scripted Bash read of a home-directory file is blocked while a workspace file is readable. CI covers the guard; the Bash check runs where the OS sandbox exists and is recorded as such.
+
+### C — Concurrency
+
+- **C01 — Limit:** `limits.maxActiveSessions` accepts 1–8; the default stays 2, and `maxQuarantinedDispatches` must still be at least `maxActiveSessions`. The engine never raises concurrency by itself.
+- **C02 — Behavior at 8:** With `maxActiveSessions: 8`, eight independent tasks hold leases at once and a ninth waits. Overlapping write paths still exclude each other, and quarantine reservation still bounds admission. The scheduler snapshot reports all eight occupants.
+
+### G — Delegation gate
+
+- **G01 — Gated children:** With `tools.approveDelegation: true` (default `false`), a child created by `work_delegate` is admitted as `paused` with reason `DELEGATION_APPROVAL_REQUIRED` in the transaction that creates it. The tool returns that snapshot. While paused, the child holds no lease, execution slot or queue timer. It counts toward `tools.maxChildren`. In-turn modes (`continue`, `parallel_tools`) create no child and are not gated.
+- **G02 — Approve or reject:** A client approves with `tasks.resume` and rejects with `tasks.cancel`. Runtime tools cannot resume it. On resume, the engine recomputes dependency state (`waiting_dependency` or `queued`) and restarts the routing wait from the resume time, so the approval delay never expires the route.
+- **G03 — Timing:** Creation and the delegation pause commit together, so no scheduler pass can dispatch the child before the host decides.
+
+### H — Handoff requests
+
+- **H01 — Request:** With `tools.handoffs: true` (default `false`), a `work_delegate` with `requestedMode: "reuse"` whose `candidateSessionId` names an existing, open session outside the bound subtree, including one with no task, no longer fails with `UNAUTHORIZED`. The engine stores a pending handoff request and returns `{handoffId, status: "pending"}`. The request stores the requester's task, session, dispatch and generation, the target session, the goal and at most 20 `contextRefs` the requester may read. It creates no task, does not change the target session and delivers no message. With the switch off, behavior is unchanged.
+- **H02 — Host decision:** New client methods `handoffs.get`, `handoffs.list` (filters `status`, `targetSessionId`; paged) and `handoffs.resolve({handoffId, expectedRevision, outcome, taskId?, comment?, idempotencyKey})`. `accepted` requires the ID of an existing task, normally one the host created with `tasks.create` reusing the target session. The engine records that link and never creates or changes tasks on the host's behalf. `rejected` records the outcome. Resolving a non-pending or stale request fails with `STALE_TARGET`.
+- **H03 — Visibility and limits:** Events `handoff.requested`, `handoff.accepted`, `handoff.rejected` and `handoff.expired`. The requester can read its own requests with `work_read` kind `handoff`. Pending requests expire after `tools.handoffTtlMs` (default 24 hours; 1 minute to 7 days). The JSON CLI accepts `tools.approveDelegation`, `tools.handoffs` and `tools.handoffTtlMs`. Each root task may have at most 100 pending requests (`HANDOFF_LIMIT`).
+- **H04 — Persistence:** Requests live in a new `handoffs` table. They survive restart. A backup import marks pending requests `invalidated`, like pending approvals; they do not block a rollover or import. Retention treats resolved, expired and invalidated requests as terminal.
+
+### W — Write paths and runtime rules
+
+- **W01 — Narrowed write path:** Task specs and `sessions.open` specs accept `writePath`, an existing workspace-relative path, only together with `writeScope`. It must resolve inside one of the scope's registered paths, and the task's or session's write paths become that one path. Write conflicts, session compatibility and the Claude write sandbox use the narrowed path, so agents with disjoint paths under one registered scope can write concurrently. Tasks with verification rules still lock the whole workspace.
+- **W02 — Delegated narrowing:** `work_delegate` accepts `writePath` under the same rule, and it must also stay within the parent's write paths.
+- **W03 — Runtime rules:** Owner-only `rules.register({rule, idempotencyKey})` appends a verification rule version. It uses the configured rule format; `id@version` must be new, a replay with identical content is idempotent, and different content fails with `CONFLICT`. `rules.list()` returns the effective rules with `source: "config" | "runtime"`. Registered rules persist in a new `verification_rules` table and merge with configured rules at startup. A configured rule whose `id@version` matches a persisted rule with different content fails startup with `VALIDATION_ERROR`. Tasks keep freezing their rules at admission. Ordinary socket clients and runtime tools get `UNAUTHORIZED`. At most 1,000 rules may be effective.
+
+### L — Listing
+
+- **L01 — Event data:** `task.created` data adds `parentTaskId` (or `null`) and `rootTaskId`.
+- **L02 — `tasks.list`:** New method `tasks.list({parentTaskId?, sessionId?, limit?, afterCursor?})` returns `{tasks, nextCursor}` in creation order, with a default page of 50 and a maximum of 100. Only one filter may be set; with no filter it pages all tasks. It uses the existing parent index and a new session index.
+
+### X — Contract, SDKs and documentation
+
+- **X01 — Negotiation:** `initialize` advertises `workflow: {version: 1, dependencyResults, revise, delegationApproval, handoffs, writePath, runtimeRules, taskList}`, all `true`. Both SDKs check the relevant flag before calling a new method or sending a new field, and fail with `UNSUPPORTED_CAPABILITY` otherwise.
+- **X02 — Wire and SDKs:** The schema, generated TS/Python types and both SDKs change additively: `tasks.list`, `handoffs.*` and `rules.*`; `writePath`; the `revise` choice, `revised` status and `comment`; and the new capabilities. Cross-language tests cover every new method and field on a real host.
+- **X03 — Pre-announced changes:** The release notes list, for hosts that track them: new event types `approval.revised` and `handoff.*`, the new `task.created` fields, the approval choice and status values, the prompt format change in D03, the read-fence default in F01/F03, and the new Claude adapter options (`provider`, `readRoots`, `denyRead`, `readFence`).
+- **X04 — Documentation:** The wiring guide documents every feature above for all users, including behavior changes and the limits in F03 and H02. The design document's key-decision table changes from "pilot maximum two active sessions" to "default two; the owner may configure up to eight; the engine never adds parallelism by itself".
+
+## Verification
+
+Record an observed RED for each criterion group before changing runtime code. D04 and G03 need deterministic tests that interleave the scheduler with the triggering transaction. Run F04 with the native scripted gateway, then focused tests, generated-contract, type and format checks, both full suites and the Codex smoke. No credentials or paid models are used. Merging, pushing and building the release candidate are separate authorized actions.

@@ -1,4 +1,4 @@
-"""Generated from schemas/protocol.schema.json; SHA-256 79c7ce36f16e11094fcfe0e05bf476603904ff998196110160ac730d014dd62f. Do not edit.
+"""Generated from schemas/protocol.schema.json; SHA-256 83e3b0b6f785f865f5b3cfd2ad2db3866a4dafa0a0f2e236ef0d51c329106a89. Do not edit.
 Wire dictionaries use camelCase. Use the SDK dataclasses for snake_case requests.
 """
 from __future__ import annotations
@@ -31,6 +31,11 @@ class TaskSpec(TypedDict):
     contextPlan: NotRequired[ContextPlan]
     budget: NotRequired[MoneyBudget]
     contextEstimate: NotRequired[ContextEstimate]
+    writePath: NotRequired[str]
+
+class TaskSnapshotRevisionRequest(TypedDict):
+    approvalId: str
+    comment: str
 
 class TaskSnapshot(TypedDict):
     id: str
@@ -52,6 +57,8 @@ class TaskSnapshot(TypedDict):
     routing: NotRequired[RoutingDecision]
     kind: NotRequired[Literal["work", "compaction"]]
     maintenanceOperationId: NotRequired[str]
+    revisionRequest: NotRequired[TaskSnapshotRevisionRequest]
+    dependencyResultsDelivered: NotRequired[bool]
 
 class ApprovalRequestTarget(TypedDict):
     taskId: str
@@ -72,11 +79,12 @@ class ApprovalRequest(TypedDict):
     taskId: str
     purpose: Literal["task_acceptance", "runtime_permission"]
     revision: int
-    status: Literal["pending", "approved", "denied", "expired", "invalidated"]
+    status: Literal["pending", "approved", "denied", "revised", "expired", "invalidated"]
     target: ApprovalRequestTarget
     summary: str
     evidenceRefs: list[str]
     expiresAt: str
+    comment: NotRequired[str]
 
 class UsageRecordedData(TypedDict):
     usageRecordId: str
@@ -428,6 +436,7 @@ class FrozenVerificationRule(TypedDict):
 class SessionOpenSpec(TypedDict):
     runtime: RuntimeSpec
     writeScope: NotRequired[str]
+    writePath: NotRequired[str]
 
 class InitializeParams(TypedDict):
     protocolVersion: Literal["2.0"]
@@ -440,6 +449,7 @@ class InitializeResultCapabilitiesStoreNamespaces(TypedDict):
 
 class InitializeResultCapabilities(TypedDict):
     storeNamespaces: InitializeResultCapabilitiesStoreNamespaces
+    workflow: NotRequired[WorkflowCapability]
 
 class InitializeResult(TypedDict):
     protocolVersion: Literal["2.0"]
@@ -562,7 +572,7 @@ class StoreImportParams(TypedDict):
     requestDigest: NotRequired[str]
 
 class ApprovalDecisionParamsDecision(TypedDict):
-    choice: Literal["approve", "deny"]
+    choice: Literal["approve", "deny", "revise"]
     expectedRevision: int
     comment: NotRequired[str]
 
@@ -572,6 +582,96 @@ class ApprovalDecisionParams(TypedDict):
     expectedStoreId: str
     idempotencyKey: str
     requestDigest: NotRequired[str]
+
+class TaskListParams(TypedDict):
+    parentTaskId: NotRequired[str]
+    sessionId: NotRequired[str]
+    limit: NotRequired[int]
+    afterCursor: NotRequired[str]
+
+class TaskListResult(TypedDict):
+    tasks: list[TaskSnapshot]
+    nextCursor: str | None
+
+class HandoffRequestContextRefsItem(TypedDict):
+    artifactRef: str
+    version: Literal[1]
+
+class HandoffRequest(TypedDict):
+    handoffId: str
+    status: Literal["pending", "accepted", "rejected", "expired", "invalidated"]
+    revision: int
+    fromTaskId: str
+    fromSessionId: str
+    fromDispatchId: str
+    fromGeneration: int
+    rootTaskId: str
+    targetSessionId: str
+    goal: str
+    contextRefs: list[HandoffRequestContextRefsItem]
+    createdAt: str
+    expiresAt: str
+    resolvedAt: NotRequired[str]
+    taskId: NotRequired[str]
+    comment: NotRequired[str]
+
+class HandoffGetParams(TypedDict):
+    handoffId: str
+
+class HandoffListParams(TypedDict):
+    status: NotRequired[Literal["pending", "accepted", "rejected", "expired", "invalidated"]]
+    targetSessionId: NotRequired[str]
+    limit: NotRequired[int]
+    afterCursor: NotRequired[str]
+
+class HandoffListResult(TypedDict):
+    handoffs: list[HandoffRequest]
+    nextCursor: str | None
+
+class HandoffResolveParams(TypedDict):
+    handoffId: str
+    expectedRevision: int
+    outcome: Literal["accepted", "rejected"]
+    taskId: NotRequired[str]
+    comment: NotRequired[str]
+    expectedStoreId: str
+    idempotencyKey: str
+    requestDigest: NotRequired[str]
+
+class RuleRegisterParams(TypedDict):
+    rule: VerificationRule
+    expectedStoreId: str
+    idempotencyKey: str
+    requestDigest: NotRequired[str]
+
+class RegisteredVerificationRuleSuccess(TypedDict):
+    exitCode: int
+
+class RegisteredVerificationRule(TypedDict):
+    id: str
+    version: str
+    argv: list[str]
+    cwdRelative: str
+    timeoutMs: int
+    permissionProfile: Literal["read-only", "workspace-write"]
+    success: RegisteredVerificationRuleSuccess
+    maxOutputBytes: NotRequired[int]
+    baselinePaths: NotRequired[list[str]]
+    digest: str
+    source: Literal["config", "runtime"]
+
+class RuleListResult(TypedDict):
+    rules: list[RegisteredVerificationRule]
+
+class WorkflowCapability(TypedDict):
+    version: Literal[1]
+    dependencyResults: NotRequired[Literal[True]]
+    revise: NotRequired[Literal[True]]
+    delegationApproval: NotRequired[Literal[True]]
+    handoffs: NotRequired[Literal[True]]
+    writePath: NotRequired[Literal[True]]
+    runtimeRules: NotRequired[Literal[True]]
+    taskList: NotRequired[Literal[True]]
 
 TaskStatus: TypeAlias = Literal["queued", "running", "waiting_approval", "paused", "blocked", "completed", "failed", "cancelled", "waiting_dependency", "verifying"]
 SessionStatus: TypeAlias = Literal["idle", "running", "pausing", "paused", "closed", "outcome_unknown"]

@@ -16,7 +16,14 @@ import {
 import { isAbsolute, relative, join, sep, dirname, basename, resolve } from 'node:path';
 import { randomUUID, createHash } from 'node:crypto';
 import { fail } from './errors.ts';
-import type { EventEnvelope, EventPage, Json, OperationSnapshot, TaskSnapshot } from './types.ts';
+import type {
+  EventEnvelope,
+  EventPage,
+  HandoffRequest,
+  Json,
+  OperationSnapshot,
+  TaskSnapshot,
+} from './types.ts';
 
 const TABLES = [
   'tasks',
@@ -36,6 +43,8 @@ const TABLES = [
   'gc_jobs',
   'file_commits',
   'storage_reserves',
+  'verification_rules',
+  'handoffs',
 ] as const;
 export type Table = (typeof TABLES)[number];
 
@@ -207,6 +216,9 @@ export class Store {
           "CREATE INDEX IF NOT EXISTS tasks_parent ON tasks(json_extract(data, '$.spec.parentTaskId'))",
         );
         this.db.exec(
+          "CREATE INDEX IF NOT EXISTS tasks_session ON tasks(json_extract(data, '$.sessionId'))",
+        );
+        this.db.exec(
           "CREATE INDEX IF NOT EXISTS dispatches_task ON dispatches(json_extract(data, '$.taskId'))",
         );
         this.db.exec(
@@ -343,6 +355,7 @@ export class Store {
       'rejected',
       'invalidated',
       'noop',
+      'accepted',
     ].includes(value.status);
     const terminal =
       table === 'artifacts' ||
@@ -365,7 +378,9 @@ export class Store {
                   (value.status === 'outcome_unknown' && !value.resolution)
                 : table === 'execution_conflicts'
                   ? value.status === 'open'
-                  : table === 'storage_pins';
+                  : table === 'handoffs'
+                    ? value.status === 'pending'
+                    : table === 'storage_pins';
     this.db
       .prepare(
         `INSERT INTO retention_records(table_name,id,changed_at,terminal_at,active) VALUES (?,?,?,?,?)
@@ -485,6 +500,55 @@ export class Store {
     }
     rows.sort((a, b) => a.ordinal - b.ordinal);
     return rows.map((row) => JSON.parse(row.data) as TaskSnapshot);
+  }
+  /** One creation-ordered page; `next` is the last returned rowid when more rows follow. */
+  listTasks(
+    filter: { parentTaskId?: string; sessionId?: string },
+    after: number,
+    limit: number,
+  ): { tasks: TaskSnapshot[]; next: number | null } {
+    const [where, args] =
+      filter.parentTaskId !== undefined
+        ? ["json_extract(data,'$.spec.parentTaskId')=? AND ", [filter.parentTaskId]]
+        : filter.sessionId !== undefined
+          ? ["json_extract(data,'$.sessionId')=? AND ", [filter.sessionId]]
+          : ['', []];
+    const rows = this.db
+      .prepare(
+        `SELECT rowid AS ordinal,data FROM tasks WHERE ${where}rowid>? ORDER BY rowid LIMIT ?`,
+      )
+      .all(...args, after, limit + 1) as { ordinal: number; data: string }[];
+    const page = rows.slice(0, limit);
+    return {
+      tasks: page.map((row) => JSON.parse(row.data) as TaskSnapshot),
+      next: rows.length > limit ? page[page.length - 1].ordinal : null,
+    };
+  }
+  listHandoffs(
+    filter: { status?: string; targetSessionId?: string },
+    after: number,
+    limit: number,
+  ): { handoffs: HandoffRequest[]; next: number | null } {
+    const clauses: string[] = [];
+    const args: string[] = [];
+    if (filter.status !== undefined) {
+      clauses.push("json_extract(data,'$.status')=?");
+      args.push(filter.status);
+    }
+    if (filter.targetSessionId !== undefined) {
+      clauses.push("json_extract(data,'$.targetSessionId')=?");
+      args.push(filter.targetSessionId);
+    }
+    const rows = this.db
+      .prepare(
+        `SELECT rowid AS ordinal,data FROM handoffs WHERE ${clauses.map((c) => `${c} AND `).join('')}rowid>? ORDER BY rowid LIMIT ?`,
+      )
+      .all(...args, after, limit + 1) as { ordinal: number; data: string }[];
+    const page = rows.slice(0, limit);
+    return {
+      handoffs: page.map((row) => JSON.parse(row.data) as HandoffRequest),
+      next: rows.length > limit ? page[page.length - 1].ordinal : null,
+    };
   }
   queuedTasks(): TaskSnapshot[] {
     return this.tasksInState('queued');

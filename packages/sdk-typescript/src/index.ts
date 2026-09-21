@@ -11,6 +11,8 @@ import type {
   EventEnvelope,
   EventPage,
   ExecutionConflict,
+  HandoffListResult,
+  HandoffRequest,
   MessageSnapshot,
   MessageSpec,
   OperationSnapshot,
@@ -20,9 +22,13 @@ import type {
   SessionControlTarget,
   SessionSnapshot,
   SessionOpenSpec,
+  RegisteredVerificationRule,
+  TaskListResult,
   TaskSnapshot,
   TaskSpec,
   UsageRecord,
+  VerificationRule,
+  WorkflowFeature,
 } from '../../engine/src/types.ts';
 import { OrchestratorError, UnixRpcClient, type Caller, type RequestOptions } from './transport.ts';
 export { OrchestratorError } from './transport.ts';
@@ -363,14 +369,35 @@ export class Orchestrator {
       return this.operation('scheduler.resolveConflict', request.conflictId, request, options);
     },
   };
+  /** Fails before sending when the host did not advertise a SPEC-0014 workflow feature. */
+  private requireWorkflow(feature: WorkflowFeature): void {
+    const workflow = this.info.capabilities.workflow as Record<string, unknown> | undefined;
+    if (workflow?.version !== 1 || workflow[feature] !== true)
+      throw new OrchestratorError('UNSUPPORTED_CAPABILITY', `Host does not support ${feature}`);
+  }
   readonly tasks = {
-    create: async (spec: TaskSpec, options?: MutationOptions) =>
-      new TaskHandle(
+    create: async (spec: TaskSpec, options?: MutationOptions) => {
+      if (spec.writePath !== undefined) this.requireWorkflow('writePath');
+      return new TaskHandle(
         this,
         await this.mutation<TaskSnapshot>('tasks.create', 'local', { spec }, options),
-      ),
+      );
+    },
     get: (taskId: string, options?: RequestOptions) =>
       this.call<TaskSnapshot>('tasks.get', { taskId }, options),
+    /** Creation-ordered page; set at most one of parentTaskId and sessionId. */
+    list: async (
+      query: {
+        parentTaskId?: string;
+        sessionId?: string;
+        limit?: number;
+        afterCursor?: string;
+      } = {},
+      options?: RequestOptions,
+    ) => {
+      this.requireWorkflow('taskList');
+      return this.call<TaskListResult>('tasks.list', query, options);
+    },
     resume: (taskId: string, options?: MutationOptions) =>
       this.operation('tasks.resume', taskId, { taskId }, options),
     cancel: (taskId: string, options?: MutationOptions) =>
@@ -414,6 +441,7 @@ export class Orchestrator {
       return this.operation('sessions.reconcile', target.sessionId, { target, evidence }, options);
     },
     open: async (spec: SessionOpenSpec, options?: MutationOptions) => {
+      if (spec.writePath !== undefined) this.requireWorkflow('writePath');
       const capability = this.info.capabilities.sessionLifecycle as { open?: boolean } | undefined;
       if (capability?.open !== true)
         throw new OrchestratorError(
@@ -504,11 +532,63 @@ export class Orchestrator {
   readonly approvals = {
     get: (approvalId: string, options?: RequestOptions) =>
       this.call<ApprovalRequest>('approvals.get', { approvalId }, options),
-    decide: (
+    decide: async (
       approvalId: string,
-      decision: { choice: 'approve' | 'deny'; expectedRevision: number },
+      decision: {
+        choice: 'approve' | 'deny' | 'revise';
+        expectedRevision: number;
+        /** Required for `revise`; the next dispatch receives it as the reviewer's request. */
+        comment?: string;
+      },
       options?: MutationOptions,
-    ) => this.operation('approvals.decide', approvalId, { approvalId, decision }, options),
+    ) => {
+      if (decision.choice === 'revise' || decision.comment !== undefined)
+        this.requireWorkflow('revise');
+      return this.operation('approvals.decide', approvalId, { approvalId, decision }, options);
+    },
+  };
+  readonly handoffs = {
+    get: async (handoffId: string, options?: RequestOptions) => {
+      this.requireWorkflow('handoffs');
+      return this.call<HandoffRequest>('handoffs.get', { handoffId }, options);
+    },
+    list: async (
+      query: {
+        status?: HandoffRequest['status'];
+        targetSessionId?: string;
+        limit?: number;
+        afterCursor?: string;
+      } = {},
+      options?: RequestOptions,
+    ) => {
+      this.requireWorkflow('handoffs');
+      return this.call<HandoffListResult>('handoffs.list', query, options);
+    },
+    /** Accepting links the task the host created; the engine never creates it. */
+    resolve: async (
+      handoffId: string,
+      resolution: {
+        expectedRevision: number;
+        outcome: 'accepted' | 'rejected';
+        taskId?: string;
+        comment?: string;
+      },
+      options?: MutationOptions,
+    ) => {
+      this.requireWorkflow('handoffs');
+      return this.operation('handoffs.resolve', handoffId, { handoffId, ...resolution }, options);
+    },
+  };
+  readonly rules = {
+    /** Owner only; appends a verification rule version for tasks admitted afterwards. */
+    register: async (rule: VerificationRule, options?: MutationOptions) => {
+      this.requireWorkflow('runtimeRules');
+      return this.operation('rules.register', 'local', { rule }, options);
+    },
+    list: async (options?: RequestOptions) => {
+      this.requireWorkflow('runtimeRules');
+      return this.call<{ rules: RegisteredVerificationRule[] }>('rules.list', {}, options);
+    },
   };
   readonly usage = {
     getRecord: (usageRecordId: string, options?: RequestOptions) =>

@@ -1,0 +1,58 @@
+{
+  "platform": "darwin-arm64",
+  "node": "v24.14.0",
+  "startedAt": "2026-09-21T11:11:40.201Z",
+  "responseSource": "scripted-loopback-gateway",
+  "credentials": "synthetic",
+  "modelCalls": 0,
+  "binary": "2.1.274 (Claude Code)",
+  "sandbox": {
+    "enabled": true,
+    "failIfUnavailable": true,
+    "allowUnsandboxedCommands": false,
+    "autoAllowBashIfSandboxed": false,
+    "filesystem": {
+      "allowWrite": [
+        "/private/var/folders/cm/m0pr5l4x5wd6qq3rjz1yk7m00000gn/T/orch-read-fence-jJ3p1z/workspace"
+      ],
+      "denyRead": [
+        "/private/var/folders/cm/m0pr5l4x5wd6qq3rjz1yk7m00000gn/T/orch-read-fence-jJ3p1z/state",
+        "/private/var/folders/cm/m0pr5l4x5wd6qq3rjz1yk7m00000gn/T/orch-read-fence-jJ3p1z/workspace/secrets",
+        "/private/var/folders/cm/m0pr5l4x5wd6qq3rjz1yk7m00000gn/T/orch-read-fence-jJ3p1z/home"
+      ],
+      "allowRead": [
+        "/private/var/folders/cm/m0pr5l4x5wd6qq3rjz1yk7m00000gn/T/orch-read-fence-jJ3p1z/workspace"
+      ],
+      "denyWrite": [
+        "/private/var/folders/cm/m0pr5l4x5wd6qq3rjz1yk7m00000gn/T/orch-read-fence-jJ3p1z/state"
+      ]
+    }
+  },
+  "events": [
+    "accepted",
+    "usage",
+    "result"
+  ],
+  "results": {
+    "toolu_fence_2": {
+      "isError": true,
+      "content": "\"Exit code 1\\ncat: /private/var/folders/cm/m0pr5l4x5wd6qq3rjz1yk7m00000gn/T/orch-read-fence-jJ3p1z/workspace/secrets/key.txt: Operation not permitted\""
+    },
+    "toolu_fence_0": {
+      "isError": true,
+      "content": "\"Exit code 1\\ncat: /private/var/folders/cm/m0pr5l4x5wd6qq3rjz1yk7m00000gn/T/orch-read-fence-jJ3p1z/home/secret.txt: Operation not permitted\""
+    },
+    "toolu_fence_1": {
+      "isError": false,
+      "content": "\"ORCH_BASH_WORKSPACE_OK\""
+    }
+  },
+  "cases": [
+    "bash-home-read-blocked-by-os-sandbox",
+    "bash-workspace-read-allowed",
+    "bash-denyread-inside-workspace-blocked"
+  ],
+  "status": "passed",
+  "requests": 2,
+  "finishedAt": "2026-09-21T11:11:40.676Z"
+}

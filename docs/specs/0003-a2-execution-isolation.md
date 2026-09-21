@@ -18,7 +18,7 @@ Count dispatches. Because each session has at most one in-flight dispatch, execu
 
 | Quantity | Definition | Development default / range |
 | --- | --- | --- |
-| A: execution occupancy | Dispatches admitted without a durable complete stop certificate, including normal in-flight work and unknown work that may still run | `limits.maxActiveSessions=2`, still 1..2 |
+| A: execution occupancy | Dispatches admitted without a durable complete stop certificate, including normal in-flight work and unknown work that may still run | `limits.maxActiveSessions=2`, integer 1..8 since SPEC-0014 C01 (previously 1..2) |
 | Q: outcome quarantine | Dispatches with outcome_unknown, whether or not their execution slot has been released | `limits.maxQuarantinedDispatches=32`, integer 1..1024, at least maxActiveSessions |
 | R: quarantine reservation | Dispatches with a held lease that are not yet quarantined or conclusively settled; initialization, execution, and terminal-but-cleaning phases each reserve one possible quarantine entry | Derived from durable dispatches; not a separate configuration value |
 

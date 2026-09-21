@@ -62,10 +62,20 @@ class _Tasks:
 
     async def create(self, spec: TaskSpec | Mapping[str, Any], *, idempotency_key: str | None = None) -> TaskHandle:
         wire = to_wire(spec)
+        if "writePath" in wire:
+            await self._client._require_workflow("write_path")
         return TaskHandle(self._client, await self._client._mutate("tasks.create", {"spec": wire}, idempotency_key))
 
     async def get(self, task_id: str) -> Snapshot:
         return await self._client._call("tasks.get", {"taskId": task_id})
+
+    async def list(self, *, parent_task_id: str | None = None, session_id: str | None = None,
+                   limit: int | None = None, after_cursor: str | None = None) -> Snapshot:
+        """A creation-ordered page; set at most one of parent_task_id and session_id."""
+        await self._client._require_workflow("task_list")
+        params = {"parentTaskId": parent_task_id, "sessionId": session_id, "limit": limit,
+                  "afterCursor": after_cursor}
+        return await self._client._call("tasks.list", {k: v for k, v in params.items() if v is not None})
 
     async def resume(self, task_id: str, *, idempotency_key: str | None = None) -> OperationHandle:
         return OperationHandle(self._client, await self._client._mutate("tasks.resume", {"taskId": task_id}, idempotency_key))
@@ -110,7 +120,10 @@ class _Sessions:
         capability = self._client.info.capabilities.get("session_lifecycle", {})
         if not isinstance(capability, Mapping) or capability.get("open") is not True:
             raise unsupported("sessions.open")
-        return await self._client._mutate("sessions.open", {"spec": to_wire(spec)}, idempotency_key)
+        wire = to_wire(spec)
+        if "writePath" in wire:
+            await self._client._require_workflow("write_path")
+        return await self._client._mutate("sessions.open", {"spec": wire}, idempotency_key)
 
     async def fork(self, target: Mapping[str, Any], snapshot_ref: str | None = None, *, model: str | None = None,
                    acknowledge_cache_loss: bool | None = None, idempotency_key: str | None = None) -> Snapshot:
@@ -205,8 +218,55 @@ class _Approvals:
 
     async def decide(self, approval_id: str, decision: Mapping[str, Any], *,
                      idempotency_key: str | None = None) -> OperationHandle:
+        """`choice` is approve, deny or revise; revise requires `comment` for the next dispatch."""
+        wire = to_wire(decision)
+        if wire.get("choice") == "revise" or "comment" in wire:
+            await self._client._require_workflow("revise")
         return OperationHandle(self._client, await self._client._mutate(
-            "approvals.decide", {"approvalId": approval_id, "decision": to_wire(decision)}, idempotency_key))
+            "approvals.decide", {"approvalId": approval_id, "decision": wire}, idempotency_key))
+
+
+class _Handoffs:
+    """Model requests to hand work to another session; each grants nothing until resolved."""
+    def __init__(self, client: "Orchestrator"):
+        self._client = client
+
+    async def get(self, handoff_id: str) -> Snapshot:
+        await self._client._require_workflow("handoffs")
+        return await self._client._call("handoffs.get", {"handoffId": handoff_id})
+
+    async def list(self, *, status: str | None = None, target_session_id: str | None = None,
+                   limit: int | None = None, after_cursor: str | None = None) -> Snapshot:
+        await self._client._require_workflow("handoffs")
+        params = {"status": status, "targetSessionId": target_session_id, "limit": limit,
+                  "afterCursor": after_cursor}
+        return await self._client._call("handoffs.list", {k: v for k, v in params.items() if v is not None})
+
+    async def resolve(self, handoff_id: str, *, expected_revision: int, outcome: str, task_id: str | None = None,
+                      comment: str | None = None, idempotency_key: str | None = None) -> OperationHandle:
+        """Accepting links a task the host created; the engine never creates it."""
+        await self._client._require_workflow("handoffs")
+        params: dict[str, Any] = {"handoffId": handoff_id, "expectedRevision": expected_revision, "outcome": outcome}
+        if task_id is not None:
+            params["taskId"] = task_id
+        if comment is not None:
+            params["comment"] = comment
+        return OperationHandle(self._client, await self._client._mutate("handoffs.resolve", params, idempotency_key))
+
+
+class _Rules:
+    def __init__(self, client: "Orchestrator"):
+        self._client = client
+
+    async def register(self, rule: Mapping[str, Any], *, idempotency_key: str | None = None) -> OperationHandle:
+        """Owner only; appends a verification rule version for tasks admitted afterwards."""
+        await self._client._require_workflow("runtime_rules")
+        return OperationHandle(self._client, await self._client._mutate(
+            "rules.register", {"rule": to_wire(rule)}, idempotency_key))
+
+    async def list(self) -> Snapshot:
+        await self._client._require_workflow("runtime_rules")
+        return await self._client._call("rules.list", {})
 
 
 class _Usage:
@@ -326,6 +386,8 @@ class Orchestrator:
         self.messages = _Messages(self)
         self.operations = _Operations(self)
         self.approvals = _Approvals(self)
+        self.handoffs = _Handoffs(self)
+        self.rules = _Rules(self)
         self.usage = _Usage(self)
         self.costs = _Costs(self)
         self.context = _Context(self)
@@ -437,6 +499,14 @@ class Orchestrator:
         await self.start()
         return await self._call_transport(method, params, timeout=timeout)
 
+    async def _require_workflow(self, feature: str) -> None:
+        """Fails before sending when the host did not advertise a SPEC-0014 workflow feature."""
+        await self.start()
+        assert self.info is not None
+        workflow = self.info.capabilities.get("workflow")
+        if not isinstance(workflow, Mapping) or workflow.get("version") != 1 or workflow.get(feature) is not True:
+            raise OrchestrationError("UNSUPPORTED_CAPABILITY", f"Host does not support {feature}")
+
     async def _call_transport(self, method: str, params: dict[str, Any], *,
                               timeout: float | None = None) -> Snapshot:
         assert self._transport is not None
@@ -462,6 +532,8 @@ class Orchestrator:
             scope = params.get("approvalId")
         elif method == "scheduler.resolveConflict":
             scope = params.get("conflictId")
+        elif method == "handoffs.resolve":
+            scope = params.get("handoffId")
         elif method == "costs.recordOverhead":
             scope = "host"
         await self.start()
