@@ -1,6 +1,6 @@
 # SPEC-0013: Fork into another model of the same provider
 
-Date: 2026-09-21. Status: implemented; remote CI pending. Local RED/GREEN and native scripted-gateway evidence is in [TDD-0013](../tdd/0013-fork-model-change.md). Origin: an embedding host needs to change an agent's model without losing its native history. The behavior applies to every caller.
+Date: 2026-09-21. Status: implemented in `3655cb6`; [CI run 35585440200](https://github.com/masonlee39/Multi-Agent/actions/runs/35585440200) passed all six jobs on that commit. Local RED/GREEN, native scripted-gateway and CI evidence is in [TDD-0013](../tdd/0013-fork-model-change.md). Origin: an embedding host needs to change an agent's model without losing its native history. The behavior applies to every caller.
 
 ## Problem and scope
 

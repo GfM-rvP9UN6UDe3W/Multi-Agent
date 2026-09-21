@@ -1,6 +1,6 @@
 # TDD-0013: Fork into another model of the same provider
 
-Date: 2026-09-21. Base source: `2d50e3e`. Local verification is complete. Remote CI has not run yet, and nothing has been committed or published.
+Date: 2026-09-21. Base source: `2d50e3e`. Implementation commit: `3655cb6` on branch `spec-0013-fork-model`. Local verification and the first remote CI run are complete. Nothing has been published.
 
 ## Feasibility before tests
 
@@ -23,6 +23,10 @@ Before writing acceptance tests, a standalone spike ran the installed Claude bin
 ## M05 native evidence
 
 `node scripts/native-gateway-smoke.mjs claude EVIDENCE.json` now configures `models: ["claude-sonnet-4-6", "claude-haiku-4-5"]` for Claude. Through the engine, Unix host and TypeScript SDK, it checks that a fork without acknowledgment fails with `CACHE_LOSS_NOT_ACKNOWLEDGED`. It then forks the completed root session into `claude-haiku-4-5` and runs a task on it. At the gateway, every forked request named `claude-haiku-4-5`. The first request contained the source prompt and assistant turn and the new fork prompt, but not the earlier sibling fork. The fork's native session ID differed from the source, and the source's model, native ID, checkpoint and revision were unchanged. The run passed all seven cases with seven gateway requests ([evidence](0013-native-claude.json)). The Codex smoke with local codex-cli 0.153.4 still passed its six cases. Both runs used synthetic credentials and no paid model.
+
+## Remote CI
+
+The push of `3655cb6` ran [35585440200](https://github.com/masonlee39/Multi-Agent/actions/runs/35585440200): **6/6 jobs passed** on the first run. The four contract jobs covered Ubuntu 24.04 and macOS 14 with Node 22.18.0/Python 3.11 and Node 24.14.0/Python 3.14.6, so the Node 22.18 gap in local verification is closed. The two pinned-native jobs ran the real Claude Agent SDK 0.3.274 and Codex 0.153.4 binaries against the scripted loopback gateway on Ubuntu and macOS, including the new model-changing fork case. This is one sample, not a repeated stability measurement.
 
 ## Remaining boundary
 
