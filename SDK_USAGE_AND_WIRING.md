@@ -402,9 +402,25 @@ Run offline doctor; select exactly one owner; let migration/file recovery comple
 
 Use `orch.close({mode:'drain',timeoutMs:30000})` for an embedded owner or `await orch.close(mode="drain",timeout=30)` for Python. Drain does not escalate automatically. If SHUTDOWN_INCOMPLETE occurs, retain its live client and operationId and explicitly continue or request interrupt. Preserve the original business result/error/cancellation while handling cleanup. Connected clients simply disconnect. Public close after a latched storage failure may report STORAGE_DEGRADED_CLOSED after releasing resources, because no durable shutdown receipt can be promised.
 
+What close leaves behind ([SPEC-0016](./docs/specs/0016-session-after-task-end.md) S02):
+
+- `close({mode:'interrupt'})` pauses running tasks with reason `runtime_interrupted`, and pauses their sessions without a `pauseOrigin`. It pauses queued tasks with reason `owner_shutdown`.
+- After the next start, `tasks.resume` continues these tasks, and each resumed queued task gets its full queue wait again (SPEC-0015).
+- A client's own pause records `pauseOrigin: "client"` on the session, and the task reason is also `runtime_interrupted` if the pause interrupted a turn. A host that resumes interrupted work automatically must skip sessions whose `pauseOrigin` is `client`, or it overrides the user's pause.
+
 ### 11.3 Restart recovery
 
 Reconnect to a live host instead of starting a second writer. Reuse canonical workspace/state paths and correct runtime configuration. Unknown execution remains blocked with original native/dispatch IDs. Read-only sessions.inspect may add evidence but never proves non-execution from missing history. Resume only after the relevant explicit owner resolution. Do not restore an old database over live state, discard tombstones or reset keys to bypass uncertainty.
+
+If the host process ends before `close` completes, the next start finds:
+
+- Each running task `blocked` with reason `outcome_unknown: previous owner exited during a dispatch`. Its session is `outcome_unknown`, and it holds an execution slot and a quarantine slot.
+- Queued tasks paused with reason `owner_restart`.
+
+Reconcile each unknown dispatch with `sessions.reconcile` (section 11.4). The evidence decides what is released:
+
+- **`localResources` and `remoteExecution` stopped, but `sideEffects` or `outcome` unknown:** the execution slot is released and the dispatch keeps its quarantine slot. The session stays `outcome_unknown` and cannot be reused. When `limits.maxQuarantinedDispatches` slots (default 32) are held this way, no new work is admitted (`QUARANTINE_CAPACITY_EXCEEDED`). Once the side effects are known, reconcile the same session again with a resolved attestation to free the slot.
+- **Resolved, with `outcome: "interrupted"`:** use this after the host has confirmed its processes ended and the side effects were checked. It releases both slots and fails the task with `reconciled_interrupted`. The session stays `paused`. To continue with its history, resume the session with `sessions.control` (`action: "resume"`), which returns it to `idle`, then create a task that reuses it. The resume runs nothing by itself. The same resume works for any paused session whose task has ended, for example one paused while its task awaited acceptance and then approved or denied.
 
 ### 11.4 Implemented owner attestation
 

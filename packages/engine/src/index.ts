@@ -3380,7 +3380,8 @@ class LocalEngine implements Engine {
         const task = this.associatedTask(session);
         if (session.status === 'outcome_unknown' || task.status === 'blocked')
           fail('OUTCOME_UNKNOWN', 'Session requires reconciliation');
-        if (terminalTasks.has(task.status)) fail('STALE_TARGET', 'Task is terminal');
+        const ended = terminalTasks.has(task.status);
+        if (ended && command.action !== 'resume') fail('STALE_TARGET', 'Task is terminal');
         const flight = this.flights.get(sessionId);
         if (flight?.intent === 'cancel')
           fail('STALE_TARGET', 'Task cancellation is already pending');
@@ -3392,7 +3393,19 @@ class LocalEngine implements Engine {
           }
           if (context.runtimeActor && session.pauseOrigin !== 'runtime')
             fail('UNAUTHORIZED', 'A runtime cannot resume a client or unowned pause');
-          this.resumePausedTask(task, session, op.id);
+          if (ended) {
+            // SPEC-0016 S01: with its task ended the session only returns to idle; nothing reruns.
+            if (
+              session.activeDispatchId ||
+              this.store.activeDispatches(sessionId).length ||
+              this.adapters.get(session.provider)?.hasActiveResources?.(sessionId)
+            )
+              fail(
+                'RUNTIME_STILL_ACTIVE',
+                'Resume requires confirmed execution and resource release',
+              );
+            this.saveSession(session, 'idle');
+          } else this.resumePausedTask(task, session, op.id);
         } else if (flight) {
           if (
             mode === 'interrupt' &&
