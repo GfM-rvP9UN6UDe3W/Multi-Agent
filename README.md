@@ -6,7 +6,7 @@ Licensed under the [MIT License](LICENSE). Commercial use, modification and redi
 
 **The five npm packages are ESM-only; direct `require()` is not exported.** Host-side single-file CJS and ESM bundles are supported through the [bundled-host integration contract](docs/acceptance/bundled-host.md). A Claude consumer installs **`@agent-orch/sdk` + `@agent-orch/engine` + `@agent-orch/adapter-claude`**. The SDK alone does not install a provider. The other packages are `@agent-orch/adapter-codex` and `@agent-orch/cli`. Local RC tarballs and their SHA-256 manifest can be installed without public npm publication.
 
-**Development packages; not published to npm or PyPI.** SPEC-0001–0011 cover storage, routing, accounting and bundled-host delivery. The recorded local regression on 2026-09-21 passed **438 Node tests and 48 Python tests**, with no skipped tests; nine package-installation/bundle modes also passed. See the [completion matrix](docs/specs/0009-complete-design.md#completion-matrix), [original implementation evidence](docs/tdd/0009-complete-design.md), [RC/bundle verification evidence](docs/tdd/0010-bundled-host-delivery.md), and [current release-readiness evidence](docs/tdd/0011-release-readiness.md). Real Claude/Codex binaries also pass tools, approval, saved-history fork/reuse/compact and both-client checks against a scripted loopback gateway. See the [remaining-gate ledger](docs/acceptance/readiness.md). Real-model acceptance, actual OS sandbox enforcement, external application integration, economic benefit and registry publication remain unverified boundaries. Ordinary tests use explicit fake runtimes or owned protocol fixtures without login credentials or model requests.
+**Development packages; not published to npm or PyPI.** SPEC-0001–0012 cover storage, routing, accounting, bundled-host delivery, client-pause precedence and scoped tool queries. The current uncommitted source passed **442 Node tests and 49 Python tests** on 2026-09-21, with no skipped tests; nine package-installation/bundle modes also passed. See the [completion matrix](docs/specs/0009-complete-design.md#completion-matrix), [original implementation evidence](docs/tdd/0009-complete-design.md), [RC/bundle verification evidence](docs/tdd/0010-bundled-host-delivery.md), [release-readiness evidence](docs/tdd/0011-release-readiness.md), and [current fix evidence](docs/tdd/0012-tool-control-and-capacity.md). Real Claude/Codex binaries also pass tools, approval, saved-history fork/reuse/compact and both-client checks against a scripted loopback gateway on the previous committed source. See the [remaining-gate ledger](docs/acceptance/readiness.md). Real-model acceptance, actual OS sandbox enforcement, external application integration, economic benefit and registry publication remain unverified boundaries. Ordinary tests use explicit fake runtimes or owned protocol fixtures without login credentials or model requests.
 
 ## Install and integrate
 
@@ -20,20 +20,20 @@ Choose packages for the process that will own or connect to the engine:
 | `@agent-orch/adapter-codex` | Codex App Server adapter | Codex execution |
 | `@agent-orch/cli` | Standalone/managed Node host and commands | CLI or Python-owned host operation |
 
-Use local tarballs from one candidate version. The current local MIT candidate is `0.1.0-rc.4` (Python `0.1.0rc4`). To reproduce it in a fresh artifact directory:
+Use local tarballs from one candidate version. The current local MIT candidate is `0.1.0-rc.5` (Python `0.1.0rc5`), built from the uncommitted SPEC-0012 source. To reproduce it in a fresh artifact directory:
 
 ```sh
 npm ci --ignore-scripts
-npm run build:packages -- dist/release/0.1.0-rc.4 --version 0.1.0-rc.4
-/absolute/build-env/bin/python scripts/build-python.py dist/release/0.1.0-rc.4 --version 0.1.0-rc.4
+npm run build:packages -- dist/release/0.1.0-rc.5 --version 0.1.0-rc.5
+/absolute/build-env/bin/python scripts/build-python.py dist/release/0.1.0-rc.5 --version 0.1.0-rc.5
 ```
 
 This candidate is local and unpublished. The builds write five npm tarballs, a Python wheel/sdist and SHA-256 manifests. Existing candidate directories are immutable; use a new version for changed bytes. Verify hashes before installation. In the consuming project, install the three Claude packages together, substituting the absolute artifact directory:
 
 ```sh
-npm install /absolute/rc/agent-orch-sdk-0.1.0-rc.4.tgz \
-  /absolute/rc/agent-orch-engine-0.1.0-rc.4.tgz \
-  /absolute/rc/agent-orch-adapter-claude-0.1.0-rc.4.tgz
+npm install /absolute/rc/agent-orch-sdk-0.1.0-rc.5.tgz \
+  /absolute/rc/agent-orch-engine-0.1.0-rc.5.tgz \
+  /absolute/rc/agent-orch-adapter-claude-0.1.0-rc.5.tgz
 ```
 
 Keep the generated npm lockfile. Install the Codex adapter instead for Codex execution; add the CLI when running a separate Node host. Python installs its wheel separately and connects to that Node host; the Python package does not bundle or download an engine.
@@ -63,6 +63,7 @@ Package exports are ESM-only. The package smoke verifies CJS and ESM single-file
 - [Design completion specification](docs/specs/0009-complete-design.md)
 - [Bundled-host delivery specification](docs/specs/0010-bundled-host-delivery.md)
 - [Release-readiness fixes and native verification](docs/specs/0011-release-readiness.md)
+- [Client-pause precedence and scoped capacity](docs/specs/0012-tool-control-and-capacity.md)
 - [Current acceptance gates](docs/acceptance/readiness.md)
 - [TDD evidence](docs/tdd/0001-evidence.md)
 - [Contribution guidelines](CONTRIBUTING.md)
@@ -93,7 +94,7 @@ See the [JSON Schema](schemas/protocol.schema.json), generated TypeScript `WireT
 
 ## Local development and verification
 
-Declared minimums are Node.js 22.18+ and Python 3.11+. Recorded local verification used Node.js 22.18.0 and 24.14.0, and Python 3.14.6. Node's built-in SQLite prints an experimental warning on that verified runtime. The [CI matrix](.github/workflows/offline.yml) configures macOS/Linux and minimum/current runtime jobs. Source `cf574c4` passed all six jobs in [run 35529393933](https://github.com/masonlee39/Multi-Agent/actions/runs/35529393933): four full contract/package/capacity environments and two real-native scripted-gateway jobs. See the [recorded CI evidence](docs/tdd/0011-ci.json).
+Declared minimums are Node.js 22.18+ and Python 3.11+. Recorded local verification used Node.js 22.18.0 and 24.14.0, and Python 3.14.6. Node's built-in SQLite prints an experimental warning on that verified runtime. The [CI matrix](.github/workflows/offline.yml) configures macOS/Linux and minimum/current runtime jobs. The latest committed source `597f240` passed all six jobs in [run 35530017913](https://github.com/masonlee39/Multi-Agent/actions/runs/35530017913): four full contract/package/capacity environments and two real-native scripted-gateway jobs. The uncommitted SPEC-0012 changes passed local tests and package smoke, but have not run in remote CI. See the [recorded prior CI evidence](docs/tdd/0011-ci.json).
 
 Run from the repository root:
 
@@ -119,7 +120,9 @@ PACKAGE_BUILD_PYTHON="$(command -v python)" npm run test:packages
 
 The package smoke creates fresh temporary npm installations and a Python venv, runs embedded TS and owned-host Python, checks each optional adapter independently, exercises the packaged Codex MCP bridge and actual Claude SDK MCP transport, rebuilds the sdist and repeats the Python round trip without network access. It also bundles SDK + engine + Claude adapter as CJS and ESM, deletes the temporary node_modules, and runs fixture tasks through human approval in both formats. `PACKAGE_BUILD_PYTHON` must point to the prepared build environment to include the sdist rebuild. Native provider dependencies are optional and are not downloaded at ordinary startup. See [acceptance instructions](docs/acceptance/README.md) and [local RC installation](docs/acceptance/bundled-host.md).
 
-Scheduling uses indexed queued tasks and active dispatches. Retained history still affects some storage/accounting queries; it is not an unlimited-capacity claim. Run `npm run benchmark:capacity -- 1000,10000,50000 100` for bounded offline measurements. On the recorded Apple M5 Pro / Node 24.14.0 host, admission p95 was 6.13 / 8.68 / 16.77 ms respectively. See [raw measurements](docs/tdd/0011-capacity.json) and the [measurement limits](docs/acceptance/readiness.md).
+Scheduling uses indexed queued tasks, active dispatches and parent-scoped tool subtrees. The programmatic engine defaults to **10,000 persisted logical sessions** (`limits.maxLogicalSessions`); after that, opening another session or creating a task that needs one fails with `SESSION_CAPACITY_EXHAUSTED`. An owner can set the limit as high as 100,000 after sizing the store, or settle and roll over to a new store. Retained sessions are not removed by routine GC. The CLI config accepts the same explicit limit.
+
+Run `npm run benchmark:capacity -- 1000,10000,50000 100` for bounded offline measurements. This script explicitly sets `maxLogicalSessions: 100000` to seed 50,000 historical sessions; the 50k row is **not** a default-configuration result. On the recorded Apple M5 Pro / Node 24.14.0 host, earlier admission p95 was 6.13 / 8.68 / 16.77 ms. With indexed subtree lookup, 20 bound `work_read` calls per row averaged 0.46 / 0.55 / 0.64 ms. See [current raw measurements](docs/tdd/0012-capacity.json), [earlier measurements](docs/tdd/0011-capacity.json), and the [measurement limits](docs/acceptance/readiness.md). Retained history still affects some storage/accounting queries, so these numbers are not an unlimited-capacity claim.
 
 ## Run the complete Python example
 

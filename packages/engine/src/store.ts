@@ -204,6 +204,9 @@ export class Store {
           "CREATE INDEX IF NOT EXISTS tasks_status ON tasks(json_extract(data, '$.status'))",
         );
         this.db.exec(
+          "CREATE INDEX IF NOT EXISTS tasks_parent ON tasks(json_extract(data, '$.spec.parentTaskId'))",
+        );
+        this.db.exec(
           "CREATE INDEX IF NOT EXISTS dispatches_task ON dispatches(json_extract(data, '$.taskId'))",
         );
         this.db.exec(
@@ -457,6 +460,31 @@ export class Store {
     return (
       this.db.prepare(`SELECT data FROM ${table} ORDER BY rowid`).all() as { data: string }[]
     ).map((row) => JSON.parse(row.data));
+  }
+  subtreeTasks(rootId: string): TaskSnapshot[] {
+    type TaskRow = { ordinal: number; id: string; data: string };
+    const root = this.db
+      .prepare('SELECT rowid AS ordinal,id,data FROM tasks WHERE id=?')
+      .get(rootId) as TaskRow | undefined;
+    if (!root) return [];
+    const children = this.db.prepare(
+      "SELECT rowid AS ordinal,id,data FROM tasks WHERE json_extract(data,'$.spec.parentTaskId')=? ORDER BY rowid",
+    );
+    const rows = [root];
+    const seen = new Set([rootId]);
+    const queue = [{ id: rootId, depth: 0 }];
+    for (let i = 0; i < queue.length; i++) {
+      const parent = queue[i];
+      if (parent.depth >= 32) continue;
+      for (const child of children.all(parent.id) as TaskRow[]) {
+        if (seen.has(child.id)) continue;
+        seen.add(child.id);
+        rows.push(child);
+        queue.push({ id: child.id, depth: parent.depth + 1 });
+      }
+    }
+    rows.sort((a, b) => a.ordinal - b.ordinal);
+    return rows.map((row) => JSON.parse(row.data) as TaskSnapshot);
   }
   queuedTasks(): TaskSnapshot[] {
     return this.tasksInState('queued');

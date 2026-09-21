@@ -44,7 +44,7 @@ This requires Claude SDK 0.3.274 and Codex CLI 0.153.4, uses the real SDK agains
 | Real Claude/Codex models and actual native sandbox | Not executed or accepted |
 | Axion Vite/Electron 43.2.0 / Node 24.18 | Host-side acceptance pending; generic Node bundles do not establish this |
 
-The broad optional Claude peer range is an installation constraint, not a claim that all versions pass. Re-run drift review before changing tested candidates. SPEC-0011 extends the [capacity measurements](../tdd/0011-capacity.json) to 50k retained tasks; this is not million-record/10 GiB production validation. The [current readiness ledger](readiness.md) contains exact remaining gates and native-gateway reproduction commands.
+The broad optional Claude peer range is an installation constraint, not a claim that all versions pass. Re-run drift review before changing tested candidates. SPEC-0012 [measures bound tool reads](../tdd/0012-capacity.json) at up to 50k retained tasks with `maxLogicalSessions: 100000`; the programmatic default is 10,000 sessions. This is not million-record/10 GiB production validation. The [current readiness ledger](readiness.md) contains exact remaining gates and native-gateway reproduction commands.
 
 ## Separately authorized native smoke
 

@@ -89,6 +89,7 @@ _WIRE_TO_PYTHON = {
     "dispatchId": "dispatch_id", "storeId": "store_id", "instanceId": "instance_id",
     "usageRecordId": "usage_record_id",
     "providerSessionId": "provider_session_id", "activeDispatchId": "active_dispatch_id",
+    "pauseOrigin": "pause_origin",
     "targetId": "target_id", "artifactRefs": "artifact_refs", "evidenceRefs": "evidence_refs",
     "idempotencyKey": "idempotency_key", "createdAt": "created_at", "updatedAt": "updated_at",
     "expiresAt": "expires_at", "occurredAt": "occurred_at", "taskRevision": "task_revision",

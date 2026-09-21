@@ -733,9 +733,7 @@ class LocalEngine implements Engine {
           fail('OUTCOME_UNKNOWN', 'Previous tool call has no durable completion receipt');
         }
         const parent = this.task(flight.taskId);
-        const descendants = this.store
-          .all<TaskSnapshot>('tasks')
-          .filter((task) => this.inSubtree(task.id, parent.id));
+        const descendants = this.store.subtreeTasks(parent.id);
         const state = digest(
           descendants.map((task) => [task.id, task.status, task.revision, task.artifactRefs]),
         );
@@ -873,6 +871,12 @@ class LocalEngine implements Engine {
             const action = string(command.action, 'action', 32);
             if (!['pause', 'resume', 'stop', 'compact', 'rotate'].includes(action))
               fail('UNAUTHORIZED', 'Control action is not granted');
+            if (
+              action !== 'pause' &&
+              ['paused', 'pausing'].includes(session.status) &&
+              session.pauseOrigin !== 'runtime'
+            )
+              fail('UNAUTHORIZED', 'A runtime cannot override a client or unowned pause');
             result = await this.call(
               ['compact', 'rotate'].includes(action) ? `sessions.${action}` : 'sessions.control',
               {
@@ -880,6 +884,14 @@ class LocalEngine implements Engine {
                 ...(['compact', 'rotate'].includes(action) ? {} : { command }),
                 idempotencyKey: mutationKey,
                 expectedStoreId: this.storeId,
+              },
+              {
+                runtimeActor: {
+                  sessionId: flight.sessionId,
+                  taskId: flight.taskId,
+                  dispatchId: flight.dispatchId,
+                  generation: flight.generation,
+                },
               },
             );
           } else {
@@ -1356,7 +1368,10 @@ class LocalEngine implements Engine {
     this.store.put('tasks', task.id, task);
   }
   private saveSession(session: SessionSnapshot, status?: SessionSnapshot['status']): void {
-    if (status) session.status = status;
+    if (status) {
+      session.status = status;
+      if (status !== 'paused' && status !== 'pausing') delete session.pauseOrigin;
+    }
     session.revision++;
     this.store.put('sessions', session.id, session);
   }
@@ -2256,7 +2271,7 @@ class LocalEngine implements Engine {
         return op;
       }
       case 'sessions.control':
-        return this.control(p);
+        return this.control(p, context);
       case 'sessions.reconcile':
         if (!context.owner)
           fail('UNAUTHORIZED', 'Only the host owner may attest reconciliation evidence');
@@ -2756,7 +2771,7 @@ class LocalEngine implements Engine {
     }
   }
 
-  private control(p: Record<string, unknown>): OperationSnapshot {
+  private control(p: Record<string, unknown>, context: CallContext): OperationSnapshot {
     fields(p, ['target', 'command', 'idempotencyKey']);
     const target = object(p.target, 'target');
     fields(target, [
@@ -2835,6 +2850,8 @@ class LocalEngine implements Engine {
             op.status = 'noop';
             return;
           }
+          if (context.runtimeActor && session.pauseOrigin !== 'runtime')
+            fail('UNAUTHORIZED', 'A runtime cannot resume a client or unowned pause');
           this.resumePausedTask(task, session, op.id);
         } else if (flight) {
           if (
@@ -2844,12 +2861,30 @@ class LocalEngine implements Engine {
             fail('UNSUPPORTED_CAPABILITY', 'Runtime cannot interrupt');
           op.status = 'persisted';
           op.lifecycle = this.deadline(session, mode as 'drain' | 'interrupt');
+          if (command.action === 'pause')
+            session.pauseOrigin =
+              context.runtimeActor && session.pauseOrigin !== 'client' ? 'runtime' : 'client';
           this.saveSession(session, 'pausing');
         } else {
           if (session.status === 'paused') {
-            op.status = 'noop';
+            if (
+              command.action === 'pause' &&
+              !context.runtimeActor &&
+              session.pauseOrigin !== 'client'
+            ) {
+              session.pauseOrigin = 'client';
+              this.saveSession(session);
+              this.store.event(
+                'session.pause_origin_changed',
+                { pauseOrigin: 'client', revision: session.revision },
+                { taskId: task.id, sessionId, operationId: op.id },
+              );
+            } else op.status = 'noop';
             return;
           }
+          if (command.action === 'pause')
+            session.pauseOrigin =
+              context.runtimeActor && session.pauseOrigin !== 'client' ? 'runtime' : 'client';
           this.saveSession(session, 'paused');
           if (task.status !== 'waiting_approval') {
             this.saveTask(task, 'paused', 'paused_by_client');

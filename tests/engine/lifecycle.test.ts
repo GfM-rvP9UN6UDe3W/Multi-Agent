@@ -246,6 +246,22 @@ test('0011-R01 control deadline uses one wall-clock sample and retry preserves i
   }
 });
 
+test('0012-R01 a client pause retains its origin while an active dispatch drains', async () => {
+  const f = await fixture();
+  try {
+    const task = await f.create();
+    await f.pause(task);
+    assert.equal((await f.session(task.sessionId)).pauseOrigin, 'client');
+    f.gates[0]({ type: 'result', text: 'stopped at pause', providerSessionId: 'native-lifecycle' });
+    await flush();
+    const paused = await f.session(task.sessionId);
+    assert.equal(paused.status, 'paused');
+    assert.equal(paused.pauseOrigin, 'client');
+  } finally {
+    await f.cleanup();
+  }
+});
+
 test('0003-A01/A03 drain deadline is durable, independent of wall-clock rollback and retries', async () => {
   const f = await fixture();
   try {

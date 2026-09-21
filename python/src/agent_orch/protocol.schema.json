@@ -452,6 +452,10 @@
         "activeDispatchId": {
           "type": ["string", "null"]
         },
+        "pauseOrigin": {
+          "enum": ["client", "runtime"],
+          "description": "Durable origin of a control pause. Absent legacy pauses cannot be resumed by a runtime tool."
+        },
         "execution": {
           "$ref": "#/$defs/SessionExecution"
         },
@@ -585,7 +589,8 @@
         "maxLogicalSessions": {
           "type": "integer",
           "minimum": 1,
-          "maximum": 100000
+          "maximum": 100000,
+          "default": 10000
         },
         "maxQueuedTasks": {
           "type": "integer",

@@ -67,8 +67,8 @@ This is Node-based package evidence. Electron 43.2.0 / Node 24.18, Axion's Vite 
 
 The project now uses the [MIT License](../../LICENSE). Future package builds include the full LICENSE and `license: MIT`; local candidates remain `private: true`. Third-party SDKs and executables retain their own licenses. Public npm release still requires account selection, explicit publication authority and removal of `private`.
 
-The previously delivered `0.1.0-rc.1` artifacts predate this license decision and remain byte-for-byte unchanged with their original `UNLICENSED` metadata. Existing rc.2 and rc.3 artifacts are preserved. SPEC-0011 builds rc.4 with MIT metadata and coherent Python 0.1.0rc4 artifacts.
+The previously delivered `0.1.0-rc.1` artifacts predate this license decision and remain byte-for-byte unchanged with their original `UNLICENSED` metadata. Existing rc.2, rc.3 and rc.4 artifacts are preserved. SPEC-0012 builds local rc.5 with MIT metadata and coherent Python 0.1.0rc5 artifacts from its uncommitted source.
 
 Every delivered candidate uses an immutable version, such as `0.1.0-rc.4`, followed by `rc.5` for changed bytes. Keep all five npm package versions aligned. Before 1.0, incompatible public API changes increment the minor version; after 1.0 they increment the major version. Removing/renaming required fields, changing method signatures or lifecycle semantics, and changing RuntimeAdapter/RuntimeEvent requirements are breaking changes. A new RuntimeEvent union variant is also breaking for exhaustive consumers. Additive optional fields may be minor changes after 1.0. Wire-version changes require their own explicit negotiation/migration policy.
 
-Each authorized publication must have a matching immutable Git tag and retained checksums. Never republish different bytes under a published version. No commit, tag, npm/PyPI publication or paid model run is part of this local RC task.
+Each authorized publication must have a matching immutable Git tag and retained checksums. Never republish different bytes under a published version. This local RC does not commit, tag, publish to npm/PyPI or run a paid model.

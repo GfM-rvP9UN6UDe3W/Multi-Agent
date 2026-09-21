@@ -43,6 +43,8 @@ test('AC-F15 generated wire models validate equivalent namespace, routing, nulla
     ],
     ['SessionSnapshot', session, true],
     ['SessionSnapshot', { ...session, generation: true }, false],
+    ['SessionSnapshot', { ...session, status: 'paused', pauseOrigin: 'client' }, true],
+    ['SessionSnapshot', { ...session, status: 'paused', pauseOrigin: 'forged' }, false],
     ['RetryIdentity', identity, true],
     ['RetryIdentity', { ...identity, digestVersion: 2 }, false],
     [

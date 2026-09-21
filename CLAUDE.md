@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 One Node orchestration engine with thin TypeScript and Python SDKs. The engine exclusively owns SQLite state, scheduling, deadlines, and adapter calls. The SDKs use the shared JSON-RPC contract; they do not implement another scheduler, open the database, or call models themselves.
 
-Implemented scope: SPEC-0001–0010, including B/C retention, archive rollover, routing, accounting and bundled-host delivery. Storage schema 3, wire 2.0, event schemaVersion 1. Native-model, actual sandbox, external-application and economic acceptance remain unverified. Git remote: `git@github.com:masonlee39/Multi-Agent.git`. The project is MIT-licensed. Local npm tarballs and Python wheel/sdist build; nothing is published. See SPEC-0009's completion matrix and SPEC-0010's bundle evidence.
+Implemented scope: SPEC-0001–0011, including B/C retention, archive rollover, routing, accounting, bundled-host delivery and native scripted-gateway verification. SPEC-0012 addresses client-pause precedence, scoped tool queries and the documented logical-session limit. Storage schema 3, wire 2.0, event schemaVersion 1. Native-model, actual sandbox, external-application and economic acceptance remain unverified. Git remote: `git@github.com:masonlee39/Multi-Agent.git`. The project is MIT-licensed. Local npm tarballs and Python wheel/sdist build; nothing is published. See SPEC-0009's completion matrix, SPEC-0011's CI evidence and the readiness ledger.
 
 ## Common commands
 
@@ -44,7 +44,7 @@ Node 22.18+ / Python 3.11+; recorded verification used Node 24.14.0 and Python 3
 
 ## Architecture
 
-**Single writer.** `LocalEngine` in `packages/engine/src/index.ts` owns SQLite, scheduling, deadlines, and adapters. Wire methods are dispatched by the switch in `call(method, params, context)`. Adding a method requires a case, validation, specification criteria, and cross-language tests.
+**Single writer.** `LocalEngine` in `packages/engine/src/index.ts` owns SQLite, scheduling, deadlines, and adapters. Wire methods are dispatched by the switch in `dispatchCall(method, params, context)`. Adding a method requires a case, validation, specification criteria, and cross-language tests.
 
 **Three entry points, one engine.** In-process `createOrchestrator`; CLI `host --stdio` for a Python-owned child; CLI `host --socket` for a Unix socket. They cannot open the same stateDir concurrently.
 
@@ -64,7 +64,7 @@ Node 22.18+ / Python 3.11+; recorded verification used Node 24.14.0 and Python 3
 
 **Adapter contract.** `RuntimeCapabilities` requires a typed `executionBudget={version:2,...}` with explicit null caps; optional `executionEvidence` is typed version 1. `readRuntimeCapabilities` validates detached immutable JSON snapshots before admission and again before dispatch. Missing/unsupported versions fail with UNSUPPORTED_CAPABILITY; malformed declarations fail with INVALID_RUNTIME_CONTRACT. Each dispatch uses one snapshot, including its permission check and terminal coverage. `execute()` produces RuntimeEvent values. Adapters retaining resources after execute must implement `hasActiveResources()`. Hosted adapters call `requireEngineRuntimeInput` before submission to require the original generation, budget, and evidence callback; standalone `RuntimeInput` stays compatible. This preflight is not authentication. `engine/src/fake.ts` remains the automatic deterministic runtime. Optional `engine/src/testing.ts` and `testing-host.ts` provide controlled-host conformance and an offline example without loading test code into ordinary startup. A passed fixture does not validate a real application's bridge or permission enforcement.
 
-**SDK parity.** TypeScript Orchestrator wraps both the in-process engine and UnixRpcClient with one API. `python/src/agent_orch/client.py` mirrors it. Wire fields are camelCase; Python converts only known envelope fields to snake_case. Raw JSON such as operation.result retains camelCase, for example `result["executionReleased"]`. API changes must update both SDKs and schemas/protocol.schema.json manually; there is no code generation.
+**SDK parity.** TypeScript Orchestrator wraps both the in-process engine and UnixRpcClient with one API. `python/src/agent_orch/client.py` mirrors it. Wire fields are camelCase; Python converts only known envelope fields to snake_case. Raw JSON such as operation.result retains camelCase, for example `result["executionReleased"]`. API changes must update both SDKs and `schemas/protocol.schema.json`; `npm run generate:protocol` regenerates the audited wire types and validators.
 
 **Claude interruption.** SPEC-0008 advertises interrupt support and owns one open AsyncIterable user prompt plus partial-message observation. Defer Query.interrupt until matched main-turn activity; call once, keep observing, and classify only structured aborted_streaming/aborted_tools results as interrupted. Receipt, arbitrary error text, EOF, and process exit do not establish an interrupted terminal. Cleanup and extended-host stop proof remain separate. Late evidence cannot undo an expired control. Never change this into immediate SDK-controller abort on an engine cancellation request.
 
@@ -100,7 +100,12 @@ Read the relevant specification before changing behavior. Resolve implementation
 | `docs/specs/0004-runtime-reliability.md` | Historical scheduling scans, signal shutdown, TS request deadlines, and Claude exit/cleanup evidence |
 | `docs/specs/0005-wire-contract.md` | Client cleanup recovery, real wire snapshots, cross-language mapping, and test-validator boundaries |
 | `docs/specs/0006-host-runtime-contract.md` | Typed adapter capabilities, runtime/input preflight, existing-host offline conformance, and process recovery |
+| `docs/specs/0007-host-policy-and-usage.md` | Embedded host policy, native options and durable usage replay |
+| `docs/specs/0008-claude-interruption.md` | Claude interrupt lifecycle and evidence classification |
 | `docs/specs/0009-complete-design.md` | Current wire 2.0/schema 3 feature completion, packages and acceptance matrix |
+| `docs/specs/0010-bundled-host-delivery.md` | ESM/CJS host bundling and package delivery |
+| `docs/specs/0011-release-readiness.md` | CI, native runtime and local release evidence |
+| `docs/specs/0012-tool-control-and-capacity.md` | Client-pause precedence, scoped tool queries and session-capacity disclosure |
 | `docs/tdd/*.md` | Observed RED/GREEN evidence for each increment |
 | `schemas/protocol.schema.json` | Normative wire data definitions |
 

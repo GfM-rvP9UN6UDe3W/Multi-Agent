@@ -1,4 +1,4 @@
-// Generated from schemas/protocol.schema.json; SHA-256 e68a90b5cacd67a8eb491b0fe32e8c9a7d303a6f02c4b1a82e4ae3481b57ac45. Do not edit.
+// Generated from schemas/protocol.schema.json; SHA-256 fa633a2fb40ab9f12e09770f8977383f1d4e6a78ce9e09c92dcccd6165dbd38d. Do not edit.
 export const protocolSchema = {
   $schema: 'https://json-schema.org/draft/2020-12/schema',
   $id: 'urn:agent-orch:protocol:2.0',
@@ -456,6 +456,11 @@ export const protocolSchema = {
         activeDispatchId: {
           type: ['string', 'null'],
         },
+        pauseOrigin: {
+          enum: ['client', 'runtime'],
+          description:
+            'Durable origin of a control pause. Absent legacy pauses cannot be resumed by a runtime tool.',
+        },
         execution: {
           $ref: '#/$defs/SessionExecution',
         },
@@ -591,6 +596,7 @@ export const protocolSchema = {
           type: 'integer',
           minimum: 1,
           maximum: 100000,
+          default: 10000,
         },
         maxQueuedTasks: {
           type: 'integer',

@@ -1,4 +1,4 @@
-// Generated from schemas/protocol.schema.json; SHA-256 e68a90b5cacd67a8eb491b0fe32e8c9a7d303a6f02c4b1a82e4ae3481b57ac45. Do not edit.
+// Generated from schemas/protocol.schema.json; SHA-256 fa633a2fb40ab9f12e09770f8977383f1d4e6a78ce9e09c92dcccd6165dbd38d. Do not edit.
 // Structural types; validateWire enforces numeric and conditional constraints.
 export type RuntimeSpec = { provider: string; model: string };
 export type TaskSpec = {
@@ -108,6 +108,7 @@ export type SessionSnapshot = {
   revision: number;
   status: SessionStatus;
   activeDispatchId: string | null;
+  pauseOrigin?: 'client' | 'runtime';
   execution?: SessionExecution;
   retryIdentity?: RetryIdentity;
   taskIds?: Array<string>;

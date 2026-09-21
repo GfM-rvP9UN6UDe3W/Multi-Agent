@@ -1,0 +1,164 @@
+{
+  "environment": {
+    "platform": "darwin",
+    "release": "25.6.0",
+    "arch": "arm64",
+    "node": "v24.14.0",
+    "cpus": 18,
+    "cpuModel": "Apple M5 Pro",
+    "physicalMemoryBytes": 68719476736
+  },
+  "limits": "Programmatic default maxLogicalSessions=10000; this experiment sets 100000 to seed 50000 sessions. Bound tool-read latency includes local SQLite work and is not a production latency guarantee. SQLite BEGIN timing is not multi-writer throughput; no million-record or 10-GiB claim is made.",
+  "rows": [
+    {
+      "historyTasks": 1000,
+      "historyRecords": 3000,
+      "fixtureTasks": 100,
+      "seedMs": 79.01341599999999,
+      "elapsedMs": 4559.965459,
+      "dispatchesPerSecond": 21.929990676273672,
+      "eventsPerSecond": 263.1598881152841,
+      "admissionP95Ms": 6.666791999999987,
+      "toolReadSamples": 20,
+      "toolReadMeanMs": 0.46288540000000183,
+      "toolReadP95Ms": 0.9558749999999918,
+      "sqliteBeginP95Ms": 0.0037090000000716827,
+      "eventLoopP95Ms": 50.364415,
+      "peakObservedRssBytes": 129794048,
+      "walBytes": 4305432,
+      "databaseBytes": 5849088,
+      "storageBytes": 10426036,
+      "storageRecords": 3403,
+      "snapshotFirstPageMs": 5.1157499999999345,
+      "snapshotPageItems": 128,
+      "gc": [
+        {
+          "records": 156,
+          "bytes": 27484,
+          "durationMs": 50.499291999999514,
+          "oversizedArtifacts": [],
+          "retentionFloorCursor": "0",
+          "elapsedMs": 51.30199999999968
+        },
+        {
+          "records": 169,
+          "bytes": 30251,
+          "durationMs": 50.28633300000001,
+          "oversizedArtifacts": [],
+          "retentionFloorCursor": "0",
+          "elapsedMs": 50.762291999999434
+        },
+        {
+          "records": 177,
+          "bytes": 31683,
+          "durationMs": 50.44004100000075,
+          "oversizedArtifacts": [],
+          "retentionFloorCursor": "0",
+          "elapsedMs": 50.980125000000044
+        }
+      ],
+      "modelCalls": 0,
+      "configuredMaxLogicalSessions": 100000
+    },
+    {
+      "historyTasks": 10000,
+      "historyRecords": 30000,
+      "fixtureTasks": 100,
+      "seedMs": 891.2240830000001,
+      "elapsedMs": 4727.925875000001,
+      "dispatchesPerSecond": 21.15092381815313,
+      "eventsPerSecond": 253.81108581783758,
+      "admissionP95Ms": 8.216832999998587,
+      "toolReadSamples": 20,
+      "toolReadMeanMs": 0.5493208000000322,
+      "toolReadP95Ms": 1.0111249999999927,
+      "sqliteBeginP95Ms": 0.003290999999990163,
+      "eventLoopP95Ms": 52.133887,
+      "peakObservedRssBytes": 148340736,
+      "walBytes": 10765592,
+      "databaseBytes": 31531008,
+      "storageBytes": 42568116,
+      "storageRecords": 30403,
+      "snapshotFirstPageMs": 42.53712499999892,
+      "snapshotPageItems": 128,
+      "gc": [
+        {
+          "records": 44,
+          "bytes": 7660,
+          "durationMs": 51.37724999999955,
+          "oversizedArtifacts": [],
+          "retentionFloorCursor": "0",
+          "elapsedMs": 52.002957999999126
+        },
+        {
+          "records": 45,
+          "bytes": 7875,
+          "durationMs": 52.46087500000067,
+          "oversizedArtifacts": [],
+          "retentionFloorCursor": "0",
+          "elapsedMs": 53.011375000000044
+        },
+        {
+          "records": 42,
+          "bytes": 7474,
+          "durationMs": 51.35216600000058,
+          "oversizedArtifacts": [],
+          "retentionFloorCursor": "0",
+          "elapsedMs": 51.866917000001195
+        }
+      ],
+      "modelCalls": 0,
+      "configuredMaxLogicalSessions": 100000
+    },
+    {
+      "historyTasks": 50000,
+      "historyRecords": 150000,
+      "fixtureTasks": 100,
+      "seedMs": 4399.008249999999,
+      "elapsedMs": 5928.076292,
+      "dispatchesPerSecond": 16.868878717865194,
+      "eventsPerSecond": 202.42654461438232,
+      "admissionP95Ms": 18.285334000000148,
+      "toolReadSamples": 20,
+      "toolReadMeanMs": 0.6361020999999709,
+      "toolReadP95Ms": 0.5151249999998981,
+      "sqliteBeginP95Ms": 0.00391700000182027,
+      "eventLoopP95Ms": 63.700991,
+      "peakObservedRssBytes": 264617984,
+      "walBytes": 47540712,
+      "databaseBytes": 149643264,
+      "storageBytes": 197521028,
+      "storageRecords": 150403,
+      "snapshotFirstPageMs": 209.34875000000102,
+      "snapshotPageItems": 128,
+      "gc": [
+        {
+          "records": 8,
+          "bytes": 1368,
+          "durationMs": 57.594082999999955,
+          "oversizedArtifacts": [],
+          "retentionFloorCursor": "0",
+          "elapsedMs": 58.43987500000003
+        },
+        {
+          "records": 8,
+          "bytes": 1392,
+          "durationMs": 56.96404199999961,
+          "oversizedArtifacts": [],
+          "retentionFloorCursor": "0",
+          "elapsedMs": 57.55566700000054
+        },
+        {
+          "records": 8,
+          "bytes": 1400,
+          "durationMs": 57.87620799999786,
+          "oversizedArtifacts": [],
+          "retentionFloorCursor": "0",
+          "elapsedMs": 58.52166699999725
+        }
+      ],
+      "modelCalls": 0,
+      "configuredMaxLogicalSessions": 100000
+    }
+  ]
+}

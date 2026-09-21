@@ -119,6 +119,26 @@ class NodeReconcileTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(original.resolution.operation_id, reconciled.id)
             self.assertEqual((await restarted.tasks.get(task.id)).status, "completed")
 
+    async def test_0012_r01_client_pause_origin_survives_python_host_restart(self):
+        async with self.local() as orch:
+            task = await orch.tasks.create(self.spec(), idempotency_key="origin-task")
+            async with asyncio.timeout(5):
+                while (await orch.tasks.get(task.id)).status != "waiting_approval":
+                    await asyncio.sleep(0.005)
+            session = await orch.sessions.get(task.session_id)
+            await orch.sessions.control(self.target(session), {"action": "pause"},
+                                        idempotency_key="origin-pause")
+            paused = await orch.sessions.get(task.session_id)
+            self.assertEqual(paused.pause_origin, "client")
+            self.assertEqual(paused.status, "paused")
+        async with self.local() as restarted:
+            persisted = await restarted.sessions.get(task.session_id)
+            self.assertEqual(persisted.pause_origin, "client")
+            await restarted.sessions.control(self.target(persisted), {"action": "resume"},
+                                             idempotency_key="origin-resume")
+            resumed = await restarted.sessions.get(task.session_id)
+            self.assertNotIn("pause_origin", resumed.as_dict())
+
     async def test_a_socket_client_cannot_submit_owner_attestation(self):
         socket_path = str(self.directory / "host.sock")
         process = await asyncio.create_subprocess_exec(NODE, str(CLI), "host", "--config", str(self.config),

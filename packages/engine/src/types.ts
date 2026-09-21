@@ -134,6 +134,8 @@ export interface SessionSnapshot {
   revision: number;
   status: SessionStatus;
   activeDispatchId: string | null;
+  /** Durable control provenance; absent old-store pauses are treated as client-owned. */
+  pauseOrigin?: 'client' | 'runtime';
   taskIds?: string[];
   rootTaskId?: string;
   permissionProfile?: 'read-only' | 'workspace-write';

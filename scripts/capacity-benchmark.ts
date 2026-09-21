@@ -25,12 +25,14 @@ for (const history of counts) {
   let wall = Date.now(),
     calls = 0,
     peakRss = process.memoryUsage().rss;
+  const toolReadMs: number[] = [];
   const base = createFakeAdapter({ result: 'capacity fixture' });
   const engine = await createEngine({
     workspace,
     stateDir,
     storage: { emergencyBytes: 4096, minFreeBytes: 0 },
     limits: { maxLogicalSessions: 100000 },
+    tools: { enabled: true, maxRepeatedCalls: 100 },
     clock: {
       wallNow: () => wall,
       monotonicNow: () => performance.now(),
@@ -45,6 +47,14 @@ for (const history of counts) {
         ...base,
         async *execute(input) {
           calls++;
+          if (calls === 1) {
+            if (!input.orchestrationTools) throw new Error('Bound tools were not enabled');
+            for (let sample = 0; sample < 20; sample++) {
+              const readStarted = performance.now();
+              await input.orchestrationTools.call('work_read', { kind: 'task', id: input.taskId });
+              toolReadMs.push(performance.now() - readStarted);
+            }
+          }
           yield* base.execute(input);
         },
       },
@@ -181,6 +191,9 @@ for (const history of counts) {
       dispatchesPerSecond: (1000 * calls) / elapsedMs,
       eventsPerSecond: (1000 * eventCount) / elapsedMs,
       admissionP95Ms: p95(latencies),
+      toolReadSamples: toolReadMs.length,
+      toolReadMeanMs: toolReadMs.reduce((total, value) => total + value, 0) / toolReadMs.length,
+      toolReadP95Ms: p95(toolReadMs),
       sqliteBeginP95Ms: p95(dbBegin),
       eventLoopP95Ms: lag.percentile(95) / 1e6,
       peakObservedRssBytes: peakRss,
@@ -192,6 +205,7 @@ for (const history of counts) {
       snapshotPageItems: snapshot.items.length,
       gc,
       modelCalls: 0,
+      configuredMaxLogicalSessions: 100000,
     });
   } finally {
     await engine.close({ mode: 'interrupt', timeoutMs: 2000 });
@@ -211,7 +225,7 @@ console.log(
         physicalMemoryBytes: totalmem(),
       },
       limits:
-        'Bounded single-process local measurements; SQLite BEGIN timing is not multi-writer throughput, and no million-record or 10-GiB claim is made',
+        'Programmatic default maxLogicalSessions=10000; this experiment sets 100000 to seed 50000 sessions. Bound tool-read latency includes local SQLite work and is not a production latency guarantee. SQLite BEGIN timing is not multi-writer throughput; no million-record or 10-GiB claim is made.',
       rows,
     },
     null,
