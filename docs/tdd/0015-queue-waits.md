@@ -65,8 +65,13 @@ The host asked whether two differently named Claude adapters had run with the re
 - The first attempt failed: the writable task ended `blocked` with `outcome_unknown`. The smoke's stop observer returned an object; the contract is a boolean, and only `true` counts. The same wrong stub was in `scripts/native-read-fence-smoke.mjs`. That script calls the adapter directly and never checked release, so its F04 results were unaffected. Both stubs now return a boolean. The read-fence smoke passes 3/3 again, and the Codex smoke with codex-cli 0.153.4 passes 6/6.
 - The writable adapter's stop observer is a scripted attestation that no tool ran. A real host must observe the actual stop.
 
+## Remote CI
+
+- The push of `559cf43` ran [35614411467](https://github.com/masonlee39/Multi-Agent/actions/runs/35614411467): **5/6 jobs passed**. On Ubuntu 24.04 the new native case failed. The writable task ended `failed` with the runtime's reason `Sandbox required but unavailable: ... bubblewrap (bwrap) not installed, socat not installed`. The writable profile requires the OS sandbox and allows no unsandboxed fallback, and the runner had neither package. macOS passed.
+- Fix (`b691950`): the native job installs `bubblewrap` and `socat` on Linux, and the wiring guide states the platform requirement. The push run [35614848946](https://github.com/masonlee39/Multi-Agent/actions/runs/35614848946) and the pull-request run [35614854753](https://github.com/masonlee39/Multi-Agent/actions/runs/35614854753) each passed **6/6 jobs**. On Ubuntu the Claude smoke reported all nine cases, including `two-named-claude-adapters-read-only-and-writable-in-one-engine`.
+
 ## Remaining boundary
 
-- The CI native job runs the new case on Ubuntu 24.04 and macOS 14. Whether the writable profile's required OS sandbox is available on the Ubuntu runner is not yet known.
+- On Linux the writable case ran with the sandbox packages installed. Its scripted turn runs no Bash, so it does not show sandbox enforcement on Linux.
 - Sleep counts because the deadline is wall-clock time. This matches the specification; no platform's suspend behavior was measured.
 - Only the fake runtime exercised queue waits.

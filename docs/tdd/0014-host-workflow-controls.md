@@ -104,4 +104,4 @@ Removing the H05 predicate is the baseline, which already failed.
 - Where two rules already collided under rc.8, the overwritten rule's content is lost. It cannot be recovered, and the engine does not detect it.
 - The 96 KiB total relies on small records. A task has at most 200 dependencies with engine-generated identifiers, so all records together stay under 50 KiB. This is argued in the code, not enforced.
 - Context-reference blocks still check the artifact's raw size, 32 KiB before JSON encoding, so each block can expand the same way. This was found by reading the code and was outside the review; it is not reproduced or changed.
-- Remote CI has not run on these changes, because nothing has been pushed. Only the fake runtime was used; no adapter changed, so the native smokes were not rerun.
+- Only the fake runtime was used for these corrections. They were pushed as `42e2c6f` on branch `axion-rc9`, whose CI results are recorded in [TDD-0015](0015-queue-waits.md#remote-ci).

@@ -1,6 +1,6 @@
 # SPEC-0015: Queue waits for multi-agent hosts
 
-Date: 2026-09-21. Status: approved by the owner; implemented on branch `axion-rc9` for rc.9. Evidence: [TDD-0015](../tdd/0015-queue-waits.md). Origin: an embedding host reported that dependent tasks expire while their dependencies run, and asked for longer queue waits. This specification refines the Queueing row of [SPEC-0003](0003-policy-retention-deadlines.md) and applies to every caller.
+Date: 2026-09-21. Status: approved by the owner; implemented in `559cf43` for rc.9; [CI run 35614848946](https://github.com/masonlee39/Multi-Agent/actions/runs/35614848946) passed all six jobs. Evidence: [TDD-0015](../tdd/0015-queue-waits.md). Origin: an embedding host reported that dependent tasks expire while their dependencies run, and asked for longer queue waits. This specification refines the Queueing row of [SPEC-0003](0003-policy-retention-deadlines.md) and applies to every caller.
 
 ## Problem
 
