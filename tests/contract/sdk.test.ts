@@ -8,11 +8,11 @@ import {
   Orchestrator,
   TaskHandle,
 } from '../../packages/sdk-typescript/src/index.ts';
-import type { TaskSnapshot } from '../../packages/engine/src/types.ts';
+import type { RuntimeAdapter, TaskSnapshot } from '../../packages/engine/src/types.ts';
 import { createFakeAdapter } from '../../packages/engine/src/fake.ts';
 import { createEngine } from '../fixtures/engine.ts';
 
-async function fixture(t: any, delayMs = 0) {
+async function fixture(t: any, delayMs = 0, adapter?: RuntimeAdapter) {
   const root = await mkdtemp(join(tmpdir(), 'orch-sdk-test-'));
   const workspace = join(root, 'workspace');
   const stateDir = join(root, 'state');
@@ -21,7 +21,7 @@ async function fixture(t: any, delayMs = 0) {
   const orch = await createOrchestrator({
     workspace,
     stateDir,
-    adapters: [createFakeAdapter({ delayMs })],
+    adapters: [adapter ?? createFakeAdapter({ delayMs })],
     providers: { fake: { model: 'fake-model' } },
   });
   t.after(async () => {
@@ -71,17 +71,36 @@ test('AC06 TS wait timeout and AbortSignal only stop the local wait', async (t) 
 });
 
 test('AC07 drain timeout keeps the client and shutdown operation recoverable', async (t) => {
-  const orch = await fixture(t, 400);
+  const base = createFakeAdapter();
+  let releaseTerminal!: () => void;
+  const terminalGate = new Promise<void>((resolve) => {
+    releaseTerminal = resolve;
+  });
+  const adapter: RuntimeAdapter = {
+    ...base,
+    async *execute(input) {
+      for await (const event of base.execute(input)) {
+        if (event.type === 'result') await terminalGate;
+        yield event;
+      }
+    },
+  };
+  const orch = await fixture(t, 0, adapter);
   const task = await orch.tasks.create(spec);
-  const deadline = Date.now() + 1000;
-  while ((await orch.tasks.get(task.id)).status !== 'running' && Date.now() < deadline)
+  const deadline = Date.now() + 5000;
+  let snapshot = await orch.tasks.get(task.id);
+  while (snapshot.status !== 'running' && Date.now() < deadline) {
     await new Promise((r) => setTimeout(r, 5));
+    snapshot = await orch.tasks.get(task.id);
+  }
+  assert.equal(snapshot.status, 'running');
   let failure: any;
   try {
     await orch.close({ mode: 'drain', timeoutMs: 1 });
   } catch (error) {
     failure = error;
   }
+  releaseTerminal();
   assert.equal(failure?.code, 'SHUTDOWN_INCOMPLETE');
   assert.equal(failure.client, orch);
   assert.equal(typeof failure.operationId, 'string');
