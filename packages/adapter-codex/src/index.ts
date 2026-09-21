@@ -379,6 +379,8 @@ export function createCodexAdapter(config: CodexAdapterConfig = {}): RuntimeAdap
       interrupt: true,
       permissionProfiles: [profile],
       fork: true,
+      // Model-changing forks stay disabled until separate native evidence exists.
+      forkModelChange: false,
       compact: true,
       toolBridge: true,
       inspect: true,

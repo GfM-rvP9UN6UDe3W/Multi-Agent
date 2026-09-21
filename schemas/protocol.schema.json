@@ -2302,6 +2302,14 @@
           "minLength": 1,
           "maxLength": 128
         },
+        "model": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "acknowledgeCacheLoss": {
+          "type": "boolean"
+        },
         "expectedStoreId": {
           "type": "string",
           "minLength": 1,

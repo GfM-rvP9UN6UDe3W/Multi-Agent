@@ -1,4 +1,4 @@
-"""Generated from schemas/protocol.schema.json; SHA-256 fa633a2fb40ab9f12e09770f8977383f1d4e6a78ce9e09c92dcccd6165dbd38d. Do not edit.
+"""Generated from schemas/protocol.schema.json; SHA-256 79c7ce36f16e11094fcfe0e05bf476603904ff998196110160ac730d014dd62f. Do not edit.
 Wire dictionaries use camelCase. Use the SDK dataclasses for snake_case requests.
 """
 from __future__ import annotations
@@ -538,6 +538,8 @@ class SessionControlParams(TypedDict):
 class SessionForkParams(TypedDict):
     target: ControlTarget
     snapshotRef: str
+    model: NotRequired[str]
+    acknowledgeCacheLoss: NotRequired[bool]
     expectedStoreId: str
     idempotencyKey: str
     requestDigest: NotRequired[str]

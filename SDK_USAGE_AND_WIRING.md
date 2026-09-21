@@ -64,6 +64,8 @@ This is runnable with explicit fake data after replacing the paths:
 }
 ```
 
+Each provider names its allowed models with `model` (one model) or `models` (a non-empty list of unique names), never both. Tasks and sessions must use an allowed model; removing a model on restart leaves existing sessions unchanged and rejects new tasks for it. A fork can move to another model only when the provider configures one of these lists (see section 8).
+
 Host options also include verificationRules, registered writeScopes, pricing, budget, contextLimits, messageLimits, storage and stores. Read the typed [EngineConfig](packages/engine/src/types.ts) and validated [CLI config](packages/cli/src/config.ts) before adding fields. JSON providers remain read-only; native options, write profiles and callbacks use embedded TS. There is no generic auth/executable/gateway object. Native credentials and model endpoints belong to the selected runtime or an application-owned adapter, and are not stored in task specifications.
 
 `doctor --config FILE` checks Node/SQLite, path access and the selected native dependency version without login or model calls. `doctor --socket PATH` proves the existing host handshake only. Neither proves authentication, tool sandboxing, model availability or task completion.
@@ -258,6 +260,36 @@ Owner-enabled tools have exactly four names: work_delegate, work_send, work_read
 work_delegate validates declared independence and inherited/narrowed provider/model/profile/write scope. Task dependencies wait without consuming execution slots and wake only after required acceptance. Reuse is serial, requires compatible context/root/profile/workspace, and has a finite persisted queue deadline. Only declared fallbackModes may create a different candidate. Continue/parallel_tools are in-turn intents, not hidden child tasks. Context references must name existing bounded digest-verified artifacts.
 
 Logical session opening makes no native/model call. Fork captures a completed source checkpoint; first use must return a distinct native identity. Compact executes a maintenance turn and requires an actual compact boundary; a method acknowledgment is insufficient. Rotate requires a quiet settled session, archives generation evidence and clears the native binding. Stop closes scheduling independently of business cancellation. Inspect performs bounded read-only native history lookup and returns unknown execution; it never settles work automatically.
+
+Fork preconditions and effects apply to every caller:
+
+- The source session must be quiet. An in-flight dispatch, held lease, quarantined or verification-pending dispatch, or retained runtime resource fails with `RUNTIME_STILL_ACTIVE`; a non-terminal associated task fails with `SESSION_BUSY`.
+- The source's associated task must be `completed`, and `snapshotRef` must be one of its `artifactRefs`; otherwise the fork fails with `INVALID_SNAPSHOT` (`NO_SESSION_TASK` when the session has no associated task). A failed or cancelled task cannot be forked. Continue in a new session instead; it does not carry the earlier history.
+- The runtime must declare `fork`, and the source needs a native session ID and a completed native checkpoint; otherwise the fork fails with `UNSUPPORTED_CAPABILITY`.
+- The fork is a new logical session with the source's provider, write paths and root task, and the permission profile configured for that provider. It keeps the source model unless the call names another allowed model (below). The source session is unchanged. The fork counts toward `limits.maxLogicalSessions` (`SESSION_CAPACITY_EXHAUSTED`) and is subject to quarantine admission (`QUARANTINE_CAPACITY_EXCEEDED`).
+- A fork cannot change the provider name, permission profile or write paths. Use a new session for that; it does not carry the earlier history.
+- `sessions.fork` only prepares the fork. The native fork happens on the fork's first dispatch.
+- A task uses a prepared fork by naming it as `candidateSessionId`; the declared mode's usual rules apply, and `reuse` requires `independent: true`. Inline `requestedMode: "fork"` instead names the source session and `snapshotRef`, and also requires `independent: true` (`INVALID_ROUTING`). Either way, the task must match the fork's provider, model, permission profile and write paths (`SESSION_INCOMPATIBLE`), and must belong to the source's root task unless the owner enables `allowCrossRootReuse` (`HISTORY_REUSE_FORBIDDEN`).
+
+A fork may continue the source history on another model of the same provider. These rules also apply to every caller:
+
+- Pass `model` to `sessions.fork`. It must be in the provider's configured `models` (or `model`) list. Without a configured list, or for an unlisted model, the fork fails with `VALIDATION_ERROR`. Omitting `model`, or naming the source model, is an ordinary fork.
+- The runtime must declare `forkModelChange: true`, otherwise `UNSUPPORTED_CAPABILITY`. Claude declares it; Codex does not. Both SDKs also require the host to advertise `sessionLifecycle.forkModel` before sending `model`.
+- The caller must also pass `acknowledgeCacheLoss: true`, otherwise the fork fails with `CACHE_LOSS_NOT_ACKNOWLEDGED` and no session is created. The runtime resends the whole history with every request, so the new model receives the source conversation up to the checkpoint. It cannot reuse the source model's prompt cache: the first response after the change reprocesses the whole inherited history and is slower and more expensive; later responses warm the new model's cache. Tell end users this before they switch. The operation result and the `session.fork_prepared` event carry `modelChange: {fromModel, toModel, promptCacheReuse: false}` for that message.
+- Tasks on the fork must declare the target model (`SESSION_INCOMPATIBLE` otherwise). `contextLimits`, pricing and budget reservation use the target model at dispatch, as for any task; a missing price under an active budget pauses the task with `BUDGET_PRICE_UNKNOWN`. The engine does not estimate inherited history from recorded usage, so `contextEstimate` must include the inherited history. The provider's own context limit remains the final boundary.
+- Only a client can change the model. Inline `requestedMode: "fork"` keeps the source model, and bound runtime tools can neither name a model nor claim a prepared fork.
+
+```ts
+const branch = await orch.sessions.fork(target, snapshotRef, {
+  model: 'claude-haiku-4-5',
+  acknowledgeCacheLoss: true, // after telling the user about the slower, costlier first response
+});
+```
+
+```python
+branch = await orch.sessions.fork(target, snapshot_ref, model="claude-haiku-4-5",
+                                  acknowledge_cache_loss=True)
+```
 
 Checks use owner-registered verificationRules with ID/version/argv/canonical cwd/time/output/profile/success criteria. The task freezes their digest at admission. Checks run after runtime stop, capture baseline hashes and output, and require all checks and dependencies to pass. Failed checks consume a finite repair/turn budget. Unconfirmed verifier cleanup retains execution/write ownership until explicit owner evidence. Registered commands run as the local user; baseline checks detect mutation afterward and are not an OS sandbox.
 

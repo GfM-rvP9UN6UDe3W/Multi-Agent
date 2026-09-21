@@ -376,6 +376,8 @@ export function createClaudeAdapter<Extra extends object = object>(
       interrupt: true,
       permissionProfiles: [profile],
       fork: true,
+      // SPEC-0013 M05: a native fork resends the source history to the requested model.
+      forkModelChange: true,
       compact: true,
       toolBridge: true,
       inspect: true,

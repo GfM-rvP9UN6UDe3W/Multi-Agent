@@ -375,6 +375,8 @@ export interface RuntimeCapabilities {
   permissionProfiles: ('read-only' | 'workspace-write')[];
   executionBudget: RuntimeBudgetCapabilities;
   executionEvidence?: RuntimeEvidenceCapabilities;
+  /** True only when a native fork can continue on another model with the source history. */
+  forkModelChange?: boolean;
   [key: string]: Json | undefined;
 }
 export interface RuntimeInput {
@@ -505,9 +507,10 @@ export interface EngineConfig {
     maxLogicalSessions?: number;
     maxQueuedTasks?: number;
   };
+  /** `model` is shorthand for a one-item `models` list; configure at most one of them. */
   providers?: Record<
     string,
-    { model?: string; permissionProfile?: 'read-only' | 'workspace-write' }
+    { model?: string; models?: string[]; permissionProfile?: 'read-only' | 'workspace-write' }
   >;
   approvalTtlMs?: number;
   runtimeApprovals?: { enabled?: boolean; ttlMs?: number };

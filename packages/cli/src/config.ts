@@ -12,6 +12,7 @@ export interface HostConfig {
     string,
     Record<string, unknown> & {
       model?: string;
+      models?: string[];
       permissionProfile?: 'read-only' | 'workspace-write';
     }
   >;
@@ -99,8 +100,21 @@ export async function loadConfig(configPath: string): Promise<HostConfig> {
       !(provider === 'fake' && settings.adapter === '@agent-orch/engine/fake')
     )
       invalid(`Adapter module is not allowed for ${provider}`);
-    if (typeof settings.model !== 'string' || !settings.model.trim())
-      invalid(`providers.${provider}.model must name an explicit model`);
+    if (settings.models === undefined) {
+      if (typeof settings.model !== 'string' || !settings.model.trim())
+        invalid(`providers.${provider}.model must name an explicit model`);
+    } else {
+      if (settings.model !== undefined)
+        invalid(`providers.${provider} must configure model or models, not both`);
+      const models = settings.models;
+      if (
+        !Array.isArray(models) ||
+        models.length === 0 ||
+        models.some((model) => typeof model !== 'string' || !model.trim()) ||
+        new Set(models).size !== models.length
+      )
+        invalid(`providers.${provider}.models must be a non-empty list of unique model names`);
+    }
     if (
       settings.permissionProfile !== undefined &&
       !['read-only', 'workspace-write'].includes(settings.permissionProfile as string)
@@ -109,7 +123,7 @@ export async function loadConfig(configPath: string): Promise<HostConfig> {
     if (provider === 'fake') {
       fields(
         settings,
-        ['adapter', 'model', 'permissionProfile', 'delayMs', 'result'],
+        ['adapter', 'model', 'models', 'permissionProfile', 'delayMs', 'result'],
         'fake provider',
       );
       if (
@@ -127,6 +141,7 @@ export async function loadConfig(configPath: string): Promise<HostConfig> {
         [
           'adapter',
           'model',
+          'models',
           'permissionProfile',
           'requestTimeoutMs',
           'turnTimeoutMs',
@@ -145,6 +160,7 @@ export async function loadConfig(configPath: string): Promise<HostConfig> {
         [
           'adapter',
           'model',
+          'models',
           'permissionProfile',
           'command',
           'args',

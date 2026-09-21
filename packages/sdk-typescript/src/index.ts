@@ -33,6 +33,12 @@ export interface MutationOptions extends RequestOptions {
   idempotencyKey?: string;
   retryIdentity?: RetryIdentity;
 }
+export interface SessionForkOptions extends MutationOptions {
+  /** Another allowed model of the source provider; the fork cannot reuse the prompt cache. */
+  model?: string;
+  /** Required when `model` differs from the source model. */
+  acknowledgeCacheLoss?: boolean;
+}
 export interface WaitOptions {
   timeoutMs?: number;
   signal?: AbortSignal;
@@ -416,13 +422,32 @@ export class Orchestrator {
         );
       return this.mutation<SessionSnapshot>('sessions.open', 'local', { spec }, options);
     },
-    fork: (target: SessionControlTarget, snapshotRef: string, options?: MutationOptions) =>
-      this.mutation<SessionSnapshot>(
+    fork: async (
+      target: SessionControlTarget,
+      snapshotRef: string,
+      options: SessionForkOptions = {},
+    ) => {
+      const { model, acknowledgeCacheLoss, ...mutation } = options;
+      const capability = this.info.capabilities.sessionLifecycle as
+        | { forkModel?: boolean }
+        | undefined;
+      if (model !== undefined && capability?.forkModel !== true)
+        throw new OrchestratorError(
+          'UNSUPPORTED_CAPABILITY',
+          'Host does not support model-changing forks',
+        );
+      return this.mutation<SessionSnapshot>(
         'sessions.fork',
         target.sessionId,
-        { target, snapshotRef },
-        options,
-      ),
+        {
+          target,
+          snapshotRef,
+          ...(model !== undefined ? { model } : {}),
+          ...(acknowledgeCacheLoss !== undefined ? { acknowledgeCacheLoss } : {}),
+        },
+        mutation,
+      );
+    },
     compact: (target: SessionControlTarget, options?: MutationOptions) =>
       this.operation('sessions.compact', target.sessionId, { target }, options),
     rotate: (target: SessionControlTarget, options?: MutationOptions) =>

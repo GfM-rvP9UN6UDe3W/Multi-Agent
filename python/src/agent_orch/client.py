@@ -112,12 +112,21 @@ class _Sessions:
             raise unsupported("sessions.open")
         return await self._client._mutate("sessions.open", {"spec": to_wire(spec)}, idempotency_key)
 
-    async def fork(self, target: Mapping[str, Any], snapshot_ref: str | None = None, *, idempotency_key: str | None = None) -> Snapshot:
+    async def fork(self, target: Mapping[str, Any], snapshot_ref: str | None = None, *, model: str | None = None,
+                   acknowledge_cache_loss: bool | None = None, idempotency_key: str | None = None) -> Snapshot:
+        """Prepare a fork; another allowed model loses prompt-cache reuse and must be acknowledged."""
         await self._client.start()
         capability = self._client.info.capabilities.get("session_lifecycle", {})
         if not isinstance(capability, Mapping) or capability.get("fork") is not True:
             raise unsupported("sessions.fork")
-        return await self._client._mutate("sessions.fork", {"target": to_wire(target), "snapshotRef": snapshot_ref}, idempotency_key)
+        if model is not None and capability.get("fork_model") is not True:
+            raise OrchestrationError("UNSUPPORTED_CAPABILITY", "Host does not support model-changing forks")
+        params: dict[str, Any] = {"target": to_wire(target), "snapshotRef": snapshot_ref}
+        if model is not None:
+            params["model"] = model
+        if acknowledge_cache_loss is not None:
+            params["acknowledgeCacheLoss"] = acknowledge_cache_loss
+        return await self._client._mutate("sessions.fork", params, idempotency_key)
 
     async def compact(self, target: Mapping[str, Any], *, idempotency_key: str | None = None) -> OperationHandle:
         return OperationHandle(self._client, await self._client._mutate("sessions.compact", {"target": to_wire(target)}, idempotency_key))

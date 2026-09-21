@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 One Node orchestration engine with thin TypeScript and Python SDKs. The engine exclusively owns SQLite state, scheduling, deadlines, and adapter calls. The SDKs use the shared JSON-RPC contract; they do not implement another scheduler, open the database, or call models themselves.
 
-Implemented scope: SPEC-0001–0011, including B/C retention, archive rollover, routing, accounting, bundled-host delivery and native scripted-gateway verification. SPEC-0012 addresses client-pause precedence, scoped tool queries and the documented logical-session limit. Storage schema 3, wire 2.0, event schemaVersion 1. Native-model, actual sandbox, external-application and economic acceptance remain unverified. Git remote: `git@github.com:masonlee39/Multi-Agent.git`. The project is MIT-licensed. Local npm tarballs and Python wheel/sdist build; nothing is published. See SPEC-0009's completion matrix, SPEC-0011's CI evidence and the readiness ledger.
+Implemented scope: SPEC-0001–0011, including B/C retention, archive rollover, routing, accounting, bundled-host delivery and native scripted-gateway verification. SPEC-0012 addresses client-pause precedence, scoped tool queries and the documented logical-session limit. SPEC-0013 lets `sessions.fork` move to another allowed model of the same provider with explicit cache-loss acknowledgment. Storage schema 3, wire 2.0, event schemaVersion 1. Native-model, actual sandbox, external-application and economic acceptance remain unverified. Git remote: `git@github.com:masonlee39/Multi-Agent.git`. The project is MIT-licensed. Local npm tarballs and Python wheel/sdist build; nothing is published. See SPEC-0009's completion matrix, SPEC-0011's CI evidence and the readiness ledger.
 
 ## Common commands
 
@@ -106,6 +106,7 @@ Read the relevant specification before changing behavior. Resolve implementation
 | `docs/specs/0010-bundled-host-delivery.md` | ESM/CJS host bundling and package delivery |
 | `docs/specs/0011-release-readiness.md` | CI, native runtime and local release evidence |
 | `docs/specs/0012-tool-control-and-capacity.md` | Client-pause precedence, scoped tool queries and session-capacity disclosure |
+| `docs/specs/0013-fork-model-change.md` | Provider model lists and model-changing forks with cache-loss acknowledgment |
 | `docs/tdd/*.md` | Observed RED/GREEN evidence for each increment |
 | `schemas/protocol.schema.json` | Normative wire data definitions |
 

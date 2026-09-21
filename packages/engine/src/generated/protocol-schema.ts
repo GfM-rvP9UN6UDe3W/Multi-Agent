@@ -1,4 +1,4 @@
-// Generated from schemas/protocol.schema.json; SHA-256 fa633a2fb40ab9f12e09770f8977383f1d4e6a78ce9e09c92dcccd6165dbd38d. Do not edit.
+// Generated from schemas/protocol.schema.json; SHA-256 79c7ce36f16e11094fcfe0e05bf476603904ff998196110160ac730d014dd62f. Do not edit.
 export const protocolSchema = {
   $schema: 'https://json-schema.org/draft/2020-12/schema',
   $id: 'urn:agent-orch:protocol:2.0',
@@ -2300,6 +2300,14 @@ export const protocolSchema = {
           type: 'string',
           minLength: 1,
           maxLength: 128,
+        },
+        model: {
+          type: 'string',
+          minLength: 1,
+          maxLength: 256,
+        },
+        acknowledgeCacheLoss: {
+          type: 'boolean',
         },
         expectedStoreId: {
           type: 'string',

@@ -73,7 +73,7 @@ _WIRE_TO_PYTHON = {
     "replyToMessageId": "reply_to_message_id", "hopCount": "hop_count",
     "providerTurnId": "provider_turn_id", "requestId": "request_id", "toolName": "tool_name",
     "requestDigest": "request_digest", "runtimeApprovals": "runtime_approvals", "ttlMs": "ttl_ms",
-    "sessionLifecycle": "session_lifecycle",
+    "sessionLifecycle": "session_lifecycle", "forkModel": "fork_model",
     "contextPlan": "context_plan", "requestedMode": "requested_mode", "candidateSessionId": "candidate_session_id",
     "contextRefs": "context_refs", "artifactRef": "artifact_ref", "snapshotRef": "snapshot_ref",
     "fallbackModes": "fallback_modes", "maxQueueWaitMs": "max_queue_wait_ms", "enqueuedAt": "enqueued_at",

@@ -220,6 +220,15 @@ class LocalEngine implements Engine {
       const adapter = this.adapters.get(provider);
       if (!adapter) fail('VALIDATION_ERROR', `No adapter for ${provider}`);
       if (options.model !== undefined) string(options.model, 'model', 256);
+      if (options.models !== undefined) {
+        if (options.model !== undefined)
+          fail('VALIDATION_ERROR', `Provider ${provider} configures both model and models`);
+        if (!Array.isArray(options.models) || options.models.length === 0)
+          fail('VALIDATION_ERROR', `Provider ${provider} models must be a non-empty list`);
+        for (const model of options.models) string(model, 'models[]', 256);
+        if (new Set(options.models).size !== options.models.length)
+          fail('VALIDATION_ERROR', `Provider ${provider} models must be unique`);
+      }
       const profile = options.permissionProfile ?? 'read-only';
       if (!readRuntimeCapabilities(adapter).permissionProfiles.includes(profile))
         fail('UNSUPPORTED_CAPABILITY', `Provider ${provider} cannot enforce ${profile}`);
@@ -457,21 +466,50 @@ class LocalEngine implements Engine {
     if (session.taskId && !terminalTasks.has(this.task(session.taskId).status))
       fail('SESSION_BUSY', 'Finish or cancel the associated task before managing history');
   }
-  private forkCandidate(source: SessionSnapshot, snapshotRef: string): SessionSnapshot {
+  /** A provider's allowed models, or undefined when the owner configured no list. */
+  private allowedModels(provider: string): string[] | undefined {
+    const configured = this.config.providers?.[provider];
+    return configured?.models ?? (configured?.model ? [configured.model] : undefined);
+  }
+  private requireAllowedModel(runtime: RuntimeSpec): void {
+    const allowed = this.allowedModels(runtime.provider);
+    if (allowed && !allowed.includes(runtime.model))
+      fail('VALIDATION_ERROR', 'Model does not match configured provider');
+  }
+  private forkCandidate(
+    source: SessionSnapshot,
+    snapshotRef: string,
+    change: { model?: string; acknowledgeCacheLoss?: boolean } = {},
+  ): SessionSnapshot {
     this.requireQuietSession(source);
     const task = this.associatedTask(source);
     if (task.status !== 'completed' || !task.artifactRefs.includes(snapshotRef))
       fail('INVALID_SNAPSHOT', 'Fork requires an accepted source artifact');
     this.store.artifactText(snapshotRef, 1024 * 1024);
     const adapter = this.adapters.get(source.provider)!;
-    if (
-      readRuntimeCapabilities(adapter).fork !== true ||
-      !source.providerSessionId ||
-      !source.nativeCheckpoint
-    )
+    const capabilities = readRuntimeCapabilities(adapter);
+    if (capabilities.fork !== true || !source.providerSessionId || !source.nativeCheckpoint)
       fail('UNSUPPORTED_CAPABILITY', 'Runtime lacks a completed native checkpoint for forking');
+    const model = change.model ?? source.model;
+    if (model !== source.model) {
+      const allowed = this.allowedModels(source.provider);
+      if (!allowed)
+        fail(
+          'VALIDATION_ERROR',
+          `Provider ${source.provider} does not configure an allowed model list`,
+        );
+      if (!allowed.includes(model))
+        fail('VALIDATION_ERROR', `Model is not an allowed model for provider ${source.provider}`);
+      if (capabilities.forkModelChange !== true)
+        fail('UNSUPPORTED_CAPABILITY', 'Runtime does not support model-changing forks');
+      if (change.acknowledgeCacheLoss !== true)
+        fail(
+          'CACHE_LOSS_NOT_ACKNOWLEDGED',
+          'The fork model cannot reuse the source prompt cache; pass acknowledgeCacheLoss: true',
+        );
+    }
     const session = this.newSession(
-      { provider: source.provider, model: source.model },
+      { provider: source.provider, model },
       source.writePaths ?? [],
       null,
       source.rootTaskId ?? task.rootTaskId ?? task.id,
@@ -1966,6 +2004,7 @@ class LocalEngine implements Engine {
               reuse: true,
               routing: true,
               fork: true,
+              forkModel: true,
               compact: true,
               rotate: true,
               stop: true,
@@ -1989,8 +2028,7 @@ class LocalEngine implements Engine {
         if (!adapter) fail('VALIDATION_ERROR', 'Provider is not configured');
         const capabilities = readRuntimeCapabilities(adapter);
         const configured = this.config.providers?.[spec.runtime.provider];
-        if (configured?.model && configured.model !== spec.runtime.model)
-          fail('VALIDATION_ERROR', 'Model does not match configured provider');
+        this.requireAllowedModel(spec.runtime);
         if (!capabilities.permissionProfiles.includes(configured?.permissionProfile ?? 'read-only'))
           fail('UNSUPPORTED_CAPABILITY', 'Permission profile is unsupported');
         const op = this.operation(
@@ -2623,11 +2661,7 @@ class LocalEngine implements Engine {
         const adapter = this.adapters.get(spec.runtime.provider);
         if (!adapter) fail('VALIDATION_ERROR', 'Provider is not configured');
         readRuntimeCapabilities(adapter);
-        if (
-          this.config.providers?.[spec.runtime.provider]?.model &&
-          this.config.providers[spec.runtime.provider].model !== spec.runtime.model
-        )
-          fail('VALIDATION_ERROR', 'Model does not match configured provider');
+        this.requireAllowedModel(spec.runtime);
         const op = this.operation(
           method,
           'local',
@@ -2649,26 +2683,43 @@ class LocalEngine implements Engine {
         return this.sessionSnapshot(op.targetId);
       }
       case 'sessions.fork': {
-        fields(p, ['target', 'snapshotRef', 'idempotencyKey']);
+        fields(p, ['target', 'snapshotRef', 'model', 'acknowledgeCacheLoss', 'idempotencyKey']);
         const target = object(p.target, 'target');
+        const model = p.model === undefined ? undefined : string(p.model, 'model', 256);
+        if (p.acknowledgeCacheLoss !== undefined && typeof p.acknowledgeCacheLoss !== 'boolean')
+          fail('VALIDATION_ERROR', 'acknowledgeCacheLoss must be a boolean');
+        const acknowledgeCacheLoss = p.acknowledgeCacheLoss as boolean | undefined;
         const op = this.operation(
           method,
           string(target.sessionId, 'sessionId', 128),
           string(p.idempotencyKey, 'idempotencyKey'),
-          { target, snapshotRef: p.snapshotRef },
+          { target, snapshotRef: p.snapshotRef, model, acknowledgeCacheLoss },
           (op) => {
             this.admitWork();
             const source = this.checkedTarget(target);
-            const fork = this.forkCandidate(source, string(p.snapshotRef, 'snapshotRef', 128));
+            const fork = this.forkCandidate(source, string(p.snapshotRef, 'snapshotRef', 128), {
+              model,
+              acknowledgeCacheLoss,
+            });
             this.store.put('sessions', fork.id, fork);
+            // Hosts use this to tell end users that the first response reprocesses the history.
+            const modelChange =
+              fork.model === source.model
+                ? undefined
+                : { fromModel: source.model, toModel: fork.model, promptCacheReuse: false };
             op.targetId = fork.id;
-            op.result = { sessionId: fork.id, nativeForkPending: true };
+            op.result = {
+              sessionId: fork.id,
+              nativeForkPending: true,
+              ...(modelChange ? { modelChange } : {}),
+            };
             this.store.event(
               'session.fork_prepared',
               {
                 sourceSessionId: source.id,
                 snapshotRef: p.snapshotRef as string,
                 nativeCheckpoint: source.nativeCheckpoint!,
+                ...(modelChange ? { modelChange } : {}),
               },
               { sessionId: fork.id, operationId: op.id },
             );

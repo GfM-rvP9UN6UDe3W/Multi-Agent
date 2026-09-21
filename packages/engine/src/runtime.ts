@@ -111,6 +111,8 @@ export function readRuntimeCapabilities(adapter: RuntimeAdapter): RuntimeCapabil
     if (typeof evidence.terminalCoversExecution !== 'boolean')
       invalid('executionEvidence.terminalCoversExecution');
   }
+  if (Object.hasOwn(value, 'forkModelChange') && typeof value.forkModelChange !== 'boolean')
+    invalid('forkModelChange');
   return value as unknown as RuntimeCapabilities;
 }
 

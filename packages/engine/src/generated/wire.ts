@@ -1,4 +1,4 @@
-// Generated from schemas/protocol.schema.json; SHA-256 fa633a2fb40ab9f12e09770f8977383f1d4e6a78ce9e09c92dcccd6165dbd38d. Do not edit.
+// Generated from schemas/protocol.schema.json; SHA-256 79c7ce36f16e11094fcfe0e05bf476603904ff998196110160ac730d014dd62f. Do not edit.
 // Structural types; validateWire enforces numeric and conditional constraints.
 export type RuntimeSpec = { provider: string; model: string };
 export type TaskSpec = {
@@ -522,6 +522,8 @@ export type SessionControlParams = {
 export type SessionForkParams = {
   target: ControlTarget;
   snapshotRef: string;
+  model?: string;
+  acknowledgeCacheLoss?: boolean;
   expectedStoreId: string;
   idempotencyKey: string;
   requestDigest?: string;
