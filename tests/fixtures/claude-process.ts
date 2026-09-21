@@ -1,5 +1,4 @@
 import type { ChildProcessWithoutNullStreams } from 'node:child_process';
-import { once } from 'node:events';
 import type {
   ClaudeQueryFactory,
   ClaudeQueryRequest,
@@ -32,7 +31,34 @@ export function stubbornClaudeProcess(request: ClaudeQueryRequest): {
     env: {},
     signal: new AbortController().signal,
   });
-  return { child, ready: once(child.stdout, 'data').then(() => {}) };
+  const ready = new Promise<void>((resolve, reject) => {
+    const timeout = setTimeout(() => {
+      finish(new Error('Offline Claude child readiness timed out after 5000 ms'));
+      try {
+        child.kill('SIGKILL');
+      } catch {
+        // The rejected readiness promise already reports the bounded failure.
+      }
+    }, 5000);
+    const onData = () => finish();
+    const onError = (error: Error) => finish(error);
+    const onExit = (code: number | null, signal: NodeJS.Signals | null) =>
+      finish(
+        new Error(`Offline Claude child exited before readiness (code ${code}, signal ${signal})`),
+      );
+    function finish(error?: Error) {
+      clearTimeout(timeout);
+      child.stdout.off('data', onData);
+      child.off('error', onError);
+      child.off('exit', onExit);
+      if (error) reject(error);
+      else resolve();
+    }
+    child.stdout.once('data', onData);
+    child.once('error', onError);
+    child.once('exit', onExit);
+  });
+  return { child, ready };
 }
 
 export function withClaudeProcess(

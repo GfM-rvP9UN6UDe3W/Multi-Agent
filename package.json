@@ -11,7 +11,7 @@
     "packages/*"
   ],
   "scripts": {
-    "test": "node --test --test-concurrency=4 tests/engine/*.test.ts tests/contract/*.test.ts",
+    "test": "node --test --test-concurrency=4 --test-timeout=30000 tests/engine/*.test.ts tests/contract/*.test.ts",
     "test:python": "PYTHONPATH=python/src python3 -m unittest discover -s python/tests -v",
     "typecheck": "tsc --noEmit",
     "cli": "node packages/cli/src/main.ts",
