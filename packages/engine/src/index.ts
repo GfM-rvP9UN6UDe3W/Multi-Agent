@@ -15,6 +15,7 @@ import {
   messageSpec,
   digest,
   contextPlan as validateContextPlan,
+  MAX_QUEUE_WAIT_MS,
 } from './validation.ts';
 import { readRuntimeCapabilities } from './runtime.ts';
 import { usageRecord } from './usage.ts';
@@ -206,6 +207,12 @@ class LocalEngine implements Engine {
     integer(config.limits?.maxTurnsPerTask ?? 20, 'maxTurnsPerTask', 1, 1000);
     integer(config.limits?.maxLogicalSessions ?? 10000, 'maxLogicalSessions', 1, 100000);
     integer(config.limits?.maxQueuedTasks ?? 1000, 'maxQueuedTasks', 1, 10000);
+    integer(
+      config.limits?.defaultMaxQueueWaitMs ?? 30000,
+      'defaultMaxQueueWaitMs',
+      0,
+      MAX_QUEUE_WAIT_MS,
+    );
     for (const [key, fallback, max] of [
       ['maxDepth', 4, 16],
       ['maxChildren', 32, 1000],
@@ -310,6 +317,10 @@ class LocalEngine implements Engine {
   }
   private time(): string {
     return new Date(this.clock.wallNow()).toISOString();
+  }
+  /** The queue wait of a task whose plan does not set one (SPEC-0015 Q04). */
+  private get defaultQueueWaitMs(): number {
+    return this.config.limits?.defaultMaxQueueWaitMs ?? 30000;
   }
   private deadline(session: SessionSnapshot, kind: OperationLifecycle['kind']): OperationLifecycle {
     const duration = kind === 'shutdown' ? 30000 : this.timeouts[`${kind}Ms`];
@@ -652,8 +663,8 @@ class LocalEngine implements Engine {
           candidateSessionId: session.id,
           expectedGeneration: 1,
           enqueuedAt: this.time(),
-          deadlineAt: new Date(this.clock.wallNow() + 30000).toISOString(),
-          maxQueueWaitMs: 30000,
+          deadlineAt: new Date(this.clock.wallNow() + this.defaultQueueWaitMs).toISOString(),
+          maxQueueWaitMs: this.defaultQueueWaitMs,
           fallbackModes: [],
           reasonCode: 'ROOT_SESSION',
         },
@@ -728,7 +739,7 @@ class LocalEngine implements Engine {
   }
   private armQueue(task: TaskSnapshot): void {
     if (
-      task.status === 'paused' ||
+      task.status !== 'queued' ||
       !task.routing ||
       task.routing.submittedAt ||
       task.routing.expiredAt ||
@@ -1062,28 +1073,31 @@ class LocalEngine implements Engine {
                 (this.config.tools?.maxChildren ?? 32)
               )
                 this.toolLimit(flight, 'DELEGATION_CHILD_LIMIT');
-              const childSpec = taskSpec({
-                goal,
-                runtime: parent.spec.runtime,
-                acceptance: parent.spec.acceptance,
-                parentTaskId: parent.id,
-                contextPlan: plan,
-                ...(args.dependencyTaskIds !== undefined
-                  ? { dependencyTaskIds: args.dependencyTaskIds }
-                  : {}),
-                ...(parent.spec.budget ? { budget: parent.spec.budget } : {}),
-                ...(args.writeScope !== undefined
-                  ? { writeScope: args.writeScope }
-                  : parent.spec.writeScope
-                    ? { writeScope: parent.spec.writeScope }
+              const childSpec = taskSpec(
+                {
+                  goal,
+                  runtime: parent.spec.runtime,
+                  acceptance: parent.spec.acceptance,
+                  parentTaskId: parent.id,
+                  contextPlan: plan,
+                  ...(args.dependencyTaskIds !== undefined
+                    ? { dependencyTaskIds: args.dependencyTaskIds }
                     : {}),
-                // Children inherit a narrowed parent path unless they name their own scope.
-                ...(args.writePath !== undefined
-                  ? { writePath: args.writePath }
-                  : args.writeScope === undefined && parent.spec.writePath
-                    ? { writePath: parent.spec.writePath }
-                    : {}),
-              });
+                  ...(parent.spec.budget ? { budget: parent.spec.budget } : {}),
+                  ...(args.writeScope !== undefined
+                    ? { writeScope: args.writeScope }
+                    : parent.spec.writeScope
+                      ? { writeScope: parent.spec.writeScope }
+                      : {}),
+                  // Children inherit a narrowed parent path unless they name their own scope.
+                  ...(args.writePath !== undefined
+                    ? { writePath: args.writePath }
+                    : args.writeScope === undefined && parent.spec.writePath
+                      ? { writePath: parent.spec.writePath }
+                      : {}),
+                },
+                this.defaultQueueWaitMs,
+              );
               for (const dependency of childSpec.dependencyTaskIds ?? []) authorize(dependency);
               for (const ref of childSpec.contextPlan!.contextRefs) {
                 if (!descendants.some((task) => task.artifactRefs.includes(ref.artifactRef)))
@@ -1228,11 +1242,7 @@ class LocalEngine implements Engine {
     const route = task.routing!;
     this.store.transaction(() => {
       const current = this.task(task.id);
-      if (
-        current.routing?.submittedAt ||
-        !['queued', 'waiting_dependency'].includes(current.status)
-      )
-        return;
+      if (current.routing?.submittedAt || current.status !== 'queued') return;
       route.expiredAt = this.time();
       const fallback = route.fallbackModes.shift();
       if (fallback) {
@@ -1631,6 +1641,20 @@ class LocalEngine implements Engine {
     status?: TaskSnapshot['status'],
     reason?: string | null,
   ): void {
+    // SPEC-0015 Q01: only time spent queued counts, so each new stay in the queue restarts the wait.
+    if (
+      status === 'queued' &&
+      task.status !== 'queued' &&
+      task.routing &&
+      !task.routing.submittedAt
+    ) {
+      const wall = this.clock.wallNow();
+      task.routing.enqueuedAt = new Date(wall).toISOString();
+      task.routing.deadlineAt = new Date(wall + task.routing.maxQueueWaitMs).toISOString();
+      delete task.routing.expiredAt;
+      // A timer from an earlier stay would still carry the old deadline (Q02.3).
+      this.stopQueue(task.id);
+    }
     if (status) task.status = status;
     if (reason !== undefined) task.reason = reason;
     task.revision++;
@@ -2032,15 +2056,7 @@ class LocalEngine implements Engine {
       if (!approveDelegation) return;
       this.admitWork();
       const status = this.dependencyState(task.spec);
-      // The routing wait starts at approval; the time spent awaiting the host never expires it.
-      if (task.routing && !task.routing.submittedAt) {
-        task.routing.enqueuedAt = this.time();
-        task.routing.deadlineAt = new Date(
-          this.clock.wallNow() + task.routing.maxQueueWaitMs,
-        ).toISOString();
-        delete task.routing.expiredAt;
-      }
-      this.stopQueue(task.id);
+      // The routing wait starts when the approved task enters the queue (SPEC-0015 Q01).
       this.saveTask(task, status, status === 'blocked' ? 'dependency_failed' : null);
       this.taskEvent(task, operationId);
       this.armQueue(task);
@@ -2297,7 +2313,7 @@ class LocalEngine implements Engine {
       }
       case 'tasks.create': {
         fields(p, ['spec', 'idempotencyKey']);
-        const spec = taskSpec(p.spec);
+        const spec = taskSpec(p.spec, this.defaultQueueWaitMs);
         const adapter = this.adapters.get(spec.runtime.provider);
         if (!adapter) fail('VALIDATION_ERROR', 'Provider is not configured');
         const capabilities = readRuntimeCapabilities(adapter);
@@ -3909,16 +3925,6 @@ class LocalEngine implements Engine {
         this.expireMessages();
         this.tryExpireHandoffs();
         this.refreshDependencies();
-        for (const task of this.store.tasksInState('waiting_dependency')) {
-          this.armQueue(task);
-          if (
-            task.routing &&
-            !task.routing.submittedAt &&
-            (Date.parse(task.routing.deadlineAt) <= this.clock.wallNow() ||
-              (this.queueTimers.get(task.id)?.deadline ?? Infinity) <= this.clock.monotonicNow())
-          )
-            this.expireQueue(task);
-        }
         const queued = this.store.queuedTasks();
         if (!queued.length) return;
         let canDispatch = this.scheduler().canDispatch && !this.storage.status().backpressured;

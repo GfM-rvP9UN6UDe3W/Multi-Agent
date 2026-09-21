@@ -2,6 +2,7 @@ import { readFile, realpath, stat } from 'node:fs/promises';
 import { isAbsolute, relative, sep } from 'node:path';
 import type { EngineConfig, RuntimeAdapter } from '../../engine/src/types.ts';
 import { normalizeRules, workspacePath } from '../../engine/src/verification.ts';
+import { MAX_QUEUE_WAIT_MS } from '../../engine/src/validation.ts';
 
 export interface HostConfig {
   configVersion?: 1;
@@ -263,6 +264,7 @@ export async function loadConfig(configPath: string): Promise<HostConfig> {
         'maxQuarantinedDispatches',
         'maxLogicalSessions',
         'maxQueuedTasks',
+        'defaultMaxQueueWaitMs',
       ],
       'limits',
     );
@@ -272,10 +274,18 @@ export async function loadConfig(configPath: string): Promise<HostConfig> {
       maxQuarantinedDispatches: 1024,
       maxLogicalSessions: 100000,
       maxQueuedTasks: 10000,
+      defaultMaxQueueWaitMs: MAX_QUEUE_WAIT_MS,
     };
-    for (const [key, value] of Object.entries(parsed.limits))
-      if (!Number.isSafeInteger(value) || (value as number) < 1 || (value as number) > bounds[key])
-        invalid(`limits.${key} must be an integer from 1 through ${bounds[key]}`);
+    for (const [key, value] of Object.entries(parsed.limits)) {
+      // A zero queue wait means no waiting (SPEC-0015 Q04); every other limit starts at one.
+      const minimum = key === 'defaultMaxQueueWaitMs' ? 0 : 1;
+      if (
+        !Number.isSafeInteger(value) ||
+        (value as number) < minimum ||
+        (value as number) > bounds[key]
+      )
+        invalid(`limits.${key} must be an integer from ${minimum} through ${bounds[key]}`);
+    }
     if (
       ((parsed.limits.maxQuarantinedDispatches ?? 32) as number) <
       ((parsed.limits.maxActiveSessions ?? 2) as number)

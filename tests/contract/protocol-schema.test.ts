@@ -113,6 +113,29 @@ test('AC-W04 schema helper rejects unsupported assertions and exercises nested/c
   for (const value of [[], [1, 2, 3], ['1']]) assert.throws(() => local('list', value));
 });
 
+test('0015-Q06 the schema allows seven-day queue waits and a host default', () => {
+  const week = 604_800_000;
+  for (const value of [0, week]) validate('EngineLimits', { defaultMaxQueueWaitMs: value });
+  for (const value of [-1, week + 1, 1.5, '1000'])
+    assert.throws(() => validate('EngineLimits', { defaultMaxQueueWaitMs: value }), String(value));
+  const plan = { requestedMode: 'fresh', independent: true };
+  validate('ContextPlan', { ...plan, maxQueueWaitMs: week });
+  assert.throws(() => validate('ContextPlan', { ...plan, maxQueueWaitMs: week + 1 }));
+  const routing = {
+    policyVersion: 1,
+    mode: 'fresh',
+    candidateSessionId: 'session',
+    expectedGeneration: 1,
+    enqueuedAt: '2026-09-21T00:00:00.000Z',
+    deadlineAt: '2026-09-28T00:00:00.000Z',
+    maxQueueWaitMs: week,
+    fallbackModes: [],
+    reasonCode: 'ROOT_SESSION',
+  };
+  validate('RoutingDecision', routing);
+  assert.throws(() => validate('RoutingDecision', { ...routing, maxQueueWaitMs: week + 1 }));
+});
+
 test(
   'AC-W02/W03/W05 real Unix payloads match schema and Python snapshot views',
   { timeout: 15000 },

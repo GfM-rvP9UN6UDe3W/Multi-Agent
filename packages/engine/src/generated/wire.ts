@@ -1,4 +1,4 @@
-// Generated from schemas/protocol.schema.json; SHA-256 83e3b0b6f785f865f5b3cfd2ad2db3866a4dafa0a0f2e236ef0d51c329106a89. Do not edit.
+// Generated from schemas/protocol.schema.json; SHA-256 f8717c8ea9ef2402fe0efdb2ef256fa4df29367ec893dfe393419ae9efb05f13. Do not edit.
 // Structural types; validateWire enforces numeric and conditional constraints.
 export type RuntimeSpec = { provider: string; model: string };
 export type TaskSpec = {
@@ -154,6 +154,7 @@ export type EngineLimits = unknown &
     maxTurnsPerTask?: number;
     maxLogicalSessions?: number;
     maxQueuedTasks?: number;
+    defaultMaxQueueWaitMs?: number;
   };
 export type LifecycleTimeouts = {
   acceptanceMs?: number;

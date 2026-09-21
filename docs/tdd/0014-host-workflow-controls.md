@@ -38,6 +38,7 @@ Tests that were wrong and were fixed before counting GREEN: a false pass in G (t
 - `node scripts/native-gateway-smoke.mjs claude` (Claude Code 2.1.274, loopback scripted gateway, synthetic credentials, no paid model) passed eight cases, including the new read-fence case: the gateway asked the real binary to `Read` a file in the home directory and one in the workspace. The home read came back as an error with the adapter's denial reason and its content never reached the gateway; the workspace read returned its content ([evidence](0014-native-claude.json)). This case runs in CI.
 - `node scripts/native-read-fence-smoke.mjs` ran the writable profile's OS sandbox on macOS (darwin-arm64). Scripted Bash `cat` of a home-directory file and of a `denyRead` path inside the workspace failed with `Operation not permitted`; a workspace file was readable ([evidence](0014-native-read-fence.json)). It needs an available OS sandbox, so it is a local check and not part of CI. A first attempt replaced `process.env` wholesale, which does not change `os.homedir()`; the script now sets environment properties individually.
 - The Codex smoke with local codex-cli 0.153.4 still passes its six cases.
+- rc.9 adds real-binary evidence for P02: two more Claude adapters, `claude-read` and a writable `claude-write`, completed and released their leases in the same engine ([TDD-0015](0015-queue-waits.md#native-evidence-for-spec-0014-p02)).
 
 ## Remote CI
 

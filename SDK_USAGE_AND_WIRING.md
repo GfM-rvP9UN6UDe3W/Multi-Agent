@@ -349,6 +349,25 @@ request = (await orch.handoffs.list(status="pending")).handoffs[0]
 await orch.handoffs.resolve(request.handoff_id, expected_revision=request.revision, outcome="rejected")
 ```
 
+### 8.2 Queue waits
+
+[SPEC-0015](./docs/specs/0015-queue-waits.md) defines how long a task may wait in the queue for its first dispatch. It applies to every caller and changes behavior on upgrade.
+
+- **The wait.** A task's wait is `contextPlan.maxQueueWaitMs`, from 0 to 604,800,000 ms (seven days). A task without a plan, or whose plan omits the field, uses the host default `limits.defaultMaxQueueWaitMs`, which is 30,000 ms unless configured. The wait is fixed when the task is admitted, so a configuration change affects only new tasks. `0` means the task must dispatch as soon as it is ready, or expire. This includes children created by `work_delegate` whose plan omits the field. A `work_delegate` call without a `contextPlan` continues in the caller's session and creates no child.
+- **Only queued time counts.** A task that waits for its dependencies, or is paused, has no running deadline. Each time a task enters the queue, the wait restarts and `routing.enqueuedAt` and `routing.deadlineAt` are reset: when its dependencies complete, when it is resumed and when a delegation is approved. `enqueuedAt` is therefore not the creation time; use `createdAt`. While a task is not queued, `deadlineAt` is informational. Dispatch order stays creation order. A retry never renews a deadline.
+- **Expiry.** A task still queued when its wait ends moves to a declared fallback, or becomes `blocked` with `SCHEDULING_BLOCKED`. It is never revived; create a new task.
+- **Clock and host lifetime.** The wait is measured on the wall clock. Time the computer sleeps while a task is queued counts; after waking, an overdue task expires at the next scheduler pass. Time the host is not running never counts. Closing the host pauses queued tasks with reason `owner_shutdown`, and a start after a crash pauses them with `owner_restart`. They do not run until the host resumes them with `tasks.resume` or a session resume, and resuming restarts the full wait. A host whose users close the app or let the computer sleep with queued work should resume these tasks at startup and choose a default long enough to cover sleep.
+- **Dependent tasks created up front** wait for their dependencies and their acceptance without a deadline, then get their full wait to be dispatched. Waiting tasks still count toward `limits.maxQueuedTasks`. A dependency that fails or is cancelled still blocks its dependents.
+
+```ts
+const orch = await createOrchestrator({
+  workspace,
+  stateDir,
+  adapters,
+  limits: { defaultMaxQueueWaitMs: 86_400_000 }, // a day; the JSON CLI accepts the same field
+});
+```
+
 ## 9. Usage, costs and context estimates
 
 Usage belongs to the original dispatch/task/root even when a native session is reused. Callback/yield replay deduplicates observations by dispatch and source ID. Late records remain on the original owner. Missing fields and ambiguous cumulative scope remain unknown; overlapping total/cached token buckets are not billed twice.
