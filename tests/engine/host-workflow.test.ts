@@ -70,12 +70,16 @@ const create = async (engine: Engine, extra: Record<string, unknown> = {}) =>
     idempotencyKey: crypto.randomUUID(),
   })) as TaskSnapshot;
 async function wait(engine: Engine, id: string, status: string) {
+  let task: TaskSnapshot | undefined;
   for (let i = 0; i < 400; i++) {
-    const task = (await engine.call('tasks.get', { taskId: id })) as TaskSnapshot;
+    task = (await engine.call('tasks.get', { taskId: id })) as TaskSnapshot;
     if (task.status === status) return task;
     await new Promise((resolve) => setTimeout(resolve, 5));
   }
-  assert.fail(`Task ${id} did not become ${status}`);
+  // Report the last observation so a failure on a loaded runner explains itself.
+  assert.fail(
+    `Task ${id} did not become ${status}; last ${task?.status}/${task?.reason} routing ${JSON.stringify(task?.routing)}`,
+  );
 }
 async function approve(engine: Engine, task: TaskSnapshot, extra: Record<string, unknown> = {}) {
   const pending = await wait(engine, task.id, 'waiting_approval');
@@ -750,7 +754,7 @@ test('0014-G02 only tasks.resume releases a gated child and restarts its routing
       children.push(
         (await tools.call('work_delegate', {
           goal: `child ${key}`,
-          contextPlan: fresh({ maxQueueWaitMs: 50 }),
+          contextPlan: fresh({ maxQueueWaitMs: 2000 }),
           idempotencyKey: key,
         })) as TaskSnapshot,
       );
@@ -771,7 +775,20 @@ test('0014-G02 only tasks.resume releases a gated child and restarts its routing
       });
     }
   });
-  const f = await setup({ tools: { enabled: true, approveDelegation: true } }, runner.adapter);
+  // The approval delay is simulated on the engine clock, so a loaded runner cannot shorten it.
+  let offset = 0;
+  const clock = {
+    wallNow: () => Date.now() + offset,
+    monotonicNow: () => performance.now() + offset,
+    setTimer(callback: () => void, delay: number) {
+      const timer = setTimeout(callback, delay);
+      return () => clearTimeout(timer);
+    },
+  };
+  const f = await setup(
+    { tools: { enabled: true, approveDelegation: true }, clock },
+    runner.adapter,
+  );
   try {
     const parent = await create(f.engine, { goal: 'parent' });
     await wait(f.engine, parent.id, 'waiting_approval');
@@ -781,7 +798,8 @@ test('0014-G02 only tasks.resume releases a gated child and restarts its routing
       ((await f.engine.call('tasks.get', { taskId: approved.id })) as TaskSnapshot).status,
       'paused',
     );
-    await new Promise((resolve) => setTimeout(resolve, 120));
+    // Ten seconds of human review is far beyond the child's two-second routing wait.
+    offset += 10000;
     await f.engine.call('tasks.resume', { taskId: approved.id, idempotencyKey: 'approve' });
     await wait(f.engine, approved.id, 'waiting_approval');
     await f.engine.call('tasks.cancel', { taskId: rejected.id, idempotencyKey: 'reject' });
