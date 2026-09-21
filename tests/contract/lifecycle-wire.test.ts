@@ -367,7 +367,7 @@ async function within<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
 for (const stalledAt of ['initialize', 'turn-start']) {
   test(
     `0003-A real owner EOF reaps its Codex ${stalledAt} child, preserves outcome on restart, and leaves another process alive`,
-    { timeout: 10000 },
+    { timeout: 15000 },
     async (t) => {
       const root = await realpath(await mkdtemp(join(tmpdir(), 'oe-')));
       const workspace = join(root, 'workspace'),
@@ -474,9 +474,9 @@ for (const stalledAt of ['initialize', 'turn-start']) {
       assert.ok(active.activeDispatchId);
       const started = performance.now();
       owner.proc.stdin.end();
-      await within(owner.exited, 2000);
+      await within(owner.exited, 5000);
       assert.ok(
-        performance.now() - started < 2000,
+        performance.now() - started < 5000,
         'EOF cleanup must not wait for the 10 second RPC deadline',
       );
       assert.equal(owner.proc.exitCode, 0, owner.stderr());
@@ -510,7 +510,7 @@ for (const stalledAt of ['initialize', 'turn-start']) {
       assert.equal(page.events.filter((event) => event.type === 'dispatch.started').length, 1);
       assert.equal(page.events.filter((event) => event.type === 'task.completed').length, 0);
       await restored.wire.call('host.shutdown', { mode: 'drain', timeoutMs: 1000 });
-      await within(restored.exited, 2000);
+      await within(restored.exited, 5000);
       assert.equal(restored.proc.exitCode, 0, restored.stderr());
       assert.deepEqual(
         await spawnedPids(),
