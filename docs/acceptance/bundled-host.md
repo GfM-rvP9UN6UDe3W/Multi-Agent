@@ -43,20 +43,20 @@ The protocol validator imports a generated TypeScript constant and needs no adja
 Build one coherent local candidate; do not overwrite an existing candidate directory:
 
 ```sh
-npm run build:packages -- dist/release/0.1.0-rc.4 --version 0.1.0-rc.4
-/absolute/pinned-build-env/bin/python scripts/build-python.py dist/release/0.1.0-rc.4 --version 0.1.0-rc.4
+npm run build:packages -- dist/release/0.1.0-rc.7 --version 0.1.0-rc.7
+/absolute/pinned-build-env/bin/python scripts/build-python.py dist/release/0.1.0-rc.7 --version 0.1.0-rc.7
 PACKAGE_BUILD_PYTHON=/absolute/pinned-build-env/bin/python \
-  npm run test:packages -- dist/release/0.1.0-rc.4
+  npm run test:packages -- dist/release/0.1.0-rc.7
 ```
 
-The same directory contains npm 0.1.0-rc.4 and Python 0.1.0rc4 (PEP 440 spelling), with separate SHA-256 manifests. Wire protocol remains 2.0. These commands reproduce the candidate only in a fresh directory; use a new version after changing source.
+The same directory contains npm 0.1.0-rc.7 and Python 0.1.0rc7 (PEP 440 spelling), with separate SHA-256 manifests. Wire protocol remains 2.0. These commands reproduce the candidate only in a fresh directory; use a new version after changing source.
 
 Install the three Claude tarballs from the same candidate and keep the resulting lockfile:
 
 ```sh
-npm install /absolute/rc/agent-orch-sdk-0.1.0-rc.4.tgz \
-  /absolute/rc/agent-orch-engine-0.1.0-rc.4.tgz \
-  /absolute/rc/agent-orch-adapter-claude-0.1.0-rc.4.tgz
+npm install /absolute/rc/agent-orch-sdk-0.1.0-rc.7.tgz \
+  /absolute/rc/agent-orch-engine-0.1.0-rc.7.tgz \
+  /absolute/rc/agent-orch-adapter-claude-0.1.0-rc.7.tgz
 ```
 
 Verify each file against `npm-manifest.json` before installation. npm additionally records local tarball SHA-512 integrity in the consumer lockfile. The smoke verifies the SHA-256 manifest, lockfile integrity, adapter isolation, installed native MCP, and separate CJS/ESM bundles after deleting their entire temporary node_modules. Both bundles execute fake and Claude protocol-fixture tasks through human approval to completion, four real engine MCP operations, and an injected history reader. No model requests are made.
@@ -67,8 +67,8 @@ This is Node-based package evidence. Electron 43.2.0 / Node 24.18, Axion's Vite 
 
 The project now uses the [MIT License](../../LICENSE). Future package builds include the full LICENSE and `license: MIT`; local candidates remain `private: true`. Third-party SDKs and executables retain their own licenses. Public npm release still requires account selection, explicit publication authority and removal of `private`.
 
-The previously delivered `0.1.0-rc.1` artifacts predate this license decision and remain byte-for-byte unchanged with their original `UNLICENSED` metadata. Existing rc.2, rc.3 and rc.4 artifacts are preserved. SPEC-0012's local rc.5 also remains unchanged with honest precommit provenance. The clean committed-source handoff uses rc.6 with MIT metadata and coherent Python 0.1.0rc6 artifacts.
+The previously delivered `0.1.0-rc.1` artifacts predate this license decision and remain byte-for-byte unchanged with their original `UNLICENSED` metadata. Existing rc.2 through rc.4 artifacts are preserved. SPEC-0012's local rc.5 also remains unchanged with honest precommit provenance, and rc.6 preserves the earlier committed all-green source. The evidence-complete handoff uses rc.7 with MIT metadata and coherent Python 0.1.0rc7 artifacts.
 
-Every delivered candidate uses an immutable version, such as `0.1.0-rc.5`, followed by `rc.6` for changed bytes or provenance. Keep all five npm package versions aligned. Before 1.0, incompatible public API changes increment the minor version; after 1.0 they increment the major version. Removing/renaming required fields, changing method signatures or lifecycle semantics, and changing RuntimeAdapter/RuntimeEvent requirements are breaking changes. A new RuntimeEvent union variant is also breaking for exhaustive consumers. Additive optional fields may be minor changes after 1.0. Wire-version changes require their own explicit negotiation/migration policy.
+Every delivered candidate uses an immutable version; changed bytes or provenance require a new candidate number. Keep all five npm package versions aligned. Before 1.0, incompatible public API changes increment the minor version; after 1.0 they increment the major version. Removing/renaming required fields, changing method signatures or lifecycle semantics, and changing RuntimeAdapter/RuntimeEvent requirements are breaking changes. A new RuntimeEvent union variant is also breaking for exhaustive consumers. Additive optional fields may be minor changes after 1.0. Wire-version changes require their own explicit negotiation/migration policy.
 
-Each authorized publication must have a matching immutable Git tag and retained checksums. Never republish different bytes under a published version. This local RC does not commit, tag, publish to npm/PyPI or run a paid model.
+Each authorized publication must have a matching immutable Git tag and retained checksums. Never republish different bytes under a published version. This local RC is not a registry publication or release Git tag and does not run a paid model.

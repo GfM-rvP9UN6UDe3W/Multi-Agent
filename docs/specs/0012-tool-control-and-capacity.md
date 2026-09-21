@@ -1,6 +1,6 @@
 # SPEC-0012: Tool control precedence and scoped capacity
 
-Date: 2026-09-21. Status: implemented and verified locally and in all six remote CI jobs for source `8ee5078` ([run 35561652769](https://github.com/masonlee39/Multi-Agent/actions/runs/35561652769)). This increment addresses three verified findings in the current repository without changing the provider or publication gates in the readiness ledger.
+Date: 2026-09-21. Status: implemented in `9ce65e4` and verified after test-harness follow-ups through `4ff806c`. Exact source `4ff806c` passed the selected Ubuntu Node 24 job **10/10** and all **60/60** jobs across those workflows ([machine-readable evidence](../tdd/0012-ci.json)). This increment addresses three verified findings in the current repository without changing the provider or publication gates in the readiness ledger.
 
 ## Acceptance criteria
 

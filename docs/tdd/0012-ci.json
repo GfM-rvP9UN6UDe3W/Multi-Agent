@@ -2,8 +2,8 @@
   "schemaVersion": 1,
   "repository": "masonlee39/Multi-Agent",
   "workflow": "Offline contracts and packages",
-  "retrievedAt": "2026-09-21T06:07:23.809Z",
-  "scope": "SPEC-0012 source commit and three CI-hardening follow-ups",
+  "retrievedAt": "2026-09-21T08:05:45Z",
+  "scope": "SPEC-0012 source, CI-hardening follow-ups, and sequential Ubuntu Node 24 stability samples through 4ff806c",
   "remediationCommits": [
     {
       "commit": "52fdafbcb5d1f23520ac6de61b9836e9aba0b371",
@@ -29,6 +29,30 @@
       "addresses": [
         "reject readiness on child error or early exit and cap it at 5 s",
         "apply a 30 s default node:test timeout without changing the test file set or concurrency"
+      ]
+    },
+    {
+      "commit": "010e8c58c2e87b1e473c297868a01a223499407b",
+      "subject": "test: gate embedded shutdown fixture",
+      "addresses": [
+        "replace a fixed 400 ms embedded-shutdown delay with an explicit terminal gate",
+        "assert that shutdown begins only after the fixture reaches running"
+      ]
+    },
+    {
+      "commit": "6c28f517e441e0b0e8c31543911af79fb68fdb35",
+      "subject": "test: control Claude deadline boundary",
+      "addresses": [
+        "replace a 1 ms wall-clock assumption with a controlled execution-budget sequence",
+        "assert that the query was submitted before expecting an unknown outcome"
+      ]
+    },
+    {
+      "commit": "4ff806c46b7b3c8173f1df4cbd89561d50aa154f",
+      "subject": "test: bound owner EOF cleanup fixture",
+      "addresses": [
+        "allow five seconds for owner EOF cleanup on a loaded runner while retaining the ten-second RPC boundary",
+        "raise only the test wrapper timeout; production TERM/KILL cleanup budgets remain unchanged"
       ]
     }
   ],
@@ -2847,5 +2871,336 @@
         }
       ]
     }
-  ]
+  ],
+  "subsequentEvidence": {
+    "targetJob": "contracts (ubuntu-24.04, 24.14.0, 3.14.6)",
+    "method": "The GitHub App job-rerun endpoint returned 403, so each additional sample used a temporary immutable tag pointing at the exact commit. Runs were sequential. All 20 temporary tags were deleted after evidence capture, and a remote tag query returned empty.",
+    "precedingDocsRun": {
+      "runId": 35567645440,
+      "commit": "33448c9d9e60d255b599c14de1fed0d6b2a1e9c3",
+      "url": "https://github.com/masonlee39/Multi-Agent/actions/runs/35567645440",
+      "jobsPassed": 5,
+      "jobsTotal": 6,
+      "failure": {
+        "jobId": 106232558123,
+        "test": "AC07 drain timeout keeps the client and shutdown operation recoverable",
+        "file": "tests/contract/sdk.test.ts:73",
+        "summary": {
+          "tests": 442,
+          "passed": 441,
+          "failed": 1,
+          "skipped": 0
+        },
+        "actual": "undefined",
+        "expected": "SHUTDOWN_INCOMPLETE"
+      },
+      "remediatedBy": "010e8c58c2e87b1e473c297868a01a223499407b"
+    },
+    "phases": [
+      {
+        "commit": "010e8c58c2e87b1e473c297868a01a223499407b",
+        "targetPassed": 5,
+        "targetTotal": 6,
+        "workflowJobsPassed": 35,
+        "workflowJobsTotal": 36,
+        "trials": [
+          {
+            "trial": 1,
+            "runId": 35568118607,
+            "url": "https://github.com/masonlee39/Multi-Agent/actions/runs/35568118607",
+            "triggerRef": "main",
+            "targetJobId": 106233902065,
+            "targetConclusion": "success",
+            "workflowJobsPassed": 6,
+            "workflowJobsTotal": 6
+          },
+          {
+            "trial": 2,
+            "runId": 35569568052,
+            "url": "https://github.com/masonlee39/Multi-Agent/actions/runs/35569568052",
+            "triggerRef": "ci-repeat-010e8c5-trial-02",
+            "targetJobId": 106238148464,
+            "targetConclusion": "success",
+            "workflowJobsPassed": 6,
+            "workflowJobsTotal": 6
+          },
+          {
+            "trial": 3,
+            "runId": 35569775830,
+            "url": "https://github.com/masonlee39/Multi-Agent/actions/runs/35569775830",
+            "triggerRef": "ci-repeat-010e8c5-trial-03",
+            "targetJobId": 106238763110,
+            "targetConclusion": "success",
+            "workflowJobsPassed": 6,
+            "workflowJobsTotal": 6
+          },
+          {
+            "trial": 4,
+            "runId": 35569994047,
+            "url": "https://github.com/masonlee39/Multi-Agent/actions/runs/35569994047",
+            "triggerRef": "ci-repeat-010e8c5-trial-04",
+            "targetJobId": 106239411556,
+            "targetConclusion": "success",
+            "workflowJobsPassed": 6,
+            "workflowJobsTotal": 6
+          },
+          {
+            "trial": 5,
+            "runId": 35570187302,
+            "url": "https://github.com/masonlee39/Multi-Agent/actions/runs/35570187302",
+            "triggerRef": "ci-repeat-010e8c5-trial-05",
+            "targetJobId": 106239992713,
+            "targetConclusion": "success",
+            "workflowJobsPassed": 6,
+            "workflowJobsTotal": 6
+          },
+          {
+            "trial": 6,
+            "runId": 35570385681,
+            "url": "https://github.com/masonlee39/Multi-Agent/actions/runs/35570385681",
+            "triggerRef": "ci-repeat-010e8c5-trial-06",
+            "targetJobId": 106240602557,
+            "targetConclusion": "failure",
+            "workflowJobsPassed": 5,
+            "workflowJobsTotal": 6
+          }
+        ],
+        "failure": {
+          "runId": 35570385681,
+          "jobId": 106240602557,
+          "test": "Claude observes next rejection when acceptance deadline expired before wait registration",
+          "file": "tests/contract/claude-deadlines.test.ts:332",
+          "summary": {
+            "tests": 442,
+            "passed": 441,
+            "failed": 1,
+            "skipped": 0
+          },
+          "actual": "failed",
+          "expected": "unknown",
+          "cause": "A 1 ms wall-clock budget could expire before query submission on a loaded runner; the test assumed that submission had already happened."
+        },
+        "remediatedBy": "6c28f517e441e0b0e8c31543911af79fb68fdb35"
+      },
+      {
+        "commit": "6c28f517e441e0b0e8c31543911af79fb68fdb35",
+        "targetPassed": 6,
+        "targetTotal": 7,
+        "workflowJobsPassed": 41,
+        "workflowJobsTotal": 42,
+        "trials": [
+          {
+            "trial": 1,
+            "runId": 35570923347,
+            "url": "https://github.com/masonlee39/Multi-Agent/actions/runs/35570923347",
+            "triggerRef": "main",
+            "targetJobId": 106242198338,
+            "targetConclusion": "success",
+            "workflowJobsPassed": 6,
+            "workflowJobsTotal": 6
+          },
+          {
+            "trial": 2,
+            "runId": 35571172776,
+            "url": "https://github.com/masonlee39/Multi-Agent/actions/runs/35571172776",
+            "triggerRef": "ci-repeat-6c28f51-trial-02",
+            "targetJobId": 106242933515,
+            "targetConclusion": "success",
+            "workflowJobsPassed": 6,
+            "workflowJobsTotal": 6
+          },
+          {
+            "trial": 3,
+            "runId": 35571426633,
+            "url": "https://github.com/masonlee39/Multi-Agent/actions/runs/35571426633",
+            "triggerRef": "ci-repeat-6c28f51-trial-03",
+            "targetJobId": 106243695178,
+            "targetConclusion": "success",
+            "workflowJobsPassed": 6,
+            "workflowJobsTotal": 6
+          },
+          {
+            "trial": 4,
+            "runId": 35571681686,
+            "url": "https://github.com/masonlee39/Multi-Agent/actions/runs/35571681686",
+            "triggerRef": "ci-repeat-6c28f51-trial-04",
+            "targetJobId": 106244446758,
+            "targetConclusion": "success",
+            "workflowJobsPassed": 6,
+            "workflowJobsTotal": 6
+          },
+          {
+            "trial": 5,
+            "runId": 35571941298,
+            "url": "https://github.com/masonlee39/Multi-Agent/actions/runs/35571941298",
+            "triggerRef": "ci-repeat-6c28f51-trial-05",
+            "targetJobId": 106245211989,
+            "targetConclusion": "success",
+            "workflowJobsPassed": 6,
+            "workflowJobsTotal": 6
+          },
+          {
+            "trial": 6,
+            "runId": 35572177417,
+            "url": "https://github.com/masonlee39/Multi-Agent/actions/runs/35572177417",
+            "triggerRef": "ci-repeat-6c28f51-trial-06",
+            "targetJobId": 106245921624,
+            "targetConclusion": "success",
+            "workflowJobsPassed": 6,
+            "workflowJobsTotal": 6
+          },
+          {
+            "trial": 7,
+            "runId": 35572400292,
+            "url": "https://github.com/masonlee39/Multi-Agent/actions/runs/35572400292",
+            "triggerRef": "ci-repeat-6c28f51-trial-07",
+            "targetJobId": 106246617725,
+            "targetConclusion": "failure",
+            "workflowJobsPassed": 5,
+            "workflowJobsTotal": 6
+          }
+        ],
+        "failure": {
+          "runId": 35572400292,
+          "jobId": 106246617725,
+          "test": "0003-A real owner EOF reaps its Codex initialize child, preserves outcome on restart, and leaves another process alive",
+          "file": "tests/contract/lifecycle-wire.test.ts:368",
+          "summary": {
+            "tests": 442,
+            "passed": 441,
+            "failed": 1,
+            "skipped": 0
+          },
+          "error": "Owner EOF exceeded test cleanup deadline",
+          "testDurationMs": 6196.305002,
+          "cause": "A two-second wall-clock owner-exit assertion did not hold under shared-runner scheduling load, although the intended semantic boundary is the ten-second RPC deadline."
+        },
+        "remediatedBy": "4ff806c46b7b3c8173f1df4cbd89561d50aa154f"
+      },
+      {
+        "commit": "4ff806c46b7b3c8173f1df4cbd89561d50aa154f",
+        "targetPassed": 10,
+        "targetTotal": 10,
+        "workflowJobsPassed": 60,
+        "workflowJobsTotal": 60,
+        "trials": [
+          {
+            "trial": 1,
+            "runId": 35572905203,
+            "url": "https://github.com/masonlee39/Multi-Agent/actions/runs/35572905203",
+            "triggerRef": "main",
+            "targetJobId": 106248177258,
+            "targetConclusion": "success",
+            "workflowJobsPassed": 6,
+            "workflowJobsTotal": 6
+          },
+          {
+            "trial": 2,
+            "runId": 35573346783,
+            "url": "https://github.com/masonlee39/Multi-Agent/actions/runs/35573346783",
+            "triggerRef": "ci-repeat-4ff806c-trial-02",
+            "targetJobId": 106249555854,
+            "targetConclusion": "success",
+            "workflowJobsPassed": 6,
+            "workflowJobsTotal": 6
+          },
+          {
+            "trial": 3,
+            "runId": 35573554636,
+            "url": "https://github.com/masonlee39/Multi-Agent/actions/runs/35573554636",
+            "triggerRef": "ci-repeat-4ff806c-trial-03",
+            "targetJobId": 106250211653,
+            "targetConclusion": "success",
+            "workflowJobsPassed": 6,
+            "workflowJobsTotal": 6
+          },
+          {
+            "trial": 4,
+            "runId": 35573793169,
+            "url": "https://github.com/masonlee39/Multi-Agent/actions/runs/35573793169",
+            "triggerRef": "ci-repeat-4ff806c-trial-04",
+            "targetJobId": 106250958223,
+            "targetConclusion": "success",
+            "workflowJobsPassed": 6,
+            "workflowJobsTotal": 6
+          },
+          {
+            "trial": 5,
+            "runId": 35574031854,
+            "url": "https://github.com/masonlee39/Multi-Agent/actions/runs/35574031854",
+            "triggerRef": "ci-repeat-4ff806c-trial-05",
+            "targetJobId": 106251714795,
+            "targetConclusion": "success",
+            "workflowJobsPassed": 6,
+            "workflowJobsTotal": 6
+          },
+          {
+            "trial": 6,
+            "runId": 35574252039,
+            "url": "https://github.com/masonlee39/Multi-Agent/actions/runs/35574252039",
+            "triggerRef": "ci-repeat-4ff806c-trial-06",
+            "targetJobId": 106252400519,
+            "targetConclusion": "success",
+            "workflowJobsPassed": 6,
+            "workflowJobsTotal": 6
+          },
+          {
+            "trial": 7,
+            "runId": 35574470054,
+            "url": "https://github.com/masonlee39/Multi-Agent/actions/runs/35574470054",
+            "triggerRef": "ci-repeat-4ff806c-trial-07",
+            "targetJobId": 106253078024,
+            "targetConclusion": "success",
+            "workflowJobsPassed": 6,
+            "workflowJobsTotal": 6
+          },
+          {
+            "trial": 8,
+            "runId": 35574689736,
+            "url": "https://github.com/masonlee39/Multi-Agent/actions/runs/35574689736",
+            "triggerRef": "ci-repeat-4ff806c-trial-08",
+            "targetJobId": 106253770644,
+            "targetConclusion": "success",
+            "workflowJobsPassed": 6,
+            "workflowJobsTotal": 6
+          },
+          {
+            "trial": 9,
+            "runId": 35574957528,
+            "url": "https://github.com/masonlee39/Multi-Agent/actions/runs/35574957528",
+            "triggerRef": "ci-repeat-4ff806c-trial-09",
+            "targetJobId": 106254614038,
+            "targetConclusion": "success",
+            "workflowJobsPassed": 6,
+            "workflowJobsTotal": 6
+          },
+          {
+            "trial": 10,
+            "runId": 35575180837,
+            "url": "https://github.com/masonlee39/Multi-Agent/actions/runs/35575180837",
+            "triggerRef": "ci-repeat-4ff806c-trial-10",
+            "targetJobId": 106255300063,
+            "targetConclusion": "success",
+            "workflowJobsPassed": 6,
+            "workflowJobsTotal": 6
+          }
+        ],
+        "authenticatedTargetLogProof": {
+          "logsChecked": 10,
+          "eachNode": {
+            "tests": 442,
+            "passed": 442,
+            "failed": 0,
+            "skipped": 0
+          },
+          "eachPython": {
+            "tests": 49,
+            "result": "OK"
+          },
+          "eachPackageModeCount": 9
+        }
+      }
+    ],
+    "interpretation": "The final SHA passed the selected high-risk job ten times and all six workflow jobs in each run. This is a bounded flake sample, not a production latency or SLO guarantee."
+  }
 }
