@@ -63,11 +63,44 @@ export function normalizeRules(
           : strings(rule.baselinePaths, 'baselinePaths', 1),
     };
     for (const path of normalized.baselinePaths!) workspacePath(workspace, path);
-    const key = JSON.stringify([normalized.id, normalized.version]);
+    const key = ruleKey(normalized.id, normalized.version);
     if (seen.has(key)) fail('VALIDATION_ERROR', 'Duplicate verification rule id/version');
     seen.add(key);
     return { ...normalized, digest: digest(normalized) };
   });
+}
+
+/** Unambiguous key of a rule version; `id` and `version` may both contain `@` (SPEC-0014 W05). */
+export function ruleKey(id: string, version: string): string {
+  return JSON.stringify([id, version]);
+}
+
+/**
+ * Configured rules plus a store's registered rules (SPEC-0014 W03–W05). Identity comes from each
+ * row's content, so rows written under rc.8's `id@version` keys load unchanged. A registered rule
+ * whose identity is already effective with other content fails with VALIDATION_ERROR.
+ */
+export function effectiveRules(
+  workspace: string,
+  configured: VerificationRule[] | undefined,
+  stored: unknown[],
+): { rules: FrozenVerificationRule[]; runtime: Set<string> } {
+  const rules = normalizeRules(workspace, configured);
+  const runtime = new Set<string>();
+  for (const row of stored) {
+    const { digest: _digest, ...value } = row as FrozenVerificationRule;
+    const [rule] = normalizeRules(workspace, [value]);
+    const key = ruleKey(rule.id, rule.version);
+    const existing = rules.find((r) => r.id === rule.id && r.version === rule.version);
+    if (existing) {
+      if (existing.digest !== rule.digest)
+        fail('VALIDATION_ERROR', `Verification rule ${key} has conflicting definitions`);
+      continue;
+    }
+    rules.push(rule);
+    runtime.add(key);
+  }
+  return { rules, runtime };
 }
 
 /** A bounded content baseline. Excludes Git internals; source/untracked files remain included. */

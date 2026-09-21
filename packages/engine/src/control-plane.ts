@@ -18,6 +18,7 @@ import { createArchive, verifyArchive, archiveArtifact } from './archive.ts';
 import { requestDigest, type RetryIdentity } from './identity.ts';
 import { fail } from './errors.ts';
 import { fields, object, string, integer } from './validation.ts';
+import { ruleKey } from './verification.ts';
 
 export interface StoreDirectories {
   controlDir: string;
@@ -114,6 +115,23 @@ function managed(root: string, name: string): string {
     fail('UNTRUSTED_PATH', 'Managed directory was replaced');
   return path;
 }
+/** Registered rules in a verified backup; backups taken before SPEC-0014 have no table. */
+function storedRules(path: string): unknown[] {
+  const db = new DatabaseSync(join(path, 'store.sqlite'), { readOnly: true });
+  try {
+    if (
+      !db
+        .prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='verification_rules'")
+        .get()
+    )
+      return [];
+    return (
+      db.prepare('SELECT data FROM verification_rules ORDER BY rowid').all() as { data: string }[]
+    ).map((row) => JSON.parse(row.data));
+  } finally {
+    db.close();
+  }
+}
 export function storeBlockers(store: Store, now = Date.now()): { id: string; reason: string }[] {
   const result: { id: string; reason: string }[] = [];
   for (const task of store.all<any>('tasks'))
@@ -154,16 +172,20 @@ export class ControlPlane {
   private ownedEpoch: string;
   private closed = false;
   private fault?: (point: string) => void;
+  /** Throws when registered rules conflict with the host's configuration (SPEC-0014 W04). */
+  private checkRules?: (stored: unknown[]) => void;
   constructor(
     workspace: string,
     stateDir: string,
     directories: StoreDirectories,
     fault?: (point: string) => void,
+    checkRules?: (stored: unknown[]) => void,
   ) {
     this.workspace = realpathSync(workspace);
     this.initialStateDir = realpathSync(stateDir);
     this.directories = directories;
     this.fault = fault;
+    this.checkRules = checkRules;
     fields(object(directories), ['controlDir', 'storesRoot', 'archiveRoot']);
     const paths = Object.values(directories);
     for (const path of paths) privateDirectory(path, this.workspace);
@@ -361,7 +383,8 @@ export class ControlPlane {
         fail('ROLLOVER_IN_PROGRESS', 'Continue the original management identity');
       const backupId =
         method === 'stores.import' ? string(raw.backupId, 'backupId', 128) : undefined;
-      if (backupId) this.backupSource(backupId);
+      // Refuse an unusable backup before anything changes (SPEC-0014 W04).
+      if (backupId) this.checkRules?.(storedRules(this.backupSource(backupId).path));
       const id = randomUUID();
       record = {
         rolloverId: id,
@@ -455,6 +478,11 @@ export class ControlPlane {
             const prior = next.metadata('rolloverId');
             if (prior && prior !== record.rolloverId)
               fail('STORE_FENCED', 'Standby store belongs to another rollover');
+            // SPEC-0014 W04: a rollover carries registered rules forward; an import keeps the backup's.
+            const rules = record.backupId
+              ? next.all<{ id: string; version: string }>('verification_rules')
+              : getOld().all<{ id: string; version: string }>('verification_rules');
+            this.checkRules?.(rules);
             next.transaction(() => {
               next.setMetadata('role', 'standby');
               next.setMetadata('originStoreId', record.oldStoreId);
@@ -462,6 +490,9 @@ export class ControlPlane {
               next.setMetadata('controlDir', this.directories.controlDir);
               next.setMetadata('writerEpoch', record.nextWriterEpoch);
               next.setMetadata('admissionStopped', 'true');
+              if (!record.backupId)
+                for (const rule of rules)
+                  next.put('verification_rules', ruleKey(rule.id, rule.version), rule);
             });
             record.newStoreId = next.storeId;
             this.manifest.stores[next.storeId] = {
