@@ -331,14 +331,24 @@ test('Claude observes next rejection when cancellation wins before wait registra
 
 test('Claude observes next rejection when acceptance deadline expired before wait registration', async () => {
   let closeCalled = false;
+  let submitted = false;
+  let acceptanceChecks = 0;
+  const executionBudget: RuntimeInput['executionBudget'] = {
+    policyVersion: 2,
+    enteredAt: '1970-01-01T00:00:00.000Z',
+    acceptanceDeadlineAt: '1970-01-01T00:00:00.001Z',
+    deadlineAt: '1970-01-01T00:00:00.100Z',
+    effectiveAcceptanceMs: 1,
+    effectiveTurnMs: 100,
+    acceptanceSource: 'test',
+    turnSource: 'test',
+    remainingAcceptanceMs: () => (acceptanceChecks++ === 0 ? 1 : 0),
+    remainingTurnMs: () => 100,
+  };
   const adapter = createClaudeAdapter({
-    requestTimeoutMs: 1,
     cleanupTimeoutMs: 20,
     query: () => {
-      const until = performance.now() + 5;
-      while (performance.now() < until) {
-        /* deterministic pre-wait deadline expiry */
-      }
+      submitted = true;
       return {
         close() {
           closeCalled = true;
@@ -356,7 +366,8 @@ test('Claude observes next rejection when acceptance deadline expired before wai
       };
     },
   });
-  const events = await within(collect(adapter.execute(input())));
+  const events = await within(collect(adapter.execute({ ...input(), executionBudget })));
+  assert.equal(submitted, true);
   assert.equal((events.at(-1) as Extract<RuntimeEvent, { type: 'error' }>).outcome, 'unknown');
   assert.equal(closeCalled, true);
   await new Promise((resolve) => setTimeout(resolve, 10));
