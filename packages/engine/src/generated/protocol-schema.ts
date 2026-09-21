@@ -1,4 +1,4 @@
-// Generated from schemas/protocol.schema.json; SHA-256 fa633a2fb40ab9f12e09770f8977383f1d4e6a78ce9e09c92dcccd6165dbd38d. Do not edit.
+// Generated from schemas/protocol.schema.json; SHA-256 83e3b0b6f785f865f5b3cfd2ad2db3866a4dafa0a0f2e236ef0d51c329106a89. Do not edit.
 export const protocolSchema = {
   $schema: 'https://json-schema.org/draft/2020-12/schema',
   $id: 'urn:agent-orch:protocol:2.0',
@@ -124,6 +124,12 @@ export const protocolSchema = {
         contextEstimate: {
           $ref: '#/$defs/ContextEstimate',
         },
+        writePath: {
+          type: 'string',
+          minLength: 1,
+          maxLength: 4096,
+          description: 'An existing workspace path inside writeScope; requires writeScope.',
+        },
       },
     },
     TaskStatus: {
@@ -234,6 +240,26 @@ export const protocolSchema = {
           minLength: 1,
           maxLength: 128,
         },
+        revisionRequest: {
+          type: 'object',
+          properties: {
+            approvalId: {
+              type: 'string',
+              minLength: 1,
+              maxLength: 128,
+            },
+            comment: {
+              type: 'string',
+              minLength: 1,
+              maxLength: 16384,
+            },
+          },
+          required: ['approvalId', 'comment'],
+          additionalProperties: false,
+        },
+        dependencyResultsDelivered: {
+          type: 'boolean',
+        },
       },
     },
     ApprovalRequest: {
@@ -264,7 +290,7 @@ export const protocolSchema = {
           minimum: 1,
         },
         status: {
-          enum: ['pending', 'approved', 'denied', 'expired', 'invalidated'],
+          enum: ['pending', 'approved', 'denied', 'revised', 'expired', 'invalidated'],
         },
         target: {
           type: 'object',
@@ -335,6 +361,11 @@ export const protocolSchema = {
         expiresAt: {
           type: 'string',
           format: 'date-time',
+        },
+        comment: {
+          type: 'string',
+          minLength: 1,
+          maxLength: 16384,
         },
       },
     },
@@ -572,12 +603,12 @@ export const protocolSchema = {
       type: 'object',
       additionalProperties: false,
       description:
-        'Owner-configured limits. maxQuarantinedDispatches must be at least the effective maxActiveSessions, which defaults to 2.',
+        'Owner-configured limits. maxActiveSessions accepts 1 through 8 (default 2); maxQuarantinedDispatches must be at least the effective maxActiveSessions.',
       properties: {
         maxActiveSessions: {
           type: 'integer',
           minimum: 1,
-          maximum: 2,
+          maximum: 8,
           default: 2,
         },
         maxQuarantinedDispatches: {
@@ -617,6 +648,108 @@ export const protocolSchema = {
             properties: {
               maxQuarantinedDispatches: {
                 minimum: 2,
+              },
+            },
+          },
+        },
+        {
+          if: {
+            required: ['maxActiveSessions'],
+            properties: {
+              maxActiveSessions: {
+                const: 3,
+              },
+            },
+          },
+          then: {
+            properties: {
+              maxQuarantinedDispatches: {
+                minimum: 3,
+              },
+            },
+          },
+        },
+        {
+          if: {
+            required: ['maxActiveSessions'],
+            properties: {
+              maxActiveSessions: {
+                const: 4,
+              },
+            },
+          },
+          then: {
+            properties: {
+              maxQuarantinedDispatches: {
+                minimum: 4,
+              },
+            },
+          },
+        },
+        {
+          if: {
+            required: ['maxActiveSessions'],
+            properties: {
+              maxActiveSessions: {
+                const: 5,
+              },
+            },
+          },
+          then: {
+            properties: {
+              maxQuarantinedDispatches: {
+                minimum: 5,
+              },
+            },
+          },
+        },
+        {
+          if: {
+            required: ['maxActiveSessions'],
+            properties: {
+              maxActiveSessions: {
+                const: 6,
+              },
+            },
+          },
+          then: {
+            properties: {
+              maxQuarantinedDispatches: {
+                minimum: 6,
+              },
+            },
+          },
+        },
+        {
+          if: {
+            required: ['maxActiveSessions'],
+            properties: {
+              maxActiveSessions: {
+                const: 7,
+              },
+            },
+          },
+          then: {
+            properties: {
+              maxQuarantinedDispatches: {
+                minimum: 7,
+              },
+            },
+          },
+        },
+        {
+          if: {
+            required: ['maxActiveSessions'],
+            properties: {
+              maxActiveSessions: {
+                const: 8,
+              },
+            },
+          },
+          then: {
+            properties: {
+              maxQuarantinedDispatches: {
+                minimum: 8,
               },
             },
           },
@@ -817,7 +950,7 @@ export const protocolSchema = {
         maxActiveSessions: {
           type: 'integer',
           minimum: 1,
-          maximum: 2,
+          maximum: 8,
         },
         maxQuarantinedDispatches: {
           type: 'integer',
@@ -1889,6 +2022,12 @@ export const protocolSchema = {
           minLength: 1,
           maxLength: 128,
         },
+        writePath: {
+          type: 'string',
+          minLength: 1,
+          maxLength: 4096,
+          description: 'An existing workspace path inside writeScope; requires writeScope.',
+        },
       },
       required: ['runtime'],
       additionalProperties: false,
@@ -1948,6 +2087,9 @@ export const protocolSchema = {
                 },
               },
               required: ['version'],
+            },
+            workflow: {
+              $ref: '#/$defs/WorkflowCapability',
             },
           },
         },
@@ -2301,6 +2443,14 @@ export const protocolSchema = {
           minLength: 1,
           maxLength: 128,
         },
+        model: {
+          type: 'string',
+          minLength: 1,
+          maxLength: 256,
+        },
+        acknowledgeCacheLoss: {
+          type: 'boolean',
+        },
         expectedStoreId: {
           type: 'string',
           minLength: 1,
@@ -2406,7 +2556,7 @@ export const protocolSchema = {
           type: 'object',
           properties: {
             choice: {
-              enum: ['approve', 'deny'],
+              enum: ['approve', 'deny', 'revise'],
             },
             expectedRevision: {
               type: 'integer',
@@ -2414,10 +2564,26 @@ export const protocolSchema = {
             },
             comment: {
               type: 'string',
+              minLength: 1,
+              maxLength: 16384,
             },
           },
           required: ['choice', 'expectedRevision'],
           additionalProperties: false,
+          allOf: [
+            {
+              if: {
+                properties: {
+                  choice: {
+                    const: 'revise',
+                  },
+                },
+              },
+              then: {
+                required: ['comment'],
+              },
+            },
+          ],
         },
         expectedStoreId: {
           type: 'string',
@@ -2437,6 +2603,440 @@ export const protocolSchema = {
       },
       required: ['approvalId', 'decision', 'expectedStoreId', 'idempotencyKey'],
       additionalProperties: false,
+    },
+    TaskListParams: {
+      type: 'object',
+      properties: {
+        parentTaskId: {
+          type: 'string',
+          minLength: 1,
+          maxLength: 128,
+        },
+        sessionId: {
+          type: 'string',
+          minLength: 1,
+          maxLength: 128,
+        },
+        limit: {
+          type: 'integer',
+          minimum: 1,
+          maximum: 100,
+        },
+        afterCursor: {
+          type: 'string',
+          pattern: '^[0-9]{1,19}$',
+        },
+      },
+      not: {
+        required: ['parentTaskId', 'sessionId'],
+      },
+      additionalProperties: false,
+    },
+    TaskListResult: {
+      type: 'object',
+      properties: {
+        tasks: {
+          type: 'array',
+          items: {
+            $ref: '#/$defs/TaskSnapshot',
+          },
+          maxItems: 100,
+        },
+        nextCursor: {
+          type: ['string', 'null'],
+          pattern: '^[0-9]{1,19}$',
+        },
+      },
+      required: ['tasks', 'nextCursor'],
+      additionalProperties: false,
+    },
+    HandoffRequest: {
+      type: 'object',
+      description:
+        "A model's request that the host hand work to a session outside its subtree. It grants nothing until resolved.",
+      properties: {
+        handoffId: {
+          type: 'string',
+          minLength: 1,
+          maxLength: 128,
+        },
+        status: {
+          enum: ['pending', 'accepted', 'rejected', 'expired', 'invalidated'],
+        },
+        revision: {
+          type: 'integer',
+          minimum: 1,
+        },
+        fromTaskId: {
+          type: 'string',
+          minLength: 1,
+          maxLength: 128,
+        },
+        fromSessionId: {
+          type: 'string',
+          minLength: 1,
+          maxLength: 128,
+        },
+        fromDispatchId: {
+          type: 'string',
+          minLength: 1,
+          maxLength: 128,
+        },
+        fromGeneration: {
+          type: 'integer',
+          minimum: 1,
+        },
+        rootTaskId: {
+          type: 'string',
+          minLength: 1,
+          maxLength: 128,
+        },
+        targetSessionId: {
+          type: 'string',
+          minLength: 1,
+          maxLength: 128,
+        },
+        goal: {
+          type: 'string',
+          minLength: 1,
+          maxLength: 16384,
+        },
+        contextRefs: {
+          type: 'array',
+          items: {
+            type: 'object',
+            properties: {
+              artifactRef: {
+                type: 'string',
+                minLength: 1,
+                maxLength: 128,
+              },
+              version: {
+                const: 1,
+              },
+            },
+            required: ['artifactRef', 'version'],
+            additionalProperties: false,
+          },
+          maxItems: 20,
+        },
+        createdAt: {
+          type: 'string',
+          format: 'date-time',
+        },
+        expiresAt: {
+          type: 'string',
+          format: 'date-time',
+        },
+        resolvedAt: {
+          type: 'string',
+          format: 'date-time',
+        },
+        taskId: {
+          type: 'string',
+          minLength: 1,
+          maxLength: 128,
+        },
+        comment: {
+          type: 'string',
+          minLength: 1,
+          maxLength: 16384,
+        },
+      },
+      required: [
+        'handoffId',
+        'status',
+        'revision',
+        'fromTaskId',
+        'fromSessionId',
+        'fromDispatchId',
+        'fromGeneration',
+        'rootTaskId',
+        'targetSessionId',
+        'goal',
+        'contextRefs',
+        'createdAt',
+        'expiresAt',
+      ],
+      additionalProperties: false,
+    },
+    HandoffGetParams: {
+      type: 'object',
+      properties: {
+        handoffId: {
+          type: 'string',
+          minLength: 1,
+          maxLength: 128,
+        },
+      },
+      required: ['handoffId'],
+      additionalProperties: false,
+    },
+    HandoffListParams: {
+      type: 'object',
+      properties: {
+        status: {
+          enum: ['pending', 'accepted', 'rejected', 'expired', 'invalidated'],
+        },
+        targetSessionId: {
+          type: 'string',
+          minLength: 1,
+          maxLength: 128,
+        },
+        limit: {
+          type: 'integer',
+          minimum: 1,
+          maximum: 100,
+        },
+        afterCursor: {
+          type: 'string',
+          pattern: '^[0-9]{1,19}$',
+        },
+      },
+      additionalProperties: false,
+    },
+    HandoffListResult: {
+      type: 'object',
+      properties: {
+        handoffs: {
+          type: 'array',
+          items: {
+            $ref: '#/$defs/HandoffRequest',
+          },
+          maxItems: 100,
+        },
+        nextCursor: {
+          type: ['string', 'null'],
+          pattern: '^[0-9]{1,19}$',
+        },
+      },
+      required: ['handoffs', 'nextCursor'],
+      additionalProperties: false,
+    },
+    HandoffResolveParams: {
+      type: 'object',
+      properties: {
+        handoffId: {
+          type: 'string',
+          minLength: 1,
+          maxLength: 128,
+        },
+        expectedRevision: {
+          type: 'integer',
+          minimum: 1,
+        },
+        outcome: {
+          enum: ['accepted', 'rejected'],
+        },
+        taskId: {
+          type: 'string',
+          minLength: 1,
+          maxLength: 128,
+        },
+        comment: {
+          type: 'string',
+          minLength: 1,
+          maxLength: 16384,
+        },
+        expectedStoreId: {
+          type: 'string',
+          minLength: 1,
+          maxLength: 128,
+        },
+        idempotencyKey: {
+          type: 'string',
+          minLength: 1,
+          maxLength: 256,
+        },
+        requestDigest: {
+          type: 'string',
+          minLength: 1,
+          maxLength: 64,
+        },
+      },
+      required: ['handoffId', 'expectedRevision', 'outcome', 'expectedStoreId', 'idempotencyKey'],
+      allOf: [
+        {
+          if: {
+            properties: {
+              outcome: {
+                const: 'accepted',
+              },
+            },
+          },
+          then: {
+            required: ['taskId'],
+          },
+        },
+        {
+          if: {
+            properties: {
+              outcome: {
+                const: 'rejected',
+              },
+            },
+          },
+          then: {
+            not: {
+              required: ['taskId'],
+            },
+          },
+        },
+      ],
+      additionalProperties: false,
+    },
+    RuleRegisterParams: {
+      type: 'object',
+      properties: {
+        rule: {
+          $ref: '#/$defs/VerificationRule',
+        },
+        expectedStoreId: {
+          type: 'string',
+          minLength: 1,
+          maxLength: 128,
+        },
+        idempotencyKey: {
+          type: 'string',
+          minLength: 1,
+          maxLength: 256,
+        },
+        requestDigest: {
+          type: 'string',
+          minLength: 1,
+          maxLength: 64,
+        },
+      },
+      required: ['rule', 'expectedStoreId', 'idempotencyKey'],
+      additionalProperties: false,
+    },
+    RegisteredVerificationRule: {
+      type: 'object',
+      properties: {
+        id: {
+          type: 'string',
+          minLength: 1,
+          maxLength: 128,
+        },
+        version: {
+          type: 'string',
+          minLength: 1,
+          maxLength: 128,
+        },
+        argv: {
+          type: 'array',
+          items: {
+            type: 'string',
+            minLength: 1,
+            maxLength: 65536,
+          },
+          maxItems: 100,
+          minItems: 1,
+        },
+        cwdRelative: {
+          type: 'string',
+          minLength: 1,
+          maxLength: 4096,
+        },
+        timeoutMs: {
+          type: 'integer',
+          minimum: 1,
+          maximum: 3600000,
+        },
+        permissionProfile: {
+          enum: ['read-only', 'workspace-write'],
+        },
+        success: {
+          type: 'object',
+          properties: {
+            exitCode: {
+              type: 'integer',
+              minimum: 0,
+              maximum: 255,
+            },
+          },
+          required: ['exitCode'],
+          additionalProperties: false,
+        },
+        maxOutputBytes: {
+          type: 'integer',
+          minimum: 1,
+          maximum: 262144,
+        },
+        baselinePaths: {
+          type: 'array',
+          items: {
+            type: 'string',
+            minLength: 1,
+            maxLength: 4096,
+          },
+          maxItems: 100,
+        },
+        digest: {
+          type: 'string',
+          pattern: '^[a-f0-9]{64}$',
+        },
+        source: {
+          enum: ['config', 'runtime'],
+        },
+      },
+      required: [
+        'id',
+        'version',
+        'argv',
+        'cwdRelative',
+        'timeoutMs',
+        'permissionProfile',
+        'success',
+        'digest',
+        'source',
+      ],
+      additionalProperties: false,
+    },
+    RuleListResult: {
+      type: 'object',
+      properties: {
+        rules: {
+          type: 'array',
+          items: {
+            $ref: '#/$defs/RegisteredVerificationRule',
+          },
+          maxItems: 1000,
+        },
+      },
+      required: ['rules'],
+      additionalProperties: false,
+    },
+    WorkflowCapability: {
+      type: 'object',
+      description: 'SPEC-0014 host workflow controls a host supports.',
+      properties: {
+        version: {
+          const: 1,
+        },
+        dependencyResults: {
+          const: true,
+        },
+        revise: {
+          const: true,
+        },
+        delegationApproval: {
+          const: true,
+        },
+        handoffs: {
+          const: true,
+        },
+        writePath: {
+          const: true,
+        },
+        runtimeRules: {
+          const: true,
+        },
+        taskList: {
+          const: true,
+        },
+      },
+      required: ['version'],
     },
   },
 };

@@ -21,6 +21,7 @@ import type {
   RuntimeUsageEvent,
 } from '../../engine/src/types.ts';
 import { observeRuntimeStop } from '../../engine/src/stop-observation.ts';
+import { adapterProviderName } from '../../engine/src/runtime.ts';
 import { workspacePath } from '../../engine/src/verification.ts';
 import { createToolBridge } from '../../engine/src/tool-bridge.ts';
 import { TOOL_NAMES } from '../../engine/src/tools.ts';
@@ -251,6 +252,8 @@ class AppServerConnection {
 }
 
 export interface CodexAdapterConfig {
+  /** Engine provider name; defaults to `codex`. */
+  provider?: string;
   permissionProfile?: RuntimeInput['permissionProfile'];
   networkAccess?: boolean;
   webSearch?: 'disabled' | 'cached' | 'live';
@@ -345,6 +348,7 @@ function defensiveArgs(args: string[], workspace: string, bridge = false): strin
 }
 
 export function createCodexAdapter(config: CodexAdapterConfig = {}): RuntimeAdapter {
+  const providerName = adapterProviderName(config.provider, 'codex');
   const profile = config.permissionProfile ?? 'read-only';
   const networkAccess = config.networkAccess ?? false;
   const webSearch = config.webSearch ?? 'disabled';
@@ -372,13 +376,17 @@ export function createCodexAdapter(config: CodexAdapterConfig = {}): RuntimeAdap
     return connections.size > 0;
   };
   return {
-    provider: 'codex',
+    provider: providerName,
     capabilities: () => ({
-      provider: 'codex',
+      provider: providerName,
       resume: true,
       interrupt: true,
       permissionProfiles: [profile],
       fork: true,
+      // Model-changing forks stay disabled until separate native evidence exists.
+      forkModelChange: false,
+      // The Codex sandbox restricts writes and network, not reads.
+      readFence: false,
       compact: true,
       toolBridge: true,
       inspect: true,
@@ -500,7 +508,7 @@ export function createCodexAdapter(config: CodexAdapterConfig = {}): RuntimeAdap
           dispatchId: input.dispatchId,
           sessionId: input.sessionId,
           generation: input.generation ?? 1,
-          provider: 'codex',
+          provider: providerName,
           providerSessionId: threadId,
           providerTurnId: turnId,
           source,
@@ -868,7 +876,7 @@ export function createCodexAdapter(config: CodexAdapterConfig = {}): RuntimeAdap
                         sessionId: input.sessionId,
                         dispatchId: input.dispatchId,
                         generation: input.generation ?? 1,
-                        provider: 'codex',
+                        provider: providerName,
                         providerSessionId: threadId,
                         providerTurnId: turnId,
                       },

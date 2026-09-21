@@ -57,7 +57,7 @@ Continuous cache hits are preferred for equivalent useful input/work, not proven
 | Messaging | Persist mailbox first, host delivers; agents do not listen on temporary peer ports |
 | Scheduling/heartbeat | Ordinary TS code, no resident management LLM |
 | Routing responsibility | Caller/existing primary session declares intent; host validates structure, authorization, resources, and deterministic routing without inferring independence from prose |
-| Parallelism | One primary session by default; branches only for explicit independent work; pilot maximum two active model sessions |
+| Parallelism | One primary session by default; branches only for explicit independent work; two active model sessions by default, owner-configurable up to eight (SPEC-0014); the engine never adds parallelism by itself |
 | Context | Prefer continuation and append-only messaging, reserve capacity, compact under control when needed |
 | Storage | One owner + SQLite WAL + artifacts; same implementation for embedded/standalone hosts |
 | Model tools | Fixed delegation/message/status/control tools with dynamic server-side routing |

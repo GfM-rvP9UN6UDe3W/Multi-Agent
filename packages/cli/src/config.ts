@@ -12,6 +12,7 @@ export interface HostConfig {
     string,
     Record<string, unknown> & {
       model?: string;
+      models?: string[];
       permissionProfile?: 'read-only' | 'workspace-write';
     }
   >;
@@ -99,8 +100,21 @@ export async function loadConfig(configPath: string): Promise<HostConfig> {
       !(provider === 'fake' && settings.adapter === '@agent-orch/engine/fake')
     )
       invalid(`Adapter module is not allowed for ${provider}`);
-    if (typeof settings.model !== 'string' || !settings.model.trim())
-      invalid(`providers.${provider}.model must name an explicit model`);
+    if (settings.models === undefined) {
+      if (typeof settings.model !== 'string' || !settings.model.trim())
+        invalid(`providers.${provider}.model must name an explicit model`);
+    } else {
+      if (settings.model !== undefined)
+        invalid(`providers.${provider} must configure model or models, not both`);
+      const models = settings.models;
+      if (
+        !Array.isArray(models) ||
+        models.length === 0 ||
+        models.some((model) => typeof model !== 'string' || !model.trim()) ||
+        new Set(models).size !== models.length
+      )
+        invalid(`providers.${provider}.models must be a non-empty list of unique model names`);
+    }
     if (
       settings.permissionProfile !== undefined &&
       !['read-only', 'workspace-write'].includes(settings.permissionProfile as string)
@@ -109,7 +123,7 @@ export async function loadConfig(configPath: string): Promise<HostConfig> {
     if (provider === 'fake') {
       fields(
         settings,
-        ['adapter', 'model', 'permissionProfile', 'delayMs', 'result'],
+        ['adapter', 'model', 'models', 'permissionProfile', 'delayMs', 'result'],
         'fake provider',
       );
       if (
@@ -127,6 +141,7 @@ export async function loadConfig(configPath: string): Promise<HostConfig> {
         [
           'adapter',
           'model',
+          'models',
           'permissionProfile',
           'requestTimeoutMs',
           'turnTimeoutMs',
@@ -145,6 +160,7 @@ export async function loadConfig(configPath: string): Promise<HostConfig> {
         [
           'adapter',
           'model',
+          'models',
           'permissionProfile',
           'command',
           'args',
@@ -251,7 +267,7 @@ export async function loadConfig(configPath: string): Promise<HostConfig> {
       'limits',
     );
     const bounds: Record<string, number> = {
-      maxActiveSessions: 2,
+      maxActiveSessions: 8,
       maxTurnsPerTask: 1000,
       maxQuarantinedDispatches: 1024,
       maxLogicalSessions: 100000,
@@ -270,11 +286,27 @@ export async function loadConfig(configPath: string): Promise<HostConfig> {
     if (!object(parsed.tools)) invalid('tools must be an object');
     fields(
       parsed.tools,
-      ['enabled', 'maxDepth', 'maxChildren', 'maxCallsPerDispatch', 'maxRepeatedCalls'],
+      [
+        'enabled',
+        'maxDepth',
+        'maxChildren',
+        'maxCallsPerDispatch',
+        'maxRepeatedCalls',
+        'approveDelegation',
+        'handoffs',
+        'handoffTtlMs',
+      ],
       'tools',
     );
-    if (parsed.tools.enabled !== undefined && typeof parsed.tools.enabled !== 'boolean')
-      invalid('tools.enabled must be boolean');
+    for (const key of ['enabled', 'approveDelegation', 'handoffs'])
+      if (parsed.tools[key] !== undefined && typeof parsed.tools[key] !== 'boolean')
+        invalid(`tools.${key} must be boolean`);
+    const ttl = parsed.tools.handoffTtlMs;
+    if (
+      ttl !== undefined &&
+      (!Number.isSafeInteger(ttl) || (ttl as number) < 60000 || (ttl as number) > 604800000)
+    )
+      invalid('tools.handoffTtlMs must be an integer from 60000 through 604800000');
     for (const [key, max] of Object.entries({
       maxDepth: 16,
       maxChildren: 1000,

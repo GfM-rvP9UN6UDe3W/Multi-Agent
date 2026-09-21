@@ -58,6 +58,13 @@ const evidence = {
   cases: [],
 };
 const requests = [];
+// SPEC-0014 F04: one file outside every readable root and one inside the workspace.
+const fence = {
+  secret: join(home, 'fence-secret.txt'),
+  inside: join(workspace, 'fence-inside.txt'),
+};
+await writeFile(fence.secret, 'ORCH_FENCE_SECRET', { mode: 0o600 });
+await writeFile(fence.inside, 'ORCH_FENCE_INSIDE');
 let taskId,
   scriptedCalls = 0;
 const sendEvent = (response, type, data) =>
@@ -110,24 +117,44 @@ const server = createServer(async (request, response) => {
       cache_read_input_tokens: 0,
       cache_creation_input_tokens: 0,
     };
+    const history = JSON.stringify(body.messages ?? body.input);
+    const fenceTurn =
+      provider === 'claude' &&
+      history.includes('ORCH_NATIVE_GATEWAY_FENCE') &&
+      !history.includes('toolu_fence_inside');
     if (provider === 'claude') {
-      const blocks = call
+      const blocks = fenceTurn
         ? [
             {
               type: 'tool_use',
-              id: `toolu_${requests.length}`,
-              name: tool,
-              input: { request: { kind: 'task', id: taskId } },
+              id: 'toolu_fence_outside',
+              name: 'Read',
+              input: { file_path: fence.secret },
+            },
+            {
+              type: 'tool_use',
+              id: 'toolu_fence_inside',
+              name: 'Read',
+              input: { file_path: fence.inside },
             },
           ]
-        : [{ type: 'text', text }];
+        : call
+          ? [
+              {
+                type: 'tool_use',
+                id: `toolu_${requests.length}`,
+                name: tool,
+                input: { request: { kind: 'task', id: taskId } },
+              },
+            ]
+          : [{ type: 'text', text }];
       const message = {
         id: `msg_${requests.length}`,
         type: 'message',
         role: 'assistant',
         model: body.model,
         content: blocks,
-        stop_reason: call ? 'tool_use' : 'end_turn',
+        stop_reason: call || fenceTurn ? 'tool_use' : 'end_turn',
         stop_sequence: null,
         usage,
       };
@@ -317,10 +344,14 @@ try {
     encoding: 'utf8',
     timeout: 5000,
   }).trim();
+  const runtimeModel = provider === 'claude' ? 'claude-sonnet-4-6' : 'gpt-5.4';
+  // SPEC-0013 M05: Claude also allows a second model so a fork can change model.
+  const forkModel = provider === 'claude' ? 'claude-haiku-4-5' : undefined;
   engine = await createEngine({
     workspace,
     stateDir,
     adapters: [adapter],
+    ...(forkModel ? { providers: { [provider]: { models: [runtimeModel, forkModel] } } } : {}),
     tools: { enabled: true },
     storage: { emergencyBytes: 4096, minFreeBytes: 0 },
     timeouts: { acceptanceMs: 30000, turnMs: 60000 },
@@ -331,7 +362,7 @@ try {
   client = await connectOrchestrator({ socketPath });
   const spec = {
     goal: 'ORCH_NATIVE_GATEWAY_ROOT: inspect the current task once, then return ORCH_NATIVE_GATEWAY_OK',
-    runtime: { provider, model: provider === 'claude' ? 'claude-sonnet-4-6' : 'gpt-5.4' },
+    runtime: { provider, model: runtimeModel },
     acceptance: {
       mode: 'human',
       criteria: ['Scripted response, correct lifecycle and retained history'],
@@ -394,10 +425,14 @@ try {
     expectedState: value.status,
     expectedDispatchId: value.activeDispatchId,
   });
-  const routed = async (candidate) => {
+  const routed = async (
+    candidate,
+    goal = 'ORCH_NATIVE_GATEWAY_BRANCH: return ORCH_NATIVE_GATEWAY_OK',
+  ) => {
     const handle = await client.tasks.create({
       ...spec,
-      goal: 'ORCH_NATIVE_GATEWAY_BRANCH: return ORCH_NATIVE_GATEWAY_OK',
+      runtime: { provider, model: candidate.model },
+      goal,
       parentTaskId: task.id,
       contextPlan: {
         requestedMode: 'reuse',
@@ -429,6 +464,87 @@ try {
     'Fork lost saved parent history',
   );
   evidence.cases.push('fork-distinct-native-identity-and-inherited-history');
+  if (forkModel) {
+    const source = await client.sessions.get(session.id);
+    await assert.rejects(
+      client.sessions.fork(target(source), pending.artifactRefs[0], { model: forkModel }),
+      { code: 'CACHE_LOSS_NOT_ACKNOWLEDGED' },
+    );
+    const changed = await client.sessions.fork(target(source), pending.artifactRefs[0], {
+      model: forkModel,
+      acknowledgeCacheLoss: true,
+    });
+    assert.equal(changed.model, forkModel);
+    const seen = requests.length;
+    const moved = await routed(
+      changed,
+      'ORCH_NATIVE_GATEWAY_MODEL_FORK: return ORCH_NATIVE_GATEWAY_OK',
+    );
+    const forked = requests.slice(seen);
+    assert.ok(forked.length > 0, 'Model-changing fork sent no request');
+    assert.deepEqual(
+      [...new Set(forked.map((item) => item.model))],
+      [forkModel],
+      'Model-changing fork did not request the target model',
+    );
+    const history = forked[0].input;
+    const text = JSON.stringify(history);
+    assert.ok(text.includes('ORCH_NATIVE_GATEWAY_ROOT'), 'Target model lost the source prompt');
+    assert.ok(
+      history.some((message) => message.role === 'assistant'),
+      'Target model lost the source assistant turn',
+    );
+    assert.ok(text.includes('ORCH_NATIVE_GATEWAY_MODEL_FORK'), 'Fork prompt missing');
+    assert.ok(!text.includes('ORCH_NATIVE_GATEWAY_BRANCH'), 'History beyond the checkpoint leaked');
+    assert.notEqual(moved.providerSessionId, source.providerSessionId);
+    const unchanged = await client.sessions.get(session.id);
+    assert.equal(unchanged.model, runtimeModel);
+    assert.equal(unchanged.providerSessionId, source.providerSessionId);
+    assert.equal(unchanged.nativeCheckpoint, source.nativeCheckpoint);
+    assert.equal(unchanged.revision, source.revision);
+    evidence.modelChange = {
+      fromModel: runtimeModel,
+      toModel: forkModel,
+      requestModels: forked.map((item) => item.model),
+      forkNativeSessionDiffers: true,
+    };
+    evidence.cases.push('fork-model-change-resends-source-history-to-target-model');
+  }
+  if (provider === 'claude') {
+    const seen = requests.length;
+    const fenced = await client.tasks.create({
+      ...spec,
+      goal: 'ORCH_NATIVE_GATEWAY_FENCE: read both files, then return ORCH_NATIVE_GATEWAY_OK',
+    });
+    const read = await waitApproval(fenced);
+    const decision = await client.approvals.get(read.approvalId);
+    await client.approvals.decide(decision.approvalId, {
+      choice: 'approve',
+      expectedRevision: decision.revision,
+    });
+    assert.equal((await fenced.wait({ timeoutMs: 5000 })).status, 'completed');
+    const results = JSON.stringify(requests.slice(seen).map((item) => item.input));
+    assert.ok(results.includes('toolu_fence_outside'), 'The outside read was never attempted');
+    assert.ok(results.includes('ORCH_FENCE_INSIDE'), 'The fence blocked a workspace read');
+    assert.ok(!results.includes('ORCH_FENCE_SECRET'), 'A read outside the fence reached the model');
+    const outside = requests
+      .slice(seen)
+      .flatMap((item) => item.input ?? [])
+      .flatMap((message) => (Array.isArray(message.content) ? message.content : []))
+      .find((block) => block.type === 'tool_result' && block.tool_use_id === 'toolu_fence_outside');
+    const denial = JSON.stringify(outside?.content ?? '');
+    assert.ok(
+      denial.includes('violates the adapter workspace or private-state policy'),
+      `Outside read was not denied by the adapter guard: ${denial}`,
+    );
+    evidence.readFence = {
+      deniedOutsideRead: true,
+      allowedWorkspaceRead: true,
+      outsideIsError: outside?.is_error === true,
+      outsideResult: denial.slice(0, 300),
+    };
+    evidence.cases.push('read-fence-denies-outside-read-and-allows-workspace-read');
+  }
   const reused = await routed(await client.sessions.get(session.id));
   assert.equal(reused.providerSessionId, session.providerSessionId);
   evidence.cases.push('serial-reuse-preserves-native-identity');

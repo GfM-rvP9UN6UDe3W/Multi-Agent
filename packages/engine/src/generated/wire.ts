@@ -1,4 +1,4 @@
-// Generated from schemas/protocol.schema.json; SHA-256 fa633a2fb40ab9f12e09770f8977383f1d4e6a78ce9e09c92dcccd6165dbd38d. Do not edit.
+// Generated from schemas/protocol.schema.json; SHA-256 83e3b0b6f785f865f5b3cfd2ad2db3866a4dafa0a0f2e236ef0d51c329106a89. Do not edit.
 // Structural types; validateWire enforces numeric and conditional constraints.
 export type RuntimeSpec = { provider: string; model: string };
 export type TaskSpec = {
@@ -13,6 +13,7 @@ export type TaskSpec = {
   contextPlan?: ContextPlan;
   budget?: MoneyBudget;
   contextEstimate?: ContextEstimate;
+  writePath?: string;
 };
 export type TaskStatus =
   | 'queued'
@@ -45,6 +46,8 @@ export type TaskSnapshot = {
   routing?: RoutingDecision;
   kind?: 'work' | 'compaction';
   maintenanceOperationId?: string;
+  revisionRequest?: { approvalId: string; comment: string };
+  dependencyResultsDelivered?: boolean;
   [key: string]: unknown;
 };
 export type ApprovalRequest = {
@@ -52,7 +55,7 @@ export type ApprovalRequest = {
   taskId: string;
   purpose: 'task_acceptance' | 'runtime_permission';
   revision: number;
-  status: 'pending' | 'approved' | 'denied' | 'expired' | 'invalidated';
+  status: 'pending' | 'approved' | 'denied' | 'revised' | 'expired' | 'invalidated';
   target: {
     taskId: string;
     taskRevision: number;
@@ -71,6 +74,7 @@ export type ApprovalRequest = {
   summary: string;
   evidenceRefs: Array<string>;
   expiresAt: string;
+  comment?: string;
   [key: string]: unknown;
 };
 export type UsageRecordedData = {
@@ -138,13 +142,19 @@ export type OperationStatus =
   | 'rejected'
   | 'failed'
   | 'outcome_unknown';
-export type EngineLimits = unknown & {
-  maxActiveSessions?: number;
-  maxQuarantinedDispatches?: number;
-  maxTurnsPerTask?: number;
-  maxLogicalSessions?: number;
-  maxQueuedTasks?: number;
-};
+export type EngineLimits = unknown &
+  unknown &
+  unknown &
+  unknown &
+  unknown &
+  unknown &
+  unknown & {
+    maxActiveSessions?: number;
+    maxQuarantinedDispatches?: number;
+    maxTurnsPerTask?: number;
+    maxLogicalSessions?: number;
+    maxQueuedTasks?: number;
+  };
 export type LifecycleTimeouts = {
   acceptanceMs?: number;
   turnMs?: number;
@@ -425,7 +435,7 @@ export type FrozenVerificationRule = {
   baselinePaths?: Array<string>;
   digest: string;
 };
-export type SessionOpenSpec = { runtime: RuntimeSpec; writeScope?: string };
+export type SessionOpenSpec = { runtime: RuntimeSpec; writeScope?: string; writePath?: string };
 export type InitializeParams = { protocolVersion: '2.0'; sdkVersion: string };
 export type InitializeResult = {
   protocolVersion: '2.0';
@@ -440,6 +450,7 @@ export type InitializeResult = {
       digestVersion?: 1;
       [key: string]: unknown;
     };
+    workflow?: WorkflowCapability;
     [key: string]: unknown;
   };
   [key: string]: unknown;
@@ -522,6 +533,8 @@ export type SessionControlParams = {
 export type SessionForkParams = {
   target: ControlTarget;
   snapshotRef: string;
+  model?: string;
+  acknowledgeCacheLoss?: boolean;
   expectedStoreId: string;
   idempotencyKey: string;
   requestDigest?: string;
@@ -545,8 +558,87 @@ export type StoreImportParams = {
 };
 export type ApprovalDecisionParams = {
   approvalId: string;
-  decision: { choice: 'approve' | 'deny'; expectedRevision: number; comment?: string };
+  decision: unknown & {
+    choice: 'approve' | 'deny' | 'revise';
+    expectedRevision: number;
+    comment?: string;
+  };
   expectedStoreId: string;
   idempotencyKey: string;
   requestDigest?: string;
+};
+export type TaskListParams = {
+  parentTaskId?: string;
+  sessionId?: string;
+  limit?: number;
+  afterCursor?: string;
+};
+export type TaskListResult = { tasks: Array<TaskSnapshot>; nextCursor: string | null };
+export type HandoffRequest = {
+  handoffId: string;
+  status: 'pending' | 'accepted' | 'rejected' | 'expired' | 'invalidated';
+  revision: number;
+  fromTaskId: string;
+  fromSessionId: string;
+  fromDispatchId: string;
+  fromGeneration: number;
+  rootTaskId: string;
+  targetSessionId: string;
+  goal: string;
+  contextRefs: Array<{ artifactRef: string; version: 1 }>;
+  createdAt: string;
+  expiresAt: string;
+  resolvedAt?: string;
+  taskId?: string;
+  comment?: string;
+};
+export type HandoffGetParams = { handoffId: string };
+export type HandoffListParams = {
+  status?: 'pending' | 'accepted' | 'rejected' | 'expired' | 'invalidated';
+  targetSessionId?: string;
+  limit?: number;
+  afterCursor?: string;
+};
+export type HandoffListResult = { handoffs: Array<HandoffRequest>; nextCursor: string | null };
+export type HandoffResolveParams = unknown &
+  unknown & {
+    handoffId: string;
+    expectedRevision: number;
+    outcome: 'accepted' | 'rejected';
+    taskId?: string;
+    comment?: string;
+    expectedStoreId: string;
+    idempotencyKey: string;
+    requestDigest?: string;
+  };
+export type RuleRegisterParams = {
+  rule: VerificationRule;
+  expectedStoreId: string;
+  idempotencyKey: string;
+  requestDigest?: string;
+};
+export type RegisteredVerificationRule = {
+  id: string;
+  version: string;
+  argv: Array<string>;
+  cwdRelative: string;
+  timeoutMs: number;
+  permissionProfile: 'read-only' | 'workspace-write';
+  success: { exitCode: number };
+  maxOutputBytes?: number;
+  baselinePaths?: Array<string>;
+  digest: string;
+  source: 'config' | 'runtime';
+};
+export type RuleListResult = { rules: Array<RegisteredVerificationRule> };
+export type WorkflowCapability = {
+  version: 1;
+  dependencyResults?: true;
+  revise?: true;
+  delegationApproval?: true;
+  handoffs?: true;
+  writePath?: true;
+  runtimeRules?: true;
+  taskList?: true;
+  [key: string]: unknown;
 };

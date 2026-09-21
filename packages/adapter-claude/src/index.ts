@@ -11,7 +11,13 @@ import { performance } from 'node:perf_hooks';
 import { randomUUID } from 'node:crypto';
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { observeRuntimeStop } from '../../engine/src/stop-observation.ts';
-import { buildClaudeOptions, copyClaudeOptions, validateClaudeOptions } from './options.ts';
+import { adapterProviderName } from '../../engine/src/runtime.ts';
+import {
+  buildClaudeOptions,
+  claudeReadPolicy,
+  copyClaudeOptions,
+  validateClaudeOptions,
+} from './options.ts';
 import { createClaudeMcpServer } from './mcp.ts';
 import { inspectClaudeSession } from './inspection.ts';
 export { createClaudeMcpServer, type ClaudeMcpDependencies } from './mcp.ts';
@@ -191,6 +197,8 @@ async function loadDefaultQuery(): Promise<ClaudeQueryFactory> {
 export function createClaudeAdapter<Extra extends object = object>(
   config: ClaudeAdapterConfig<Extra> = {},
 ): ClaudeRuntimeAdapter {
+  const providerName = adapterProviderName(config.provider, 'claude');
+  const readPolicy = claudeReadPolicy(config);
   const profile = config.permissionProfile ?? 'read-only';
   if (!['read-only', 'workspace-write'].includes(profile))
     throw Object.assign(new Error('Invalid Claude permission profile'), {
@@ -345,7 +353,7 @@ export function createClaudeAdapter<Extra extends object = object>(
   }
 
   return {
-    provider: 'claude',
+    provider: providerName,
     hasActiveResources(sessionId: string): boolean {
       return [...active].some((handle) => handle.sessionId === sessionId && !handle.cleaned);
     },
@@ -371,11 +379,14 @@ export function createClaudeAdapter<Extra extends object = object>(
       };
     },
     capabilities: () => ({
-      provider: 'claude',
+      provider: providerName,
       resume: true,
       interrupt: true,
       permissionProfiles: [profile],
       fork: true,
+      // SPEC-0013 M05: a native fork resends the source history to the requested model.
+      forkModelChange: true,
+      readFence: readPolicy.fence,
       compact: true,
       toolBridge: true,
       inspect: true,
@@ -429,7 +440,7 @@ export function createClaudeAdapter<Extra extends object = object>(
           dispatchId: input.dispatchId,
           sessionId: input.sessionId,
           generation: input.generation ?? 1,
-          provider: 'claude',
+          provider: providerName,
           providerSessionId: sessionId ?? input.providerSessionId,
           ...(nativeCheckpoint ? { providerTurnId: nativeCheckpoint } : {}),
           source,
@@ -576,7 +587,7 @@ export function createClaudeAdapter<Extra extends object = object>(
               sessionId: input.sessionId,
               dispatchId: input.dispatchId,
               generation: input.generation ?? 1,
-              provider: 'claude',
+              provider: providerName,
               providerSessionId: sessionId,
             },
             terminal: matchedTerminal,
@@ -719,7 +730,7 @@ export function createClaudeAdapter<Extra extends object = object>(
           );
           options = { ...options, mcpServers: { ...record(host.mcpServers), agent_orch: server } };
         }
-        request.options = buildClaudeOptions(input, options, request.options);
+        request.options = buildClaudeOptions(input, options, request.options, readPolicy);
         if (input.orchestrationTools) {
           request.options.allowedTools = [
             ...new Set([

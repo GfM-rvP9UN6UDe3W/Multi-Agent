@@ -64,6 +64,8 @@ This is runnable with explicit fake data after replacing the paths:
 }
 ```
 
+Each provider names its allowed models with `model` (one model) or `models` (a non-empty list of unique names), never both. Tasks and sessions must use an allowed model; removing a model on restart leaves existing sessions unchanged and rejects new tasks for it. A fork can move to another model only when the provider configures one of these lists (see section 8).
+
 Host options also include verificationRules, registered writeScopes, pricing, budget, contextLimits, messageLimits, storage and stores. Read the typed [EngineConfig](packages/engine/src/types.ts) and validated [CLI config](packages/cli/src/config.ts) before adding fields. JSON providers remain read-only; native options, write profiles and callbacks use embedded TS. There is no generic auth/executable/gateway object. Native credentials and model endpoints belong to the selected runtime or an application-owned adapter, and are not stored in task specifications.
 
 `doctor --config FILE` checks Node/SQLite, path access and the selected native dependency version without login or model calls. `doctor --socket PATH` proves the existing host handshake only. Neither proves authentication, tool sandboxing, model availability or task completion.
@@ -259,9 +261,93 @@ work_delegate validates declared independence and inherited/narrowed provider/mo
 
 Logical session opening makes no native/model call. Fork captures a completed source checkpoint; first use must return a distinct native identity. Compact executes a maintenance turn and requires an actual compact boundary; a method acknowledgment is insufficient. Rotate requires a quiet settled session, archives generation evidence and clears the native binding. Stop closes scheduling independently of business cancellation. Inspect performs bounded read-only native history lookup and returns unknown execution; it never settles work automatically.
 
+Fork preconditions and effects apply to every caller:
+
+- The source session must be quiet. An in-flight dispatch, held lease, quarantined or verification-pending dispatch, or retained runtime resource fails with `RUNTIME_STILL_ACTIVE`; a non-terminal associated task fails with `SESSION_BUSY`.
+- The source's associated task must be `completed`, and `snapshotRef` must be one of its `artifactRefs`; otherwise the fork fails with `INVALID_SNAPSHOT` (`NO_SESSION_TASK` when the session has no associated task). A failed or cancelled task cannot be forked. Continue in a new session instead; it does not carry the earlier history.
+- The runtime must declare `fork`, and the source needs a native session ID and a completed native checkpoint; otherwise the fork fails with `UNSUPPORTED_CAPABILITY`.
+- The fork is a new logical session with the source's provider, write paths and root task, and the permission profile configured for that provider. It keeps the source model unless the call names another allowed model (below). The source session is unchanged. The fork counts toward `limits.maxLogicalSessions` (`SESSION_CAPACITY_EXHAUSTED`) and is subject to quarantine admission (`QUARANTINE_CAPACITY_EXCEEDED`).
+- A fork cannot change the provider name, permission profile or write paths. Use a new session for that; it does not carry the earlier history.
+- `sessions.fork` only prepares the fork. The native fork happens on the fork's first dispatch.
+- A task uses a prepared fork by naming it as `candidateSessionId`; the declared mode's usual rules apply, and `reuse` requires `independent: true`. Inline `requestedMode: "fork"` instead names the source session and `snapshotRef`, and also requires `independent: true` (`INVALID_ROUTING`). Either way, the task must match the fork's provider, model, permission profile and write paths (`SESSION_INCOMPATIBLE`), and must belong to the source's root task unless the owner enables `allowCrossRootReuse` (`HISTORY_REUSE_FORBIDDEN`).
+
+A fork may continue the source history on another model of the same provider. These rules also apply to every caller:
+
+- Pass `model` to `sessions.fork`. It must be in the provider's configured `models` (or `model`) list. Without a configured list, or for an unlisted model, the fork fails with `VALIDATION_ERROR`. Omitting `model`, or naming the source model, is an ordinary fork.
+- The runtime must declare `forkModelChange: true`, otherwise `UNSUPPORTED_CAPABILITY`. Claude declares it; Codex does not. Both SDKs also require the host to advertise `sessionLifecycle.forkModel` before sending `model`.
+- The caller must also pass `acknowledgeCacheLoss: true`, otherwise the fork fails with `CACHE_LOSS_NOT_ACKNOWLEDGED` and no session is created. The runtime resends the whole history with every request, so the new model receives the source conversation up to the checkpoint. It cannot reuse the source model's prompt cache: the first response after the change reprocesses the whole inherited history and is slower and more expensive; later responses warm the new model's cache. Tell end users this before they switch. The operation result and the `session.fork_prepared` event carry `modelChange: {fromModel, toModel, promptCacheReuse: false}` for that message.
+- Tasks on the fork must declare the target model (`SESSION_INCOMPATIBLE` otherwise). `contextLimits`, pricing and budget reservation use the target model at dispatch, as for any task; a missing price under an active budget pauses the task with `BUDGET_PRICE_UNKNOWN`. The engine does not estimate inherited history from recorded usage, so `contextEstimate` must include the inherited history. The provider's own context limit remains the final boundary.
+- Only a client can change the model. Inline `requestedMode: "fork"` keeps the source model, and bound runtime tools can neither name a model nor claim a prepared fork.
+
+```ts
+const branch = await orch.sessions.fork(target, snapshotRef, {
+  model: 'claude-haiku-4-5',
+  acknowledgeCacheLoss: true, // after telling the user about the slower, costlier first response
+});
+```
+
+```python
+branch = await orch.sessions.fork(target, snapshot_ref, model="claude-haiku-4-5",
+                                  acknowledge_cache_loss=True)
+```
+
 Checks use owner-registered verificationRules with ID/version/argv/canonical cwd/time/output/profile/success criteria. The task freezes their digest at admission. Checks run after runtime stop, capture baseline hashes and output, and require all checks and dependencies to pass. Failed checks consume a finite repair/turn budget. Unconfirmed verifier cleanup retains execution/write ownership until explicit owner evidence. Registered commands run as the local user; baseline checks detect mutation afterward and are not an OS sandbox.
 
 Task acceptance mode human uses purpose task_acceptance. `runtimeApprovals.enabled` routes native permission requests as purpose runtime_permission with exact dispatch/tool digest and expiry. The consumer must distinguish them; no consumer, cancellation, expiry or stale target grants permission. The four owner-enabled orchestration tools are preapproved by native MCP and remain subject to engine authorization and limits. Native permission-hook coverage still requires real-runtime acceptance.
+
+### 8.1 Host workflow controls
+
+[SPEC-0014](./docs/specs/0014-host-workflow-controls.md) adds the controls below for every caller. `initialize` advertises them as `capabilities.workflow` (`version: 1` and one `true` flag per feature); both SDKs check the relevant flag before sending a new method or field and fail with `UNSUPPORTED_CAPABILITY` otherwise. Four of them change existing behavior on upgrade: dependency results in prompts, JSON-encoded message summaries, the default read fence and its Bash sandbox rules.
+
+**Several profiles of one runtime.** `createClaudeAdapter({ provider, permissionProfile })` and `createCodexAdapter({ provider })` register under a chosen name (default `claude`/`codex`; 1–128 characters of `[A-Za-z0-9._-]`). One engine can therefore run a read-only and a writable Claude, for example `claude-read` and `claude-write`, each with its own `providers.<name>` entry. The adapter reports execution evidence under the same name; never rename an adapter by wrapping it, because evidence under another name is rejected and the dispatch stays quarantined. Pricing, `contextLimits` and provider configuration use the chosen name. The JSON CLI keeps the fixed names `fake`, `claude` and `codex`.
+
+**Dependency results.** When a task with `dependencyTaskIds` is dispatched, its prompt includes each completed dependency's result artifact, in declared order, after the goal and context references, as `Untrusted dependency result {"taskId":…,"artifactRef":…}` followed by the JSON-encoded text. Each result is limited to 32 KiB and all of them to 96 KiB; a larger or missing result contributes only its identifiers, size and the reason. The results are repeated on later dispatches of the task only until one dispatch that carried them returns a result. No host action is needed, so a host no longer has to wait for the upstream task and create the downstream one itself. Include the injected results in `contextEstimate`. A bound `work_read` may read (kinds `task` and `artifact`) the tasks in its own task's `dependencyTaskIds` and their artifacts, but not their dependencies. Message summaries are now JSON-encoded in the prompt too, so text produced by one model cannot forge a message header for another.
+
+**Revise, and decision comments.** `approvals.decide` accepts `comment` (1–16,384 UTF-8 bytes) with any choice and stores it on the approval. `choice: "revise"` requires a comment and applies only to `task_acceptance` approvals: the approval becomes `revised` (event `approval.revised`), the task returns to `queued` with reason `revision_requested` (or `paused` when its session is paused) in the same session, and the next dispatch prompt includes `Reviewer revision request (approval <id>)` with the JSON-encoded comment. Downstream tasks keep waiting, and each revision counts toward `maxTurnsPerTask`. `revise` on a runtime-permission approval fails with `VALIDATION_ERROR`.
+
+**Read fence.** By default the Claude adapter denies `Read`, `Glob` and `Grep` outside the workspace and `readRoots`, and inside `denyRead` or the state directory; a search root that contains a denied path is also denied. Configure `readRoots` (existing absolute directories), `denyRead` (absolute or workspace-relative paths) or `readFence: false` on the adapter; capabilities report `readFence`. In the writable profile the OS sandbox additionally denies Bash reads of the host process's home directory (`os.homedir()`), the state directory and `denyRead`, while re-allowing the workspace and `readRoots`; `denyRead` inside the workspace stays denied. Commands that read home-directory configuration such as `~/.gitconfig` or `~/.npmrc` need those paths in `readRoots`. A host-supplied `sandbox.filesystem.allowRead` that overlaps the state directory is rejected. Codex declares `readFence: false` because its sandbox does not restrict reads. The guard is covered by the Claude scripted-gateway smoke; the Bash sandbox rules were verified locally on macOS with `scripts/native-read-fence-smoke.mjs`, which needs an available OS sandbox.
+
+**Concurrency.** `limits.maxActiveSessions` accepts 1–8 (default 2). The engine never raises it. Keep `maxQuarantinedDispatches` comfortably above it: with both at 8, eight running dispatches fill the quarantine floor and new tasks are refused with `QUARANTINE_CAPACITY_EXCEEDED` until work settles. Each active Claude or Codex session is a native child process.
+
+**Delegation gate.** With `tools.approveDelegation: true`, a child created by `work_delegate` starts `paused` with reason `DELEGATION_APPROVAL_REQUIRED` and holds no execution slot. Approve it with `tasks.resume` and reject it with `tasks.cancel`; pausing or resuming its session, including from a runtime tool, does not release it. On approval the engine rechecks its dependencies and restarts its routing wait, so time spent awaiting the host never expires the route.
+
+**Handoff requests.** With `tools.handoffs: true`, a `work_delegate` that reuses an existing open session outside the model's subtree records a pending handoff request instead of failing with `UNAUTHORIZED`, and returns `{handoffId, status: "pending"}`. The request carries only the goal and context references the requester may read. It creates no task, changes nothing in the target session and grants nothing. The host reads requests with `handoffs.get`/`handoffs.list` (events `handoff.requested`, `.accepted`, `.rejected`, `.expired`) and decides. To accept, the host creates the task itself — for example as a child of the target session's root task reusing that session, so it runs with that session's permissions and budget — then calls `handoffs.resolve` with `outcome: "accepted"` and the task's ID. The engine only records the link. Requests expire after `tools.handoffTtlMs` (default 24 hours, 1 minute to 7 days), each root task may hold 100 pending requests (`HANDOFF_LIMIT`), and the requester can read its own request with `work_read` kind `handoff`. A backup import marks pending requests `invalidated`; they do not block a rollover or import.
+
+**Narrowed write paths.** A task or `sessions.open` spec may add `writePath`, an existing workspace path inside its `writeScope`; the task's or session's write paths become that one path. Write conflicts, session compatibility and the Claude write sandbox use it, so agents with disjoint paths under one registered scope write concurrently. `work_delegate` accepts `writePath` within the parent's write paths, and a child inherits a narrowed parent path. Tasks with verification rules still lock the whole workspace. Clients still cannot register a new write root.
+
+**Runtime rules.** The owner (in-process or stdio host) can call `rules.register({rule})` to append a verification rule version in the configured rule format; an existing `id@version` with the same content is a no-op and different content fails with `CONFLICT`. `rules.list()` shows effective rules with `source: "config" | "runtime"`. Registered rules persist; if a configured rule later conflicts with a registered one, startup fails with `VALIDATION_ERROR`. Tasks still freeze their rules at admission. At most 1,000 rules may be effective. Limits, tool limits and message limits still change only on restart.
+
+**Listing tasks.** `task.created` data includes `parentTaskId` and `rootTaskId`. `tasks.list({parentTaskId? | sessionId?, limit?, afterCursor?})` returns creation-ordered pages (default 50, at most 100) with `nextCursor`.
+
+```ts
+const page = await orch.tasks.list({ parentTaskId: root.id });
+await orch.approvals.decide(approval.approvalId, {
+  choice: 'revise',
+  expectedRevision: approval.revision,
+  comment: 'Add tests for the empty case',
+});
+const [request] = (await orch.handoffs.list({ status: 'pending' })).handoffs;
+const takeover = await orch.tasks.create({
+  goal: request.goal,
+  runtime: { provider: 'claude-read', model: 'claude-sonnet-4-6' },
+  acceptance: { mode: 'human', criteria: ['Reviewed'] },
+  parentTaskId: agentRootTaskId,
+  contextPlan: { requestedMode: 'reuse', independent: true, candidateSessionId: request.targetSessionId },
+});
+await orch.handoffs.resolve(request.handoffId, {
+  expectedRevision: request.revision,
+  outcome: 'accepted',
+  taskId: takeover.id,
+});
+```
+
+```python
+page = await orch.tasks.list(parent_task_id=root.id)
+await orch.approvals.decide(approval.approval_id, {"choice": "revise", "expected_revision": approval.revision,
+                                                   "comment": "Add tests for the empty case"})
+request = (await orch.handoffs.list(status="pending")).handoffs[0]
+await orch.handoffs.resolve(request.handoff_id, expected_revision=request.revision, outcome="rejected")
+```
 
 ## 9. Usage, costs and context estimates
 
@@ -398,7 +484,7 @@ Completed business attestation saves full output and pauses; explicit tasks.resu
 
 ### 11.5 Implemented scheduler queries and resource conflicts
 
-limits.maxQuarantinedDispatches defaults to 32, integer 1..1024 and at least effective maxActiveSessions (default 2). scheduler.get reads A/Q/R and conflict data in one database transaction: A=executionOccupied held leases, Q=quarantined business unknown, R=quarantineReserved unquarantined reservations including initialization/cleanup. canDispatch/reasons also include this host's closing flag and in-memory cleanup records, so the complete response is not a pure database snapshot. A/Q overlap. Admission needs A < maxActiveSessions and Q+R < maxQuarantinedDispatches, with no shutdown, cleanup, or conflict blocker. At quarantine capacity, refuse new work but retain original receipts, queries, cancel, reconcile, approval, close, and saved-result acceptance resume.
+limits.maxActiveSessions defaults to 2, integer 1..8. limits.maxQuarantinedDispatches defaults to 32, integer 1..1024 and at least effective maxActiveSessions. scheduler.get reads A/Q/R and conflict data in one database transaction: A=executionOccupied held leases, Q=quarantined business unknown, R=quarantineReserved unquarantined reservations including initialization/cleanup. canDispatch/reasons also include this host's closing flag and in-memory cleanup records, so the complete response is not a pure database snapshot. A/Q overlap. Admission needs A < maxActiveSessions and Q+R < maxQuarantinedDispatches, with no shutdown, cleanup, or conflict blocker. At quarantine capacity, refuse new work but retain original receipts, queries, cancel, reconcile, approval, close, and saved-result acceptance resume.
 
 orch is an existing SDK instance. Queries need no owner authority and invoke no models. Occupancy/conflict examples each cap at 16; check truncated/conflictsTruncated and totals.
 

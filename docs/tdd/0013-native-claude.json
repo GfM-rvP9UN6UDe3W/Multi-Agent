@@ -1,0 +1,168 @@
+{
+  "provider": "claude",
+  "node": "v24.14.0",
+  "startedAt": "2026-09-21T09:40:43.485Z",
+  "modelCalls": 0,
+  "responseSource": "scripted-loopback-gateway",
+  "credentials": "synthetic",
+  "cases": [
+    "engine-task-native-mcp-human-approval-resource-release",
+    "retained-native-history-read-only-inspection",
+    "fork-distinct-native-identity-and-inherited-history",
+    "fork-model-change-resends-source-history-to-target-model",
+    "serial-reuse-preserves-native-identity",
+    "manual-compact-native-boundary-and-resource-release",
+    "python-client-native-task-approval-history-and-usage"
+  ],
+  "sdk": "0.3.274",
+  "binary": "2.1.274 (Claude Code)",
+  "policy": {
+    "tools": [
+      "Read",
+      "Glob",
+      "Grep"
+    ],
+    "allowedTools": [
+      "Read",
+      "Glob",
+      "Grep",
+      "mcp__agent_orch__work_delegate",
+      "mcp__agent_orch__work_send",
+      "mcp__agent_orch__work_read",
+      "mcp__agent_orch__work_control"
+    ],
+    "disallowedTools": [],
+    "mcpServers": [
+      "agent_orch"
+    ]
+  },
+  "nativeInit": {
+    "tools": [
+      "Glob",
+      "Grep",
+      "Read",
+      "mcp__agent_orch__work_control",
+      "mcp__agent_orch__work_delegate",
+      "mcp__agent_orch__work_read",
+      "mcp__agent_orch__work_send"
+    ],
+    "mcpServers": [
+      {
+        "name": "agent_orch",
+        "status": "connected",
+        "source": "sdk"
+      }
+    ]
+  },
+  "scheduler": {
+    "maxActiveSessions": 1,
+    "maxQuarantinedDispatches": 32,
+    "executionOccupied": 0,
+    "quarantined": 0,
+    "quarantineReserved": 0,
+    "canDispatch": true,
+    "reasons": [],
+    "occupants": [],
+    "truncated": false,
+    "openConflicts": 0,
+    "conflicts": [],
+    "conflictsTruncated": false
+  },
+  "nativeSessionId": "b9e98fd2-d153-452e-b0c2-854ecb86b02f",
+  "usage": {
+    "records": [
+      {
+        "taskId": "25e3b1b6-1a0c-4857-8ac2-4eed781b3a55",
+        "dispatchId": "5a287270-1657-4449-8982-4c8de9212750",
+        "provider": "claude",
+        "id": "5a287270-1657-4449-8982-4c8de9212750:5a287270-1657-4449-8982-4c8de9212750:result",
+        "inputTokens": 200,
+        "cachedInputTokens": 0,
+        "cacheWriteInputTokens": 0,
+        "outputTokens": 40,
+        "raw": {
+          "input_tokens": 200,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 0,
+          "output_tokens": 40,
+          "output_tokens_details": {
+            "thinking_tokens": 0
+          },
+          "server_tool_use": {
+            "web_search_requests": 0,
+            "web_fetch_requests": 0
+          },
+          "service_tier": "standard",
+          "cache_creation": {
+            "ephemeral_1h_input_tokens": 0,
+            "ephemeral_5m_input_tokens": 0
+          },
+          "inference_geo": "",
+          "iterations": [],
+          "speed": "standard"
+        }
+      }
+    ],
+    "completeness": "reported"
+  },
+  "nativeToolNames": [
+    "Glob",
+    "Grep",
+    "Read",
+    "mcp__agent_orch__work_control",
+    "mcp__agent_orch__work_delegate",
+    "mcp__agent_orch__work_read",
+    "mcp__agent_orch__work_send"
+  ],
+  "modelChange": {
+    "fromModel": "claude-sonnet-4-6",
+    "toModel": "claude-haiku-4-5",
+    "requestModels": [
+      "claude-haiku-4-5"
+    ],
+    "forkNativeSessionDiffers": true
+  },
+  "python": {
+    "status": "completed",
+    "inspection": "found",
+    "usage": {
+      "records": [
+        {
+          "taskId": "6839dd81-5052-4fd9-a91a-3310d326504c",
+          "dispatchId": "d1318327-ba34-4af6-9299-1f81e1dadcca",
+          "provider": "claude",
+          "id": "d1318327-ba34-4af6-9299-1f81e1dadcca:d1318327-ba34-4af6-9299-1f81e1dadcca:result",
+          "inputTokens": 100,
+          "cachedInputTokens": 0,
+          "cacheWriteInputTokens": 0,
+          "outputTokens": 20,
+          "raw": {
+            "inputTokens": 100,
+            "cache_creation_input_tokens": 0,
+            "cache_read_input_tokens": 0,
+            "outputTokens": 20,
+            "output_tokens_details": {
+              "thinking_tokens": 0
+            },
+            "server_tool_use": {
+              "web_search_requests": 0,
+              "web_fetch_requests": 0
+            },
+            "service_tier": "standard",
+            "cache_creation": {
+              "ephemeral_1h_input_tokens": 0,
+              "ephemeral_5m_input_tokens": 0
+            },
+            "inference_geo": "",
+            "iterations": [],
+            "speed": "standard"
+          }
+        }
+      ],
+      "completeness": "reported"
+    }
+  },
+  "requests": 7,
+  "status": "passed",
+  "finishedAt": "2026-09-21T09:40:45.439Z"
+}

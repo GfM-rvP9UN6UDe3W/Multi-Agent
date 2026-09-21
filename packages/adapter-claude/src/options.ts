@@ -1,6 +1,7 @@
 import type { ChildProcessWithoutNullStreams } from 'node:child_process';
 import type { UUID } from 'node:crypto';
-import { lstatSync, readlinkSync, realpathSync } from 'node:fs';
+import { lstatSync, readlinkSync, realpathSync, statSync } from 'node:fs';
+import { homedir } from 'node:os';
 import { basename, dirname, isAbsolute, relative, resolve, sep } from 'node:path';
 import type {
   RuntimeInput,
@@ -80,6 +81,8 @@ export interface ClaudeOptionsContext<Extra extends object = object> {
   readonly options: Readonly<ClaudeHostOptions<Extra>>;
 }
 export interface ClaudeAdapterConfig<Extra extends object = object> {
+  /** Engine provider name; defaults to `claude`. Distinct names let one engine run several profiles. */
+  provider?: string;
   /** Host injection owns native dependency selection; also supply MCP/inspection callbacks as needed. */
   query?: ClaudeQueryFactory<Extra>;
   createMcpServer?: (tools: RuntimeTools) => unknown | Promise<unknown>;
@@ -94,6 +97,40 @@ export interface ClaudeAdapterConfig<Extra extends object = object> {
   turnTimeoutMs?: number;
   cleanupTimeoutMs?: number;
   interruptTimeoutMs?: number;
+  /** Existing absolute directories readable outside the workspace (SPEC-0014 F02). */
+  readRoots?: string[];
+  /** Absolute or workspace-relative paths that Read, Glob, Grep and sandboxed Bash cannot read. */
+  denyRead?: string[];
+  /** Set to false to restore reads outside the workspace; defaults to true. */
+  readFence?: boolean;
+}
+export interface ClaudeReadPolicy {
+  fence: boolean;
+  /** Canonical absolute directories. */
+  roots: string[];
+  /** Unresolved paths; relative entries resolve against each dispatch's workspace. */
+  deny: string[];
+}
+export function claudeReadPolicy(config: {
+  readRoots?: unknown;
+  denyRead?: unknown;
+  readFence?: unknown;
+}): ClaudeReadPolicy {
+  if (config.readFence !== undefined && typeof config.readFence !== 'boolean') invalid('readFence');
+  const roots = (config.readRoots === undefined ? [] : strings(config.readRoots, 'readRoots')).map(
+    (path) => {
+      if (!isAbsolute(path)) invalid('readRoots');
+      try {
+        const root = realpathSync(path);
+        if (!statSync(root).isDirectory()) invalid('readRoots');
+        return root;
+      } catch {
+        invalid('readRoots');
+      }
+    },
+  );
+  const deny = config.denyRead === undefined ? [] : strings(config.denyRead, 'denyRead');
+  return { fence: config.readFence !== false, roots, deny };
 }
 
 const owned = new Set<ClaudeOwnedOption>([
@@ -232,11 +269,18 @@ export function buildClaudeOptions<Extra extends object>(
   input: RuntimeInput,
   supplied: ClaudeHostOptions<Extra>,
   ownedOptions: ClaudeQueryBaseOptions,
+  readPolicy: ClaudeReadPolicy = { fence: true, roots: [], deny: [] },
 ): ClaudeQueryBaseOptions & Extra {
   validateClaudeOptions(supplied);
   const extra = copyClaudeOptions(supplied) as Record<string, unknown>;
   const workspace = canonical(input.workspace),
     state = canonical(input.stateDir);
+  const overlapsState = (path: string) => inside(path, state) || inside(state, path);
+  const readRoots = readPolicy.roots;
+  if (readRoots.some(overlapsState)) invalid('readRoots overlap private state');
+  const denyRead = paths(readPolicy.deny, workspace, 'denyRead');
+  const readable = (path: string) =>
+    !readPolicy.fence || inside(workspace, path) || readRoots.some((root) => inside(root, path));
   const write = input.permissionProfile === 'workspace-write';
   const tools =
     extra.tools === undefined
@@ -268,9 +312,24 @@ export function buildClaudeOptions<Extra extends object>(
     if (writable.some((path) => !registeredWritePaths.some((root) => inside(root, path))))
       invalid('sandbox exceeds registered write scope');
     filesystem.allowWrite = writable;
+    // allowRead takes precedence over denyRead, so it must never re-open private state.
+    const hostAllowRead =
+      filesystem.allowRead === undefined
+        ? []
+        : paths(filesystem.allowRead, workspace, 'sandbox.allowRead');
+    if (hostAllowRead.some(overlapsState)) invalid('sandbox.allowRead');
     filesystem.denyRead = [
-      ...new Set([...paths(filesystem.denyRead ?? [], workspace, 'sandbox.denyRead'), state]),
+      ...new Set([
+        ...paths(filesystem.denyRead ?? [], workspace, 'sandbox.denyRead'),
+        state,
+        ...denyRead,
+        ...(readPolicy.fence ? [canonical(homedir())] : []),
+      ]),
     ];
+    const allowRead = [
+      ...new Set([...hostAllowRead, ...(readPolicy.fence ? [workspace, ...readRoots] : [])]),
+    ];
+    if (allowRead.length) filesystem.allowRead = allowRead;
     filesystem.denyWrite = [
       ...new Set([...paths(filesystem.denyWrite ?? [], workspace, 'sandbox.denyWrite'), state]),
     ];
@@ -321,6 +380,12 @@ export function buildClaudeOptions<Extra extends object>(
       const path = canonical(resolve(workspace, target));
       if (inside(state, path) || (search && inside(path, state))) return deny();
       if (mutating && !writable.some((root) => inside(root, path))) return deny();
+      if (
+        !mutating &&
+        (!readable(path) ||
+          denyRead.some((denied) => inside(denied, path) || (search && inside(path, denied))))
+      )
+        return deny();
       return {};
     } catch {
       return deny();

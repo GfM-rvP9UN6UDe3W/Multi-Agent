@@ -86,6 +86,7 @@ export function taskSpec(value: unknown): TaskSpec {
     'dependencyTaskIds',
     'parentTaskId',
     'writeScope',
+    'writePath',
     'contextPlan',
     'budget',
     'contextEstimate',
@@ -145,6 +146,12 @@ export function taskSpec(value: unknown): TaskSpec {
       ? { parentTaskId: string(s.parentTaskId, 'parentTaskId', 128) }
       : {}),
     ...(s.writeScope !== undefined ? { writeScope: string(s.writeScope, 'writeScope', 128) } : {}),
+    ...(s.writePath !== undefined
+      ? (() => {
+          if (s.writeScope === undefined) fail('VALIDATION_ERROR', 'writePath requires writeScope');
+          return { writePath: string(s.writePath, 'writePath', 4096) };
+        })()
+      : {}),
     ...(plan ? { contextPlan: plan } : {}),
     ...(s.budget !== undefined ? { budget: validateBudget(s.budget) } : {}),
     ...(s.contextEstimate !== undefined

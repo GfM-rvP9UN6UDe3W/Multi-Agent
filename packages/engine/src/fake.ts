@@ -18,6 +18,7 @@ export function createFakeAdapter(
         permissionProfiles: ['read-only', 'workspace-write'],
         evidence: 'deterministic-test-runtime',
         fork: true,
+        forkModelChange: true,
         compact: true,
         manualCompact: true,
       };

@@ -72,11 +72,14 @@ test('AC-W04 schema helper rejects unsupported assertions and exercises nested/c
     /Unresolved schema reference/,
   );
   validate('EngineLimits', { maxActiveSessions: 1, maxQuarantinedDispatches: 1 });
+  // SPEC-0014 C01: owners may configure up to eight active sessions.
+  validate('EngineLimits', { maxActiveSessions: 8, maxQuarantinedDispatches: 8 });
   for (const invalid of [
     { maxQuarantinedDispatches: 1 },
     { maxActiveSessions: 2, maxQuarantinedDispatches: 1 },
+    { maxActiveSessions: 8, maxQuarantinedDispatches: 7 },
     { maxActiveSessions: 1.5 },
-    { maxActiveSessions: 3 },
+    { maxActiveSessions: 9 },
     { maxActiveSessions: true },
     { unexpected: true },
   ])

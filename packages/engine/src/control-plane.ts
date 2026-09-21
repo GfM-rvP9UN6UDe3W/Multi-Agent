@@ -721,13 +721,16 @@ export class ControlPlane {
           db.prepare('UPDATE sessions SET data=? WHERE id=?').run(JSON.stringify(session), row.id);
         }
       }
-      for (const table of ['messages', 'outbox', 'approvals', 'operations']) {
+      for (const table of ['messages', 'outbox', 'approvals', 'operations', 'handoffs']) {
+        // Backups from before SPEC-0014 have no handoffs table.
+        if (!db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?").get(table))
+          continue;
         for (const row of db.prepare(`SELECT id,data FROM ${table}`).all() as {
           id: string;
           data: string;
         }[]) {
           const value = JSON.parse(row.data);
-          if (table === 'approvals' && value.status === 'pending') {
+          if (['approvals', 'handoffs'].includes(table) && value.status === 'pending') {
             value.status = 'invalidated';
             value.revision++;
           } else if (['messages', 'outbox'].includes(table) && !settledMessages.has(value.status))

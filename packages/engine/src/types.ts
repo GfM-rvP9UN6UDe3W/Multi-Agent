@@ -41,6 +41,8 @@ export interface TaskSpec {
   dependencyTaskIds?: string[];
   parentTaskId?: string;
   writeScope?: string;
+  /** An existing workspace path inside `writeScope` that narrows the task's write paths. */
+  writePath?: string;
   contextPlan?: ContextPlan;
   budget?: MoneyBudget;
   contextEstimate?: { inputTokens: number; outputReserveTokens: number; toolReserveTokens: number };
@@ -85,6 +87,7 @@ export interface RoutingDecision {
 export interface SessionOpenSpec {
   runtime: RuntimeSpec;
   writeScope?: string;
+  writePath?: string;
 }
 export interface RuleReference {
   id: string;
@@ -122,6 +125,50 @@ export interface TaskSnapshot {
   routing?: RoutingDecision;
   kind?: 'work' | 'compaction';
   maintenanceOperationId?: string;
+  /** A reviewer's `revise` comment, kept until a dispatch that carried it returns a result. */
+  revisionRequest?: { approvalId: string; comment: string };
+  /** Set once a dispatch that carried the dependency results returned a result. */
+  dependencyResultsDelivered?: boolean;
+}
+export interface TaskListResult {
+  tasks: TaskSnapshot[];
+  nextCursor: string | null;
+}
+export interface HandoffListResult {
+  handoffs: HandoffRequest[];
+  nextCursor: string | null;
+}
+export interface RegisteredVerificationRule extends FrozenVerificationRule {
+  source: 'config' | 'runtime';
+}
+/** SPEC-0014 host workflow controls, advertised by `initialize`. */
+export type WorkflowFeature =
+  | 'dependencyResults'
+  | 'revise'
+  | 'delegationApproval'
+  | 'handoffs'
+  | 'writePath'
+  | 'runtimeRules'
+  | 'taskList';
+/** A model's request that the host hand work to a session outside its subtree (SPEC-0014 H). */
+export interface HandoffRequest {
+  handoffId: string;
+  status: 'pending' | 'accepted' | 'rejected' | 'expired' | 'invalidated';
+  revision: number;
+  fromTaskId: string;
+  fromSessionId: string;
+  fromDispatchId: string;
+  fromGeneration: number;
+  rootTaskId: string;
+  targetSessionId: string;
+  goal: string;
+  contextRefs: { artifactRef: string; version: 1 }[];
+  createdAt: string;
+  expiresAt: string;
+  resolvedAt?: string;
+  /** The host-created task that took over the work, for `accepted`. */
+  taskId?: string;
+  comment?: string;
 }
 export interface SessionSnapshot {
   retryIdentity?: RetryIdentity;
@@ -290,7 +337,9 @@ export interface ApprovalRequest {
   taskId: string;
   purpose: 'task_acceptance' | 'runtime_permission';
   revision: number;
-  status: 'pending' | 'approved' | 'denied' | 'expired' | 'invalidated';
+  status: 'pending' | 'approved' | 'denied' | 'revised' | 'expired' | 'invalidated';
+  /** The deciding client's comment; required for `revise`. */
+  comment?: string;
   target: {
     taskId: string;
     taskRevision: number;
@@ -375,6 +424,10 @@ export interface RuntimeCapabilities {
   permissionProfiles: ('read-only' | 'workspace-write')[];
   executionBudget: RuntimeBudgetCapabilities;
   executionEvidence?: RuntimeEvidenceCapabilities;
+  /** True only when a native fork can continue on another model with the source history. */
+  forkModelChange?: boolean;
+  /** True when Read/Glob/Grep are fenced to the workspace and configured read roots. */
+  readFence?: boolean;
   [key: string]: Json | undefined;
 }
 export interface RuntimeInput {
@@ -505,9 +558,10 @@ export interface EngineConfig {
     maxLogicalSessions?: number;
     maxQueuedTasks?: number;
   };
+  /** `model` is shorthand for a one-item `models` list; configure at most one of them. */
   providers?: Record<
     string,
-    { model?: string; permissionProfile?: 'read-only' | 'workspace-write' }
+    { model?: string; models?: string[]; permissionProfile?: 'read-only' | 'workspace-write' }
   >;
   approvalTtlMs?: number;
   runtimeApprovals?: { enabled?: boolean; ttlMs?: number };
@@ -523,6 +577,11 @@ export interface EngineConfig {
   allowCrossRootReuse?: boolean;
   tools?: {
     enabled?: boolean;
+    /** Admit children created by `work_delegate` paused until a client resumes them. */
+    approveDelegation?: boolean;
+    /** Turn out-of-subtree `work_delegate` reuse into host-resolved handoff requests. */
+    handoffs?: boolean;
+    handoffTtlMs?: number;
     maxDepth?: number;
     maxChildren?: number;
     maxCallsPerDispatch?: number;
@@ -546,6 +605,8 @@ export interface CallContext {
   signal?: AbortSignal;
   /** Trusted in-process binding. Never accepted from public JSON requests. */
   runtimeActor?: { sessionId: string; taskId: string; dispatchId: string; generation: number };
+  /** Internal: admit a model-delegated child paused for host approval (SPEC-0014 G01). */
+  delegationGate?: boolean;
 }
 export interface EventPage {
   events: EventEnvelope[];
