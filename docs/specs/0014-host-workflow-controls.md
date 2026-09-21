@@ -1,6 +1,6 @@
 # SPEC-0014: Host workflow controls
 
-Date: 2026-09-21. Status: implemented; remote CI pending. Evidence: [TDD-0014](../tdd/0014-host-workflow-controls.md). Origin: an embedding host's product requests, delivered together with [SPEC-0013](0013-fork-model-change.md) in one release candidate. Every behavior applies to every caller; features that change existing behavior say so.
+Date: 2026-09-21. Status: implemented in `4baa15b` with test fix `405d8f6`; [CI run 35594099807](https://github.com/masonlee39/Multi-Agent/actions/runs/35594099807) passed all six jobs. Evidence: [TDD-0014](../tdd/0014-host-workflow-controls.md). Origin: an embedding host's product requests, delivered together with [SPEC-0013](0013-fork-model-change.md) in one release candidate. Every behavior applies to every caller; features that change existing behavior say so.
 
 ## Problem and scope
 

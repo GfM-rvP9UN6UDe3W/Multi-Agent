@@ -1,6 +1,6 @@
 # TDD-0014: Host workflow controls
 
-Date: 2026-09-21. Base: `2ef400e` (SPEC-0013), branch `axion-rc8`. Local verification is complete; see Remote CI for the chronology. Nothing has been published.
+Date: 2026-09-21. Base: `2ef400e` (SPEC-0013), branch `axion-rc8`. Implementation `4baa15b` with test fix `405d8f6`; local verification and remote CI are complete. Nothing has been published.
 
 ## RED
 
@@ -44,6 +44,7 @@ Tests that were wrong and were fixed before counting GREEN: a false pass in G (t
 - The push of `4baa15b` ran [35593314024](https://github.com/masonlee39/Multi-Agent/actions/runs/35593314024): **5/6 jobs passed**. On macOS 14 with Node 24.14.0, `0014-G02 only tasks.resume releases a gated child and restarts its routing wait` failed at its wait after `tasks.resume` (test line 786): the child did not reach `waiting_approval`.
 - Reproduction: 24 parallel local runs of that test failed 12 times. The improved wait message showed each child `blocked/SCHEDULING_BLOCKED`, with `enqueuedAt` reset at approval and `deadlineAt` 50 ms later. Instrumentation showed the `tasks.resume` call itself taking 85–384 ms under load, most of it committing the transaction, so the test's 50 ms routing window elapsed before the scheduler could dispatch. The gate and the deadline restart behaved as specified; the test window was shorter than one loaded commit.
 - Fix (test only): the approval delay is simulated on the engine clock (10 s of review against a 2 s routing wait) instead of a real 120 ms sleep against 50 ms. The rewritten test passed 24/24 parallel runs, failed as expected when the deadline restart was removed, and the four new test files passed 32/32 parallel runs.
+- The push of `405d8f6` ran [35594099807](https://github.com/masonlee39/Multi-Agent/actions/runs/35594099807): **6/6 jobs passed**, including Node 22.18 and 24.14 on Ubuntu and macOS and the real Claude/Codex scripted-gateway jobs with the new read-fence case. This is one sample, not a repeated stability measurement.
 
 ## Remaining boundary
 
