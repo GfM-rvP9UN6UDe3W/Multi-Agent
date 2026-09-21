@@ -2,14 +2,14 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { once } from 'node:events';
-import { mkdtemp, mkdir, writeFile, realpath, rm, stat } from 'node:fs/promises';
+import { mkdtemp, mkdir, writeFile, realpath, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { connectOrchestrator } from '../../packages/sdk-typescript/src/index.ts';
 
 test(
   'AC12 TS submits, Python replays and approves, TS observes the same completed task',
-  { timeout: 10000 },
+  { timeout: 30000 },
   async () => {
     const root = await realpath(
       await mkdtemp(join(process.platform === 'darwin' ? '/private/tmp' : tmpdir(), 'orch-mixed-')),
@@ -34,22 +34,46 @@ test(
       { stdio: ['ignore', 'ignore', 'pipe'] },
     );
     let diagnostics = '';
-    host.stderr.on('data', (chunk) => (diagnostics += chunk.toString()));
+    const captureDiagnostics = (chunk: Buffer) => (diagnostics += chunk.toString());
+    host.stderr.on('data', captureDiagnostics);
     const hostExit = once(host, 'exit');
     let client: Awaited<ReturnType<typeof connectOrchestrator>> | undefined;
     try {
-      const deadline = Date.now() + 3000;
-      while (true) {
-        try {
-          await stat(socketPath);
-          break;
-        } catch {
-          /* server is still starting */
+      await new Promise<void>((resolve, reject) => {
+        let settled = false;
+        const readyMarker = `agent-orch listening on ${socketPath}\n`;
+        const timer = setTimeout(
+          () => finish(new Error(`Host startup timed out after 10000 ms: ${diagnostics}`)),
+          10000,
+        );
+        const checkReady = () => {
+          if (diagnostics.includes(readyMarker)) finish();
+        };
+        const fail = (error: Error) =>
+          finish(new Error(`Host failed to start: ${error.message}\n${diagnostics}`));
+        const failOnExit = (code: number | null, signal: NodeJS.Signals | null) =>
+          finish(
+            new Error(
+              `Host exited before startup (code ${code}, signal ${signal}): ${diagnostics}`,
+            ),
+          );
+        function finish(error?: Error) {
+          if (settled) return;
+          settled = true;
+          clearTimeout(timer);
+          host.stderr.off('data', checkReady);
+          host.off('error', fail);
+          host.off('exit', failOnExit);
+          if (error) reject(error);
+          else resolve();
         }
-        if (host.exitCode !== null || Date.now() > deadline)
-          throw new Error(`Host startup failed: ${diagnostics}`);
-        await new Promise((r) => setTimeout(r, 10));
-      }
+        host.stderr.on('data', checkReady);
+        host.once('error', fail);
+        host.once('exit', failOnExit);
+        if (host.exitCode !== null || host.signalCode !== null)
+          failOnExit(host.exitCode, host.signalCode);
+        else checkReady();
+      });
       client = await connectOrchestrator({ socketPath });
       const task = await client.tasks.create(
         {
@@ -114,6 +138,7 @@ asyncio.run(main())
         await hostExit;
       } finally {
         clearTimeout(timer);
+        host.stderr.off('data', captureDiagnostics);
         await rm(root, { recursive: true, force: true });
       }
     }

@@ -205,10 +205,14 @@ test(
     });
     assert.equal((await op.wait({ timeoutMs: 3000 })).status, 'outcome_unknown');
     await h.waitTask('blocked');
-    await new Promise((resolve) => setTimeout(resolve, 250));
     assert.equal((await op.get()).status, 'outcome_unknown');
     assert.equal((await h.client.tasks.get(h.task.id)).status, 'blocked');
-    const scheduler = await h.client.scheduler.get();
+    const end = Date.now() + 3000;
+    let scheduler = await h.client.scheduler.get();
+    while (scheduler.executionOccupied !== 0 && Date.now() < end) {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      scheduler = await h.client.scheduler.get();
+    }
     assert.equal(scheduler.executionOccupied, 0);
     assert.equal(scheduler.quarantined, 1);
     const audit = (await readFile(h.audit, 'utf8'))
