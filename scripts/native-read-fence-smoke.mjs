@@ -133,7 +133,8 @@ try {
       evidence.sandbox = request.options.sandbox;
       return sdk.query(request);
     },
-    observeExecutionStop: async () => ({ version: 1, stopped: true }),
+    // A scripted attestation; the observer contract is a boolean.
+    observeExecutionStop: async () => true,
   });
   const events = [];
   for await (const event of adapter.execute({

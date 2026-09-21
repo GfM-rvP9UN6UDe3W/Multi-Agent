@@ -245,6 +245,7 @@ const server = createServer(async (request, response) => {
   }
 });
 let client, adapter, engine, host;
+let named = [];
 try {
   await new Promise((res, rej) => {
     server.once('error', rej);
@@ -307,6 +308,40 @@ try {
       turnTimeoutMs: 60000,
       cleanupTimeoutMs: 5000,
     });
+    // SPEC-0014 P02: two more Claude adapters under other names in the same engine, one writable.
+    const nameEvidence = (evidence.providerNames = {});
+    named = [
+      ['claude-read', {}],
+      [
+        'claude-write',
+        {
+          permissionProfile: 'workspace-write',
+          // The scripted turn runs no tool, so nothing can outlive it; this attests only that, for
+          // the exact target, which must carry this adapter's name. A real host observes the stop.
+          observeExecutionStop: async ({ target }) => {
+            nameEvidence['claude-write'].stopTarget = target.provider;
+            return target.provider === 'claude-write';
+          },
+        },
+      ],
+    ].map(([name, extra]) =>
+      createClaudeAdapter({
+        provider: name,
+        ...extra,
+        query(request) {
+          nameEvidence[name] = {
+            permissionMode: request.options.permissionMode,
+            sandbox: request.options.sandbox?.enabled === true,
+          };
+          return sdk.query(request);
+        },
+        createMcpServer: (tools) => createClaudeMcpServer(tools, { sdk, zod }),
+        inspectSession: (input) => inspectClaudeSession(input, sdk),
+        requestTimeoutMs: 30000,
+        turnTimeoutMs: 60000,
+        cleanupTimeoutMs: 5000,
+      }),
+    );
   } else {
     binary = executable?.includes('/') ? resolve(executable) : (executable ?? 'codex');
     const settings = {
@@ -350,8 +385,16 @@ try {
   engine = await createEngine({
     workspace,
     stateDir,
-    adapters: [adapter],
-    ...(forkModel ? { providers: { [provider]: { models: [runtimeModel, forkModel] } } } : {}),
+    adapters: [adapter, ...named],
+    ...(forkModel
+      ? {
+          providers: {
+            [provider]: { models: [runtimeModel, forkModel] },
+            'claude-read': { model: runtimeModel },
+            'claude-write': { model: runtimeModel, permissionProfile: 'workspace-write' },
+          },
+        }
+      : {}),
     tools: { enabled: true },
     storage: { emergencyBytes: 4096, minFreeBytes: 0 },
     timeouts: { acceptanceMs: 30000, turnMs: 60000 },
@@ -544,6 +587,40 @@ try {
       outsideResult: denial.slice(0, 300),
     };
     evidence.cases.push('read-fence-denies-outside-read-and-allows-workspace-read');
+    for (const name of ['claude-read', 'claude-write']) {
+      const handle = await client.tasks.create({
+        ...spec,
+        goal: `ORCH_NATIVE_GATEWAY_NAMES: ${name} returns ORCH_NATIVE_GATEWAY_OK`,
+        runtime: { provider: name, model: runtimeModel },
+      });
+      const done = await waitApproval(handle);
+      assert.equal(done.result, 'ORCH_NATIVE_GATEWAY_OK');
+      const check = await client.approvals.get(done.approvalId);
+      await client.approvals.decide(check.approvalId, {
+        choice: 'approve',
+        expectedRevision: check.revision,
+      });
+      assert.equal((await handle.wait({ timeoutMs: 5000 })).status, 'completed');
+      const types = (await client.events.read({ taskId: done.id, limit: 1000 })).events.map(
+        (event) => event.type,
+      );
+      assert.ok(types.includes('execution.released'), `${name}: ${types}`);
+      assert.ok(!types.includes('execution.evidence_rejected'), `${name}: ${types}`);
+      const used = await client.sessions.get(done.sessionId);
+      assert.equal(used.provider, name);
+      Object.assign(evidence.providerNames[name], {
+        profile: used.permissionProfile ?? 'read-only',
+        nativeSessionId: used.providerSessionId,
+        leaseReleased: true,
+        evidenceRejected: false,
+      });
+    }
+    assert.equal(evidence.providerNames['claude-write'].profile, 'workspace-write');
+    assert.notEqual(
+      evidence.providerNames['claude-read'].nativeSessionId,
+      evidence.providerNames['claude-write'].nativeSessionId,
+    );
+    evidence.cases.push('two-named-claude-adapters-read-only-and-writable-in-one-engine');
   }
   const reused = await routed(await client.sessions.get(session.id));
   assert.equal(reused.providerSessionId, session.providerSessionId);
@@ -596,6 +673,7 @@ try {
     await host?.close({ mode: 'interrupt', timeoutMs: 10000 });
     if (!host) await engine?.close();
     await adapter?.close();
+    for (const extra of named) await extra.close();
   } catch (error) {
     evidence.cleanupError = error.message;
     process.exitCode = 1;

@@ -1,0 +1,195 @@
+{
+  "provider": "claude",
+  "node": "v24.14.0",
+  "startedAt": "2026-09-21T14:42:47.347Z",
+  "modelCalls": 0,
+  "responseSource": "scripted-loopback-gateway",
+  "credentials": "synthetic",
+  "cases": [
+    "engine-task-native-mcp-human-approval-resource-release",
+    "retained-native-history-read-only-inspection",
+    "fork-distinct-native-identity-and-inherited-history",
+    "fork-model-change-resends-source-history-to-target-model",
+    "read-fence-denies-outside-read-and-allows-workspace-read",
+    "two-named-claude-adapters-read-only-and-writable-in-one-engine",
+    "serial-reuse-preserves-native-identity",
+    "manual-compact-native-boundary-and-resource-release",
+    "python-client-native-task-approval-history-and-usage"
+  ],
+  "sdk": "0.3.274",
+  "providerNames": {
+    "claude-read": {
+      "permissionMode": "dontAsk",
+      "sandbox": false,
+      "profile": "read-only",
+      "nativeSessionId": "74245120-4482-4a80-bf4c-b4be3bca875f",
+      "leaseReleased": true,
+      "evidenceRejected": false
+    },
+    "claude-write": {
+      "permissionMode": "dontAsk",
+      "sandbox": true,
+      "stopTarget": "claude-write",
+      "profile": "workspace-write",
+      "nativeSessionId": "8105c620-c391-4a3d-86ff-30be8e5af742",
+      "leaseReleased": true,
+      "evidenceRejected": false
+    }
+  },
+  "binary": "2.1.274 (Claude Code)",
+  "policy": {
+    "tools": [
+      "Read",
+      "Glob",
+      "Grep"
+    ],
+    "allowedTools": [
+      "Read",
+      "Glob",
+      "Grep",
+      "mcp__agent_orch__work_delegate",
+      "mcp__agent_orch__work_send",
+      "mcp__agent_orch__work_read",
+      "mcp__agent_orch__work_control"
+    ],
+    "disallowedTools": [],
+    "mcpServers": [
+      "agent_orch"
+    ]
+  },
+  "nativeInit": {
+    "tools": [
+      "Glob",
+      "Grep",
+      "Read",
+      "mcp__agent_orch__work_control",
+      "mcp__agent_orch__work_delegate",
+      "mcp__agent_orch__work_read",
+      "mcp__agent_orch__work_send"
+    ],
+    "mcpServers": [
+      {
+        "name": "agent_orch",
+        "status": "connected",
+        "source": "sdk"
+      }
+    ]
+  },
+  "scheduler": {
+    "maxActiveSessions": 1,
+    "maxQuarantinedDispatches": 32,
+    "executionOccupied": 0,
+    "quarantined": 0,
+    "quarantineReserved": 0,
+    "canDispatch": true,
+    "reasons": [],
+    "occupants": [],
+    "truncated": false,
+    "openConflicts": 0,
+    "conflicts": [],
+    "conflictsTruncated": false
+  },
+  "nativeSessionId": "3c97d3fc-a20a-4183-9b48-f7238e8e240d",
+  "usage": {
+    "records": [
+      {
+        "taskId": "aed8393e-4a60-4580-b1c7-e35708a05dd5",
+        "dispatchId": "7db3ccbd-d301-48d4-9abb-ed825869c69f",
+        "provider": "claude",
+        "id": "7db3ccbd-d301-48d4-9abb-ed825869c69f:7db3ccbd-d301-48d4-9abb-ed825869c69f:result",
+        "inputTokens": 200,
+        "cachedInputTokens": 0,
+        "cacheWriteInputTokens": 0,
+        "outputTokens": 40,
+        "raw": {
+          "input_tokens": 200,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 0,
+          "output_tokens": 40,
+          "output_tokens_details": {
+            "thinking_tokens": 0
+          },
+          "server_tool_use": {
+            "web_search_requests": 0,
+            "web_fetch_requests": 0
+          },
+          "service_tier": "standard",
+          "cache_creation": {
+            "ephemeral_1h_input_tokens": 0,
+            "ephemeral_5m_input_tokens": 0
+          },
+          "inference_geo": "",
+          "iterations": [],
+          "speed": "standard"
+        }
+      }
+    ],
+    "completeness": "reported"
+  },
+  "nativeToolNames": [
+    "Glob",
+    "Grep",
+    "Read",
+    "mcp__agent_orch__work_control",
+    "mcp__agent_orch__work_delegate",
+    "mcp__agent_orch__work_read",
+    "mcp__agent_orch__work_send"
+  ],
+  "modelChange": {
+    "fromModel": "claude-sonnet-4-6",
+    "toModel": "claude-haiku-4-5",
+    "requestModels": [
+      "claude-haiku-4-5"
+    ],
+    "forkNativeSessionDiffers": true
+  },
+  "readFence": {
+    "deniedOutsideRead": true,
+    "allowedWorkspaceRead": true,
+    "outsideIsError": true,
+    "outsideResult": "\"Tool call violates the adapter workspace or private-state policy\""
+  },
+  "python": {
+    "status": "completed",
+    "inspection": "found",
+    "usage": {
+      "records": [
+        {
+          "taskId": "8a365692-18ce-492a-b4a8-99b5c8e7783d",
+          "dispatchId": "e50fb894-7195-4524-8da2-8f25444115bf",
+          "provider": "claude",
+          "id": "e50fb894-7195-4524-8da2-8f25444115bf:e50fb894-7195-4524-8da2-8f25444115bf:result",
+          "inputTokens": 100,
+          "cachedInputTokens": 0,
+          "cacheWriteInputTokens": 0,
+          "outputTokens": 20,
+          "raw": {
+            "inputTokens": 100,
+            "cache_creation_input_tokens": 0,
+            "cache_read_input_tokens": 0,
+            "outputTokens": 20,
+            "output_tokens_details": {
+              "thinking_tokens": 0
+            },
+            "server_tool_use": {
+              "web_search_requests": 0,
+              "web_fetch_requests": 0
+            },
+            "service_tier": "standard",
+            "cache_creation": {
+              "ephemeral_1h_input_tokens": 0,
+              "ephemeral_5m_input_tokens": 0
+            },
+            "inference_geo": "",
+            "iterations": [],
+            "speed": "standard"
+          }
+        }
+      ],
+      "completeness": "reported"
+    }
+  },
+  "requests": 11,
+  "status": "passed",
+  "finishedAt": "2026-09-21T14:42:50.247Z"
+}
