@@ -64,6 +64,7 @@ Package exports are ESM-only. The package smoke verifies CJS and ESM single-file
 - [Bundled-host delivery specification](docs/specs/0010-bundled-host-delivery.md)
 - [Release-readiness fixes and native verification](docs/specs/0011-release-readiness.md)
 - [Client-pause precedence and scoped capacity](docs/specs/0012-tool-control-and-capacity.md)
+- [Optional routing layer with pluggable judges, including TypeSafe Jev](docs/specs/0018-routing-layer.md)
 - [Current acceptance gates](docs/acceptance/readiness.md)
 - [TDD evidence](docs/tdd/0001-evidence.md)
 - [Contribution guidelines](CONTRIBUTING.md)
@@ -85,8 +86,9 @@ Package exports are ESM-only. The package smoke verifies CJS and ESM single-file
 | Local protocol | Wire 2.0, immutable expectedStoreId on mutations, JSON-RPC 2.0, 1 MiB frames; per-connection and host-wide resource limits |
 | CLI | host, doctor, submit, run, attach, status, approve, control; private tool-bridge |
 | Delivery | Five local npm tarballs, Python wheel/sdist, clean-install smoke script, configured macOS/Linux version matrix |
+| Routing layer | Optional SDK layer, `@agent-orch/sdk/routing` and `agent_orch.routing`: a judge you choose, such as the built-in TypeSafe Jev adapter, proposes which agent in a group takes a request and which results it carries; the engine validates and executes the declaration |
 
-The owner enables model tools with `tools: { enabled: true }` and runtime permission requests with `runtimeApprovals: { enabled: true }`. Defaults preserve the smaller tool surface. The engine does not infer task independence from prose or select an economic routing strategy automatically. `contextPlan` declares fresh/reuse/fork or in-turn continuation intent. Fork preparation returns a logical receipt; native forking happens on first use and must produce a distinct native ID. Checks execute trusted owner-registered commands and detect changed baselines; this is not an OS isolation boundary for arbitrary executables.
+The owner enables model tools with `tools: { enabled: true }` and runtime permission requests with `runtimeApprovals: { enabled: true }`. Defaults preserve the smaller tool surface. The engine does not infer task independence from prose or select an economic routing strategy automatically; the optional [routing layer](#routing-layer-optional) can propose declarations with a judge the application chooses. `contextPlan` declares fresh/reuse/fork or in-turn continuation intent. Fork preparation returns a logical receipt; native forking happens on first use and must produce a distinct native ID. Checks execute trusted owner-registered commands and detect changed baselines; this is not an OS isolation boundary for arbitrary executables.
 
 New A2 turns have a default total budget of 1,800 seconds. Proven execution stop and local cleanup may release an unknown dispatch's execution slot while its business outcome remains quarantined: A=`executionOccupied` counts held execution leases; Q=`quarantined` counts unknown business outcomes; R=`quarantineReserved` reserves capacity for unquarantined in-flight execution, including pending cleanup. Dispatch requires `A < maxActiveSessions` and `Q + R < maxQuarantinedDispatches`, with defaults of 2 and 32. Two unknown dispatches that may still be executing occupy both slots. Releasing A does not reduce Q, resume work, resend requests, or approve results.
 
@@ -290,6 +292,70 @@ node examples/typescript/usage-forwarding.ts
 ```
 
 It uses only temporary SQLite stores and a fake runtime. It reopens the host outbox, resumes and deliberately replays cursors, and simulates a lost delivery acknowledgment: two delivery attempts produce one ledger row. A real destination must honor `(storeId, usageRecord.id)` idempotency. Commit the host outbox before advancing its checkpoint. Historical rows are not backfilled into events; abrupt loss before a provider observation remains unknown. Turn-level aggregate usage is not proof of an audit record for every native model request. This does not connect to Axion or Work Nexus. See [wiring details](SDK_USAGE_AND_WIRING.md#52-implemented-host-policy-and-usage-forwarding) and [verification evidence](docs/tdd/0007-host-policy-and-usage.md).
+
+## Routing layer (optional)
+
+The engine executes the routing a caller declares. It never decides which agent should take a request. The optional routing layer in both SDKs makes that decision with a judge you choose, and returns an ordinary declaration for you to review and submit. It decides:
+
+- **Who takes the request.** An idle agent whose work fits it, or a busy one worth waiting for: the request waits up to 20 minutes for it, then starts a fresh session. Otherwise a fresh session runs in parallel.
+- **What the agent receives.** Up to 20 earlier results from other relevant agents, most relevant first.
+- **Which runtime and model fresh work uses.** A read-only or writable runtime, and a small, default or large model.
+- **Who hears about a finding.** The agents a new finding affects receive it as a `finding` message.
+
+It routes only inside one group of agents. With `scope: 'root'`, the default, a group is one root task. With `scope: 'engine'`, a group is a whole engine; use this when the host runs one engine per group, with its own workspace and `allowCrossRootReuse`. The engine still enforces its compatibility, cross-root, capacity, write-conflict, queue and approval rules, so a wrong judgment cannot bypass them.
+
+### TypeSafe Jev as the judge
+
+[Jev](https://typesafe.ai) is TypeSafe's fast judgment model. It answers choice, yes/no and score questions with calibrated probabilities and never generates text. Each routing decision costs one Jev call. On 2026-09-22, `jev-1.13.0` answered a four-agent team's 33 routing judgments in 0.8 seconds for about $0.0001, including requests written in Chinese. Those were small offline trials; see [SPEC-0018](docs/specs/0018-routing-layer.md).
+
+```ts
+import { createJevJudge, createRouter } from '@agent-orch/sdk/routing';
+
+const router = createRouter({
+  orchestrator: orch,
+  judge: createJevJudge({ apiKey: process.env.JEV_API_KEY! }), // pinned to jev-1.13.0
+  runtimes: {
+    // Each model must be in that provider's configured model list.
+    readOnly: { provider: 'claude-read', model: 'default-model', small: 'small-model' },
+    writable: { provider: 'claude-write', model: 'default-model', large: 'large-model' },
+  },
+  scope: 'engine', // one engine per group, configured with allowCrossRootReuse
+  describe: (agent) => `${roleOf(agent.session.id)}: ${agent.task.spec.goal}`,
+});
+
+const proposal = await router.route({ goal: text, acceptance, members: groupSessionIds });
+if (!proposal.needsConfirmation || (await userAccepts(proposal))) await router.submit(proposal);
+
+const plan = await router.notifications({ text: finding, fromSessionId, members: groupSessionIds });
+await router.notify(plan); // plan.confirm and plan.followUp are left to the host
+```
+
+```python
+from agent_orch.routing import JevJudge, RouteRuntime, Router
+
+router = Router(orch, JevJudge(os.environ["JEV_API_KEY"]), scope="engine",
+                read_only=RouteRuntime("claude-read", "default-model", small="small-model"),
+                writable=RouteRuntime("claude-write", "default-model", large="large-model"))
+proposal = await router.route(text, acceptance, group_session_ids)
+if not proposal.needs_confirmation:
+    await router.submit(proposal)
+```
+
+### Your own judge, or your own router
+
+A judge is any object with `evaluate({ state, questions })` that answers with probabilities. It can wrap another model or plain rules. The answers are `{ type: 'choice', choice, probabilities, confidence }`, `{ type: 'yesno', probability }` or `{ type: 'score', probabilities, confidence }`. The question ids and the state shape are listed in the [wiring guide](SDK_USAGE_AND_WIRING.md#83-optional-routing-layer). You can also skip the layer and declare `contextPlan` yourself.
+
+### Boundaries
+
+- **Nothing runs without you.** `route()` never submits.
+  - `needsConfirmation` is set on low confidence, a narrow margin between the top two options, uncertainty about whether files change, or a missing runtime.
+  - `reasons` records why each proposal looks the way it does.
+- **A failing judge falls back.** If the judge fails or times out, the proposal becomes a fresh session without context, and it asks for confirmation by default.
+- **What leaves the process.** Only the goal, one description per member and a finding's text are sent to the judge.
+  - Agents appear under neutral aliases, never engine ids.
+  - The default description is the latest task goal plus the first 600 characters of its result.
+  - Pass `describe` to control or redact that text, and to give agents a stable role, because the latest task changes as work is routed.
+- **Verification.** The tests use scripted judges, a local mock of the Jev API and a real engine with the fake runtime. Live Jev calls are not part of CI, and the default thresholds come from small offline trials.
 
 ## Claude/Codex integration status and version baselines
 

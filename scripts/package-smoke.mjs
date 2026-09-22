@@ -72,6 +72,7 @@ try {
   for (const name of ['work', 'state']) await mkdir(join(base, name));
   const embedded = `import assert from 'node:assert/strict';
 import {createOrchestrator,validateWire} from '@agent-orch/sdk';
+import {createJevJudge,createRouter} from '@agent-orch/sdk/routing';
 import {createFakeAdapter} from '@agent-orch/engine/fake';
 const client=await createOrchestrator({workspace:${JSON.stringify(join(base, 'work'))},stateDir:${JSON.stringify(join(base, 'state'))},storage:{emergencyBytes:4096,minFreeBytes:0},adapters:[createFakeAdapter()]});
 try {
@@ -80,7 +81,12 @@ try {
   if(event.type==='approval.requested'){const approval=await client.approvals.get(String(event.data.approvalId));await client.approvals.decide(approval.approvalId,{choice:'approve',expectedRevision:approval.revision});break;}
  }
  const done=await task.wait({timeoutMs:5000});assert.equal(done.status,'completed');validateWire('TaskSnapshot',done);
- console.log(JSON.stringify({mode:'installed-embedded',status:done.status,modelCalls:0}));
+ assert.equal(typeof createJevJudge,'function');
+ const judge={async evaluate({questions}){const answers={};for(const [id,q] of Object.entries(questions))answers[id]=q.type==='choice'?{type:'choice',choice:'A1',probabilities:{A1:0.95,fresh:0.05},confidence:0.95}:q.type==='yesno'?{type:'yesno',probability:0.9}:{type:'score',probabilities:q.levels.map((_,i)=>i===1?1:0),confidence:1};return{answers};}};
+ const router=createRouter({orchestrator:client,judge,runtimes:{readOnly:{provider:'fake',model:'fixture'}}});
+ const proposal=await router.route({goal:'packaged follow-up',acceptance:{mode:'human',criteria:['fixture output']},members:[done.sessionId],rootTaskId:done.id,needsWrites:false});
+ assert.deepEqual(proposal.decision,{mode:'reuse',sessionId:done.sessionId});
+ console.log(JSON.stringify({mode:'installed-embedded',status:done.status,routing:proposal.decision.mode,modelCalls:0}));
 }finally{await client.close();}`;
   await writeFile(join(base, 'embedded.mjs'), embedded);
   results.push(JSON.parse(run(process.execPath, ['embedded.mjs'])));
