@@ -7,8 +7,11 @@ executes as before. Nothing here changes the engine or the wire. Standard librar
 from __future__ import annotations
 
 import asyncio
+import http.client
 import json
 import math
+import socket
+import threading
 import time
 import urllib.error
 import urllib.request
@@ -27,6 +30,17 @@ class JudgeError(Exception):
         super().__init__(message)
         self.code = code
         self.status = status
+
+
+RoutingErrorCode = Literal["ROUTING_ROOT_MISMATCH", "ROUTING_SOURCE_NOT_MEMBER"]
+
+
+class RoutingError(Exception):
+    """A request that would leave the router's group. It is refused before the judge is asked."""
+
+    def __init__(self, code: str, message: str):
+        super().__init__(message)
+        self.code = code
 
 
 class Judge(Protocol):
@@ -102,8 +116,118 @@ def _jev_question(question: Mapping[str, Any]) -> dict[str, Any]:
     return {"type": "noul", "instructions": question["instructions"], **({"criteria": criteria} if criteria else {})}
 
 
+class _Abandoned(TimeoutError):
+    """The waiting coroutine gave up on the request; the worker stops at its next step."""
+
+
+def _shutdown(sock: socket.socket) -> None:
+    try:
+        # The plain socket call: it also ends a TLS read that another thread is blocked in.
+        socket.socket.shutdown(sock, socket.SHUT_RDWR)
+    except OSError:
+        pass
+
+
+def _settle(future: asyncio.Future, value: Any, error: BaseException | None) -> None:
+    if not future.done():
+        if error is None:
+            future.set_result(value)
+        else:
+            future.set_exception(error)
+
+
+class _Exchange:
+    """One HTTP request on a worker thread, bounded by an absolute deadline and abortable.
+
+    The waiting coroutine enforces the deadline and calls ``abort`` when it stops waiting, at the
+    deadline or on cancellation; abort shuts the connection down, which ends a blocked read at once.
+    The worker also bounds each socket operation by the time left and checks the deadline between
+    reads of the body, so a body that keeps arriving slowly cannot extend it. A name lookup cannot be
+    interrupted with the standard library: the worker then sends nothing after the deadline and ends
+    when the lookup returns.
+    """
+
+    def __init__(self, request: urllib.request.Request, deadline: float):
+        self._request = request
+        self._deadline = deadline
+        self._lock = threading.Lock()
+        self._sock: socket.socket | None = None
+        self._abandoned = False
+
+    def remaining(self) -> float:
+        if self._abandoned:
+            raise _Abandoned("The request was abandoned")
+        left = self._deadline - time.monotonic()
+        if left <= 0:
+            raise TimeoutError("The Jev deadline passed")
+        return left
+
+    def attach(self, sock: socket.socket) -> None:
+        with self._lock:
+            self._sock = sock
+            abandoned = self._abandoned
+        if abandoned:
+            _shutdown(sock)
+            raise _Abandoned("The request was abandoned")
+
+    def abort(self) -> None:
+        with self._lock:
+            self._abandoned = True
+            sock = self._sock
+        if sock is not None:
+            _shutdown(sock)
+
+    def run(self) -> tuple[int, bytes]:
+        exchange = self
+
+        class Connection(http.client.HTTPConnection):
+            def connect(self) -> None:
+                exchange.remaining()
+                super().connect()
+                exchange.attach(self.sock)
+
+        class SecureConnection(http.client.HTTPSConnection):
+            def connect(self) -> None:
+                exchange.remaining()
+                super().connect()
+                exchange.attach(self.sock)
+
+        class Handler(urllib.request.HTTPHandler):
+            def http_open(self, req):
+                return self.do_open(Connection, req)
+
+        class SecureHandler(urllib.request.HTTPSHandler):
+            def https_open(self, req):
+                return self.do_open(SecureConnection, req)
+
+        # Connecting, sending and reading the headers are bounded by the socket timeout, which is
+        # the time left when the request starts, and by abort.
+        opener = urllib.request.build_opener(Handler(), SecureHandler())
+        try:
+            response = opener.open(self._request, timeout=self.remaining())
+        except urllib.error.HTTPError as error:
+            error.close()  # Only the status of a refusal is used; its body is never read.
+            return error.code, b""
+        with response:
+            chunks = []
+            # The response closes its connection itself once the whole body has arrived.
+            while not response.isclosed():
+                left = self.remaining()
+                if self._sock is not None:
+                    self._sock.settimeout(left)
+                chunk = response.read1(65536)
+                if not chunk:
+                    break
+                chunks.append(chunk)
+            return response.status, b"".join(chunks)
+
+
 class JevJudge:
-    """TypeSafe's Jev behind the ``Judge`` protocol: ``POST /v1/systemone`` with a bearer token."""
+    """TypeSafe's Jev behind the ``Judge`` protocol: ``POST /v1/systemone`` with a bearer token.
+
+    ``timeout_ms`` bounds one whole evaluation, including its single retry. Each request runs on its
+    own daemon thread, which the evaluation stops when the deadline passes or it is cancelled.
+    """
 
     def __init__(self, api_key: str, *, model: str = "jev-1.13.0", base_url: str = "https://api.typesafe.ai",
                  timeout_ms: int = 10_000):
@@ -114,15 +238,35 @@ class JevJudge:
         self.endpoint = base_url.rstrip("/") + "/v1/systemone"
         self.timeout_ms = timeout_ms
 
-    def _post(self, body: bytes, timeout: float) -> tuple[int, bytes]:
+    async def _post(self, body: bytes, deadline: float) -> tuple[int, bytes]:
         request = urllib.request.Request(self.endpoint, data=body, method="POST", headers={
             "content-type": "application/json", "authorization": f"Bearer {self._api_key}"})
+        exchange = _Exchange(request, deadline)
+        loop = asyncio.get_running_loop()
+        settled: asyncio.Future = loop.create_future()
+
+        def work() -> None:
+            value, error = None, None
+            try:
+                value = exchange.run()
+            except Exception as failure:  # noqa: BLE001 - handed to the waiting coroutine
+                error = failure
+            try:
+                loop.call_soon_threadsafe(_settle, settled, value, error)
+            except RuntimeError:  # The event loop closed; nobody waits any more.
+                pass
+
+        threading.Thread(target=work, name="agent-orch-jev", daemon=True).start()
         try:
-            with urllib.request.urlopen(request, timeout=timeout) as response:
-                return response.status, response.read()
-        except urllib.error.HTTPError as error:
-            with error:
-                return error.code, error.read()
+            await asyncio.wait((settled,), timeout=max(0.0, deadline - time.monotonic()))
+        finally:
+            if not settled.done():
+                # At the deadline or on cancellation: stop the worker instead of leaving it reading.
+                settled.cancel()
+                exchange.abort()
+        if settled.cancelled():
+            raise TimeoutError("The Jev deadline passed")
+        return settled.result()
 
     async def evaluate(self, state: Any, questions: Mapping[str, Mapping[str, Any]]) -> dict[str, Any]:
         body = json.dumps({"state": state, "model": self.model,
@@ -133,11 +277,10 @@ class JevJudge:
             return JudgeError("JUDGE_TIMEOUT", f"Jev did not answer within {self.timeout_ms} ms")
 
         for attempt in (1, 2):
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
+            if deadline - time.monotonic() <= 0:
                 raise timed_out()
             try:
-                status, payload = await asyncio.to_thread(self._post, body, remaining)
+                status, payload = await self._post(body, deadline)
             except TimeoutError:
                 raise timed_out() from None
             except urllib.error.URLError as error:
@@ -146,7 +289,7 @@ class JevJudge:
                 if attempt == 1:
                     continue
                 raise JudgeError("JUDGE_UNAVAILABLE", f"Jev request failed: {error.reason}") from None
-            except OSError as error:
+            except (OSError, http.client.HTTPException) as error:
                 if attempt == 1:
                     continue
                 raise JudgeError("JUDGE_UNAVAILABLE", f"Jev request failed: {error}") from None
@@ -216,6 +359,14 @@ class Candidate:
 
 @dataclass(frozen=True)
 class RouteProposal:
+    """A proposed declaration. The host decides whether to submit it.
+
+    ``confidence`` is the lower of ``judge_confidence`` and the judge's probability for the proposed
+    option; for a fresh session because no agent is relevant, 1 minus the highest relevance instead
+    of that probability. It is 1 without candidates and 0 when the judge was unavailable. Each of
+    ``alternatives`` has ``probability``, its share among the options that can take the work, and
+    ``judge_probability``, the probability the judge gave it.
+    """
     spec: TaskSpec
     decision: dict[str, str]
     confidence: float
@@ -223,6 +374,7 @@ class RouteProposal:
     alternatives: list[dict[str, Any]]
     reasons: list[dict[str, Any]]
     judge: dict[str, Any]
+    judge_confidence: float | None = None
 
 
 @dataclass(frozen=True)
@@ -243,6 +395,10 @@ _DEPENDENCE_LEVELS = ["none: another agent could do it just as well from scratch
                       "helpful: the work this agent is doing now would save some investigation",
                       "essential: it must build directly on the changes this agent is making now"]
 _CONFIRM = {"LOW_CONFIDENCE", "NARROW_MARGIN", "WRITES_UNCERTAIN", "RUNTIME_MISSING"}
+MAX_CONTEXT_REF_BYTES = 32768
+"""The engine's inline limit for one context reference, in UTF-8 bytes."""
+_COMPLETE_RESULT_BYTES = 64 * 1024
+"""The engine returns a task's complete result up to this size, and a marked preview beyond."""
 
 
 def _code(error: BaseException) -> str:
@@ -419,30 +575,67 @@ class Router:
             return yes(f"relevant.{candidate.alias}") or 0.0
 
         best = answers.get("best")
-        raw = [(option, (best or {}).get("probabilities", {}).get(option, 0.0))
-               for option in [*(candidate.alias for candidate in eligible), "fresh"]]
-        total = sum(value for _, value in raw)
-        ranked = [(option, value / total) for option, value in raw] if total > 0 else list(raw)
+        # Options keep the judge's own probabilities. Their share among the options left after the
+        # write filter orders and reports them, but never raises the confidence that is checked.
+        choices = [(option, (best or {}).get("probabilities", {}).get(option, 0.0))
+                   for option in [*(candidate.alias for candidate in eligible), "fresh"]]
+        total = sum(value for _, value in choices)
+        ranked = [(option, value, value / total if total > 0 else 0.0) for option, value in choices]
         ranked.sort(key=lambda entry: entry[1], reverse=True)
         if total == 0:
             ranked.sort(key=lambda entry: entry[0] != "fresh")
         by_alias = {candidate.alias: candidate for candidate in pool}
-        alternatives = [{"option": option if option == "fresh" else by_alias[option].session.id, "probability": value}
-                        for option, value in ranked]
+        alternatives = [{"option": option if option == "fresh" else by_alias[option].session.id,
+                         "probability": share, "judge_probability": value} for option, value, share in ranked]
 
-        def result_ref(candidate: Candidate) -> str | None:
+        def result_of(candidate: Candidate) -> tuple[str, int] | None:
+            """The latest result as a context reference, measured as the engine measures it.
+
+            The snapshot holds the complete result up to 64 KiB (SPEC-0001) and a longer preview beyond.
+            """
             artifacts = candidate.task.get("artifact_refs") or []
-            return artifacts[0] if artifacts else None
+            text = candidate.task.get("result")
+            if not artifacts or not isinstance(text, str):
+                return None
+            # surrogatepass counts a lone surrogate as three bytes, as the engine's replacement does.
+            return artifacts[0], len(text.encode("utf-8", "surrogatepass"))
 
-        def carried(exclude: Candidate | None = None) -> list[str]:
-            chosen_refs = [candidate for candidate in pool
-                           if candidate is not exclude and relevance(candidate) >= policy.context_at
-                           and result_ref(candidate)]
-            chosen_refs.sort(key=relevance, reverse=True)
-            return [result_ref(candidate) for candidate in chosen_refs]
+        def by_relevance(exclude: Candidate | None = None) -> list[Candidate]:
+            sources = [candidate for candidate in pool
+                       if candidate is not exclude and relevance(candidate) >= policy.context_at
+                       and result_of(candidate)]
+            sources.sort(key=relevance, reverse=True)
+            return sources
 
-        def limit(artifacts: list[str]) -> list[str]:
-            return list(dict.fromkeys(artifacts))[:policy.max_context_refs]
+        omitted: set[str] = set()
+
+        def carry(sources: list[Candidate]) -> list[str]:
+            """The results to carry, in order, at most ``max_context_refs``.
+
+            The engine refuses a whole task when one reference exceeds its inline limit, so such a result
+            is left out with a reason instead, and takes no place.
+            """
+            carried: list[str] = []
+            for candidate in sources:
+                if len(carried) >= policy.max_context_refs:
+                    break
+                result = result_of(candidate)
+                if result is None or result[0] in carried:
+                    continue
+                artifact, size = result
+                if size <= MAX_CONTEXT_REF_BYTES:
+                    carried.append(artifact)
+                    continue
+                if artifact in omitted:
+                    continue
+                omitted.add(artifact)
+                detail: dict[str, Any] = {"session_id": candidate.session.id, "artifact_ref": artifact,
+                                          "reason": "too_large"}
+                if size <= _COMPLETE_RESULT_BYTES:  # Beyond the preview size it is only known to be larger.
+                    detail["bytes"] = size
+                detail["max_bytes"] = MAX_CONTEXT_REF_BYTES
+                reasons.append({"code": "CONTEXT_OMITTED", "detail": detail})
+            return carried
 
         def fresh_model(runtime: RouteRuntime) -> str:
             size = answers.get("size")
@@ -459,13 +652,14 @@ class Router:
         any_relevant = any(relevance(candidate) >= policy.relevant_at for candidate in eligible)
         if not pool:
             reasons.append({"code": "NO_CANDIDATES"})
+        # decision_confidence: how sure the decision itself is, before the judge's own confidence applies.
         if chosen and any_relevant and not chosen.busy:
-            reasons.append({"code": "IDLE_REUSE", "detail": {"probability": top[1]}})
+            reasons.append({"code": "IDLE_REUSE", "detail": {"judge_probability": top[1]}})
             plan = {"requested_mode": "reuse", "independent": True, "dependency_task_ids": [],
-                    "candidate_session_id": chosen.session.id, "context_refs": refs(limit(carried(chosen))),
+                    "candidate_session_id": chosen.session.id, "context_refs": refs(carry(by_relevance(chosen))),
                     "fallback_modes": ["fresh"], "max_queue_wait_ms": policy.busy_wait_ms}
             proposal_spec = spec(RuntimeSpec(chosen.session.provider, chosen.session.model), plan, chosen)
-            decision, confidence = {"mode": "reuse", "session_id": chosen.session.id}, top[1]
+            decision, decision_confidence = {"mode": "reuse", "session_id": chosen.session.id}, top[1]
         elif chosen and any_relevant:
             clash = yes(f"clash.{chosen.alias}") or 0.0
             dependence = answers.get(f"depends.{chosen.alias}")
@@ -473,51 +667,82 @@ class Router:
             if clash >= policy.clash_at or essential >= policy.essential_at:
                 fallback = essential < policy.essential_no_fallback_at
                 reasons.append({"code": "BUSY_WAIT", "detail": {"clash": clash, "essential": essential}})
-                own = [result_ref(chosen)] if fallback and result_ref(chosen) else []
+                own = [chosen] if fallback else []
                 plan = {"requested_mode": "reuse", "independent": True, "dependency_task_ids": [],
                         "candidate_session_id": chosen.session.id,
-                        "context_refs": refs(limit([*carried(chosen), *own])),
+                        "context_refs": refs(carry([*by_relevance(chosen), *own])),
                         "fallback_modes": ["fresh"] if fallback else [], "max_queue_wait_ms": policy.busy_wait_ms}
                 proposal_spec = spec(RuntimeSpec(chosen.session.provider, chosen.session.model), plan, chosen)
-                decision, confidence = {"mode": "reuse", "session_id": chosen.session.id}, top[1]
+                decision = {"mode": "reuse", "session_id": chosen.session.id}
             else:
                 reasons.append({"code": "BUSY_PARALLEL", "detail": {"clash": clash, "essential": essential}})
-                own = [result_ref(chosen)] if result_ref(chosen) else []
+                carried = carry([chosen, *by_relevance(chosen)])
                 runtime = base(writes)
-                proposal_spec = spec(RuntimeSpec(runtime.provider, fresh_model(runtime)),
-                                     fresh_plan(limit([*own, *carried(chosen)])))
-                decision, confidence = {"mode": "fresh"}, top[1]
+                proposal_spec = spec(RuntimeSpec(runtime.provider, fresh_model(runtime)), fresh_plan(carried))
+                decision = {"mode": "fresh"}
+            decision_confidence = top[1]
         else:
             if pool:
-                reasons.append({"code": "FRESH_CHOSEN", "detail": {"probability": top[1]}}
+                reasons.append({"code": "FRESH_CHOSEN", "detail": {"judge_probability": top[1]}}
                                if top and top[0] == "fresh" else {"code": "NO_RELEVANT_AGENT"})
             runtime = base(writes)
-            proposal_spec = spec(RuntimeSpec(runtime.provider, fresh_model(runtime)), fresh_plan(limit(carried())))
+            proposal_spec = spec(RuntimeSpec(runtime.provider, fresh_model(runtime)),
+                                 fresh_plan(carry(by_relevance())))
             decision = {"mode": "fresh"}
-            confidence = (1.0 if not pool else top[1] if top and top[0] == "fresh"
-                          else 1 - max([0.0, *map(relevance, eligible)]))
+            decision_confidence = (1.0 if not pool else top[1] if top and top[0] == "fresh"
+                                   else 1 - max([0.0, *map(relevance, eligible)]))
         count = len(proposal_spec.context_plan["context_refs"])
         if count:
             reasons.append({"code": "CONTEXT_CARRIED", "detail": {"count": count}})
+        # A judge that reports low confidence in its own choice is unsure, however probable it made that
+        # choice look.
+        judge_confidence = best["confidence"] if best else None
+        confidence = decision_confidence if judge_confidence is None else min(judge_confidence, decision_confidence)
         if pool and confidence < policy.confirm_below:
-            reasons.append({"code": "LOW_CONFIDENCE", "detail": {"confidence": confidence}})
+            detail = {"confidence": confidence}
+            if judge_confidence is not None:
+                detail["judge_confidence"] = judge_confidence
+            reasons.append({"code": "LOW_CONFIDENCE", "detail": detail})
         # The tolerance keeps an exact threshold, such as 0.6 against 0.4, from reading as narrower.
-        if len(ranked) > 1 and ranked[0][1] - ranked[1][1] < policy.min_margin - 1e-9:
-            reasons.append({"code": "NARROW_MARGIN", "detail": {"margin": ranked[0][1] - ranked[1][1]}})
+        if len(ranked) > 1 and ranked[0][2] - ranked[1][2] < policy.min_margin - 1e-9:
+            reasons.append({"code": "NARROW_MARGIN", "detail": {"margin": ranked[0][2] - ranked[1][2]}})
         return RouteProposal(spec=proposal_spec, decision=decision, confidence=confidence,
                              needs_confirmation=any(reason["code"] in _CONFIRM for reason in reasons),
-                             alternatives=alternatives, reasons=reasons, judge=report)
+                             alternatives=alternatives, reasons=reasons, judge=report,
+                             judge_confidence=judge_confidence)
 
     async def submit(self, proposal: RouteProposal, *, idempotency_key: str | None = None):
         return await self._orch.tasks.create(proposal.spec, idempotency_key=idempotency_key)
 
     async def notifications(self, text: str, from_session_id: str, members: Sequence[str], *,
                             root_task_id: str | None = None) -> NotificationPlan:
+        """The source must be one of ``members``.
+
+        Under ``scope="root"`` the group is the source's root task, and a different ``root_task_id`` is
+        refused; under ``scope="engine"`` it is ignored.
+        """
         if not isinstance(text, str) or not text.strip():
             raise TypeError("notifications requires the finding text")
+        if isinstance(members, str) or not isinstance(members, Sequence):
+            raise TypeError("notifications requires members")
+        # A finding belongs to the group of the member that made it; checked before any judge call.
+        if from_session_id not in members:
+            raise RoutingError("ROUTING_SOURCE_NOT_MEMBER",
+                               "The source session of a finding must be one of the members")
         source = await self._orch.sessions.get(from_session_id)
+        group_root = None
+        if self._scope == "root":
+            # The engine's own rule for a session's root, which it applies to every reuse.
+            group_root = source.get("root_task_id")
+            if not group_root and source.get("task_id"):
+                task = await self._orch.tasks.get(source.task_id)
+                group_root = task.get("root_task_id") or task.id
+            if not group_root:
+                raise RoutingError("ROUTING_ROOT_MISMATCH", "The source session has no root task")
+            if root_task_id is not None and root_task_id != group_root:
+                raise RoutingError("ROUTING_ROOT_MISMATCH", "root_task_id is not the root task of the source session")
         pool = await self._candidates(
-            [member for member in members if member != source.id], root_task_id or source.get("root_task_id"),
+            [member for member in members if member != source.id], group_root,
             lambda session, task: session.status not in ("closed", "outcome_unknown"))
         plan = NotificationPlan(text=text, judge={"latency_ms": 0})
         if not pool:

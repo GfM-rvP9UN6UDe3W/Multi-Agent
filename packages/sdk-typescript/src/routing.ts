@@ -89,6 +89,18 @@ function jevQuestion(question: JudgeQuestion): Json {
 }
 const probability = (value: unknown): value is number =>
   typeof value === 'number' && Number.isFinite(value) && value >= 0 && value <= 1;
+/** Waits `ms`, or less when `signal` aborts first. */
+const pause = (ms: number, signal: AbortSignal) =>
+  new Promise<void>((resolve) => {
+    if (signal.aborted) return resolve();
+    const timer = setTimeout(finish, ms);
+    signal.addEventListener('abort', finish, { once: true });
+    function finish() {
+      clearTimeout(timer);
+      signal.removeEventListener('abort', finish);
+      resolve();
+    }
+  });
 
 /** Checks that every question came back answered with its own kind, and returns the answers. */
 function checkedAnswers(
@@ -203,8 +215,10 @@ export function createJevJudge(options: JevJudgeOptions): Judge {
             let parsed: { model?: unknown; answers?: unknown; usage?: Record<string, unknown> };
             try {
               parsed = (await response.json()) as typeof parsed;
-            } catch {
+            } catch (error) {
               if (deadline.signal.aborted) throw timedOut();
+              // The caller's abort also ends the body read; that is not a malformed answer.
+              if (request.signal?.aborted) throw error;
               throw new JudgeError('JUDGE_PROTOCOL', 'Jev returned a body that is not JSON');
             }
             const usage = parsed.usage;
@@ -226,8 +240,10 @@ export function createJevJudge(options: JevJudgeOptions): Judge {
           const status = response.status;
           const retryable = status === 429 || status === 529 || status >= 500;
           if (retryable && attempt === 1) {
-            await new Promise((resolve) => setTimeout(resolve, 200));
+            // The pause counts against the same deadline and ends early with it or the caller.
+            await pause(200, signal);
             if (deadline.signal.aborted) throw timedOut();
+            if (request.signal?.aborted) throw request.signal.reason;
             continue;
           }
           throw new JudgeError(
@@ -337,6 +353,7 @@ export type RouteReasonCode =
   | 'NO_RELEVANT_AGENT'
   | 'NO_CANDIDATES'
   | 'CONTEXT_CARRIED'
+  | 'CONTEXT_OMITTED'
   | 'MODEL_SMALL'
   | 'MODEL_LARGE'
   | 'RUNTIME_MISSING'
@@ -351,15 +368,45 @@ export interface RouteReason {
 export type JudgeReport =
   | { model?: string; latencyMs: number; usage?: JudgeUsage }
   | { unavailable: JudgeErrorCode };
+export interface RouteAlternative {
+  /** A session id or `fresh`. */
+  option: string;
+  /** Share among the options that can take the work, after read-only agents are dropped. */
+  probability: number;
+  /** The probability the judge gave this option. */
+  judgeProbability: number;
+}
 export interface RouteProposal {
   spec: RoutedTaskSpec;
   decision: { mode: 'reuse'; sessionId: string } | { mode: 'fresh' };
+  /**
+   * The lower of `judgeConfidence` and the judge's probability for the proposed option; for a
+   * fresh session because no agent is relevant, 1 minus the highest relevance instead of that
+   * probability. 1 without candidates, 0 when the judge was unavailable.
+   */
   confidence: number;
+  /** The judge's own confidence in its `best` answer; null when it was not asked or failed. */
+  judgeConfidence: number | null;
   needsConfirmation: boolean;
-  /** Session ids or `fresh`, most probable first. */
-  alternatives: { option: string; probability: number }[];
+  /** Most probable first. */
+  alternatives: RouteAlternative[];
   reasons: RouteReason[];
   judge: JudgeReport;
+}
+/** The engine's inline limit for one context reference, in UTF-8 bytes. */
+export const MAX_CONTEXT_REF_BYTES = 32768;
+/** The engine returns a task's complete result up to this size, and a marked preview beyond. */
+const COMPLETE_RESULT_BYTES = 64 * 1024;
+const encoder = new TextEncoder();
+export type RoutingErrorCode = 'ROUTING_ROOT_MISMATCH' | 'ROUTING_SOURCE_NOT_MEMBER';
+/** A request that would leave the router's group. It is refused before the judge is asked. */
+export class RoutingError extends Error {
+  readonly code: RoutingErrorCode;
+  constructor(code: RoutingErrorCode, message: string) {
+    super(message);
+    this.name = 'RoutingError';
+    this.code = code;
+  }
 }
 export interface NotificationTarget {
   sessionId: string;
@@ -379,6 +426,10 @@ export interface NotificationPlan {
 export interface Router {
   route(request: RouteRequest): Promise<RouteProposal>;
   submit(proposal: RouteProposal, options?: MutationOptions): Promise<TaskHandle>;
+  /**
+   * The source must be one of `members`. Under `scope: 'root'` the group is the source's root
+   * task, and a different `rootTaskId` is refused; under `scope: 'engine'` it is ignored.
+   */
   notifications(finding: {
     text: string;
     fromSessionId: string;
@@ -470,7 +521,17 @@ export function createRouter(options: RouterOptions): Router {
       },
     };
   }
-  const resultRef = (candidate: CandidateView) => candidate.task.artifactRefs[0];
+  /**
+   * A candidate's latest result as a context reference, measured as the engine measures it. The
+   * snapshot holds the complete result up to 64 KiB (SPEC-0001) and a longer preview beyond.
+   */
+  const resultOf = (candidate: CandidateView) => {
+    const artifactRef = candidate.task.artifactRefs[0];
+    const text = candidate.task.result;
+    return artifactRef && typeof text === 'string'
+      ? { artifactRef, bytes: encoder.encode(text).byteLength }
+      : undefined;
+  };
 
   return {
     async route(request) {
@@ -580,6 +641,7 @@ export function createRouter(options: RouterOptions): Router {
             spec: plan({ provider: runtime.provider, model: runtime.model }, freshPlan([])),
             decision: { mode: 'fresh' },
             confidence: 0,
+            judgeConfidence: null,
             needsConfirmation: policy.onJudgeFailure === 'confirm',
             alternatives: [],
             reasons: [...reasons, { code: 'JUDGE_UNAVAILABLE', detail: { error: code } }],
@@ -602,14 +664,16 @@ export function createRouter(options: RouterOptions): Router {
       );
       const relevance = (candidate: CandidateView) => yes(`relevant.${candidate.alias}`) ?? 0;
       const best = answers.best as Extract<JudgeAnswer, { type: 'choice' }> | undefined;
-      const raw = [...eligible.map((candidate) => candidate.alias), 'fresh'].map((option) => ({
+      // Options keep the judge's own probabilities. Their share among the options left after the
+      // write filter orders and reports them, but never raises the confidence that is checked.
+      const choices = [...eligible.map((candidate) => candidate.alias), 'fresh'].map((option) => ({
         option,
-        probability: best?.probabilities[option] ?? 0,
+        judgeProbability: best?.probabilities[option] ?? 0,
       }));
-      const total = raw.reduce((sum, entry) => sum + entry.probability, 0);
-      const ranked = (
-        total > 0 ? raw.map((entry) => ({ ...entry, probability: entry.probability / total })) : raw
-      ).sort((a, b) => b.probability - a.probability);
+      const total = choices.reduce((sum, entry) => sum + entry.judgeProbability, 0);
+      const ranked = choices
+        .map((entry) => ({ ...entry, share: total > 0 ? entry.judgeProbability / total : 0 }))
+        .sort((a, b) => b.judgeProbability - a.judgeProbability);
       // Without any probability mass, fresh leads: nothing argued for an existing agent.
       if (total === 0)
         ranked.unshift(
@@ -621,30 +685,65 @@ export function createRouter(options: RouterOptions): Router {
       const byAlias = new Map(pool.map((candidate) => [candidate.alias, candidate]));
       const alternatives = ranked.map((entry) => ({
         option: entry.option === 'fresh' ? 'fresh' : byAlias.get(entry.option)!.session.id,
-        probability: entry.probability,
+        probability: entry.share,
+        judgeProbability: entry.judgeProbability,
       }));
 
-      const carried = (exclude?: CandidateView) =>
+      const byRelevance = (exclude?: CandidateView) =>
         pool
           .filter(
             (candidate) =>
               candidate !== exclude &&
               relevance(candidate) >= policy.contextAt &&
-              resultRef(candidate),
+              resultOf(candidate),
           )
-          .sort((a, b) => relevance(b) - relevance(a))
-          .map(resultRef);
-      const limit = (refs: string[]) => [...new Set(refs)].slice(0, policy.maxContextRefs);
+          .sort((a, b) => relevance(b) - relevance(a));
+      const omitted = new Set<string>();
+      /**
+       * The results of `sources` to carry, in order, at most `maxContextRefs`. The engine refuses a
+       * whole task when one reference exceeds its inline limit, so such a result is left out with a
+       * reason instead, and takes no place.
+       */
+      const carry = (sources: CandidateView[]): string[] => {
+        const carried: string[] = [];
+        for (const candidate of sources) {
+          if (carried.length >= policy.maxContextRefs) break;
+          const result = resultOf(candidate);
+          if (!result || carried.includes(result.artifactRef)) continue;
+          if (result.bytes <= MAX_CONTEXT_REF_BYTES) {
+            carried.push(result.artifactRef);
+            continue;
+          }
+          if (omitted.has(result.artifactRef)) continue;
+          omitted.add(result.artifactRef);
+          reasons.push({
+            code: 'CONTEXT_OMITTED',
+            detail: {
+              sessionId: candidate.session.id,
+              artifactRef: result.artifactRef,
+              reason: 'too_large',
+              // Beyond the preview size the result is only known to be larger.
+              ...(result.bytes <= COMPLETE_RESULT_BYTES ? { bytes: result.bytes } : {}),
+              maxBytes: MAX_CONTEXT_REF_BYTES,
+            },
+          });
+        }
+        return carried;
+      };
+      const references = (refs: string[]) =>
+        refs.map((artifactRef) => ({ artifactRef, version: 1 as const }));
 
       const top = ranked[0];
       const chosen = top && top.option !== 'fresh' ? byAlias.get(top.option) : undefined;
       const anyRelevant = eligible.some((candidate) => relevance(candidate) >= policy.relevantAt);
-      let proposal: Omit<RouteProposal, 'needsConfirmation' | 'reasons' | 'judge' | 'alternatives'>;
+      let proposal: Pick<RouteProposal, 'spec' | 'decision'>;
+      /** How sure the decision itself is, before the judge's own confidence applies. */
+      let decisionConfidence: number;
       if (!pool.length) {
         reasons.push({ code: 'NO_CANDIDATES' });
       }
       if (chosen && anyRelevant && !chosen.busy) {
-        reasons.push({ code: 'IDLE_REUSE', detail: { probability: top.probability } });
+        reasons.push({ code: 'IDLE_REUSE', detail: { judgeProbability: top.judgeProbability } });
         proposal = {
           spec: plan(
             { provider: chosen.session.provider, model: chosen.session.model },
@@ -653,18 +752,15 @@ export function createRouter(options: RouterOptions): Router {
               independent: true,
               dependencyTaskIds: [],
               candidateSessionId: chosen.session.id,
-              contextRefs: limit(carried(chosen)).map((artifactRef) => ({
-                artifactRef,
-                version: 1,
-              })),
+              contextRefs: references(carry(byRelevance(chosen))),
               fallbackModes: ['fresh'],
               maxQueueWaitMs: policy.busyWaitMs,
             },
             chosen,
           ),
           decision: { mode: 'reuse', sessionId: chosen.session.id },
-          confidence: top.probability,
         };
+        decisionConfidence = top.judgeProbability;
       } else if (chosen && anyRelevant) {
         const clash = yes(`clash.${chosen.alias}`) ?? 0;
         const dependence = answers[`depends.${chosen.alias}`] as
@@ -682,49 +778,44 @@ export function createRouter(options: RouterOptions): Router {
                 independent: true,
                 dependencyTaskIds: [],
                 candidateSessionId: chosen.session.id,
-                contextRefs: limit([
-                  ...carried(chosen),
-                  ...(fallback && resultRef(chosen) ? [resultRef(chosen)] : []),
-                ]).map((artifactRef) => ({ artifactRef, version: 1 })),
+                contextRefs: references(
+                  carry([...byRelevance(chosen), ...(fallback ? [chosen] : [])]),
+                ),
                 fallbackModes: fallback ? ['fresh'] : [],
                 maxQueueWaitMs: policy.busyWaitMs,
               },
               chosen,
             ),
             decision: { mode: 'reuse', sessionId: chosen.session.id },
-            confidence: top.probability,
           };
         } else {
           reasons.push({ code: 'BUSY_PARALLEL', detail: { clash, essential } });
-          const refs = limit([
-            ...(resultRef(chosen) ? [resultRef(chosen)] : []),
-            ...carried(chosen),
-          ]);
+          const refs = carry([chosen, ...byRelevance(chosen)]);
           const runtime = base(writes);
           proposal = {
             spec: plan({ provider: runtime.provider, model: freshModel(runtime) }, freshPlan(refs)),
             decision: { mode: 'fresh' },
-            confidence: top.probability,
           };
         }
+        decisionConfidence = top.judgeProbability;
       } else {
         if (pool.length)
           reasons.push(
             top?.option === 'fresh'
-              ? { code: 'FRESH_CHOSEN', detail: { probability: top.probability } }
+              ? { code: 'FRESH_CHOSEN', detail: { judgeProbability: top.judgeProbability } }
               : { code: 'NO_RELEVANT_AGENT' },
           );
         const runtime = base(writes);
-        const refs = limit(carried());
+        const refs = carry(byRelevance());
         proposal = {
           spec: plan({ provider: runtime.provider, model: freshModel(runtime) }, freshPlan(refs)),
           decision: { mode: 'fresh' },
-          confidence: !pool.length
-            ? 1
-            : top?.option === 'fresh'
-              ? top.probability
-              : 1 - Math.max(0, ...eligible.map(relevance)),
         };
+        decisionConfidence = !pool.length
+          ? 1
+          : top?.option === 'fresh'
+            ? top.judgeProbability
+            : 1 - Math.max(0, ...eligible.map(relevance));
       }
       function freshModel(runtime: RouteRuntime): string {
         const size = answers.size as Extract<JudgeAnswer, { type: 'score' }> | undefined;
@@ -743,16 +834,23 @@ export function createRouter(options: RouterOptions): Router {
           code: 'CONTEXT_CARRIED',
           detail: { count: proposal.spec.contextPlan.contextRefs.length },
         });
-      if (pool.length && proposal.confidence < policy.confirmBelow)
-        reasons.push({ code: 'LOW_CONFIDENCE', detail: { confidence: proposal.confidence } });
+      // A judge that reports low confidence in its own choice is unsure, however probable it made
+      // that choice look.
+      const judgeConfidence = best ? best.confidence : null;
+      const confidence =
+        judgeConfidence === null
+          ? decisionConfidence
+          : Math.min(judgeConfidence, decisionConfidence);
+      if (pool.length && confidence < policy.confirmBelow)
+        reasons.push({
+          code: 'LOW_CONFIDENCE',
+          detail: { confidence, ...(judgeConfidence === null ? {} : { judgeConfidence }) },
+        });
       // The tolerance keeps an exact threshold, such as 0.6 against 0.4, from reading as narrower.
-      if (
-        ranked.length > 1 &&
-        ranked[0].probability - ranked[1].probability < policy.minMargin - 1e-9
-      )
+      if (ranked.length > 1 && ranked[0].share - ranked[1].share < policy.minMargin - 1e-9)
         reasons.push({
           code: 'NARROW_MARGIN',
-          detail: { margin: ranked[0].probability - ranked[1].probability },
+          detail: { margin: ranked[0].share - ranked[1].share },
         });
       const confirm = new Set<RouteReasonCode>([
         'LOW_CONFIDENCE',
@@ -762,6 +860,8 @@ export function createRouter(options: RouterOptions): Router {
       ]);
       return {
         ...proposal,
+        confidence,
+        judgeConfidence,
         needsConfirmation: reasons.some((reason) => confirm.has(reason.code)),
         alternatives,
         reasons,
@@ -776,10 +876,33 @@ export function createRouter(options: RouterOptions): Router {
     async notifications(finding) {
       if (typeof finding.text !== 'string' || !finding.text.trim())
         throw new TypeError('notifications requires the finding text');
+      if (!Array.isArray(finding.members)) throw new TypeError('notifications requires members');
+      // A finding belongs to the group of the member that made it; checked before any judge call.
+      if (!finding.members.includes(finding.fromSessionId))
+        throw new RoutingError(
+          'ROUTING_SOURCE_NOT_MEMBER',
+          'The source session of a finding must be one of the members',
+        );
       const source = await orch.sessions.get(finding.fromSessionId);
+      let groupRoot: string | undefined;
+      if (scope === 'root') {
+        // The engine's own rule for a session's root, which it applies to every reuse.
+        groupRoot =
+          source.rootTaskId ??
+          (source.taskId
+            ? ((await orch.tasks.get(source.taskId)).rootTaskId ?? source.taskId)
+            : undefined);
+        if (!groupRoot)
+          throw new RoutingError('ROUTING_ROOT_MISMATCH', 'The source session has no root task');
+        if (finding.rootTaskId !== undefined && finding.rootTaskId !== groupRoot)
+          throw new RoutingError(
+            'ROUTING_ROOT_MISMATCH',
+            'rootTaskId is not the root task of the source session',
+          );
+      }
       const pool = await candidates(
         finding.members.filter((id) => id !== source.id),
-        finding.rootTaskId ?? source.rootTaskId,
+        groupRoot,
         (session) => session.status !== 'closed' && session.status !== 'outcome_unknown',
       );
       const plan: NotificationPlan = {

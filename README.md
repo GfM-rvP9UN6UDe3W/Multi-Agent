@@ -298,7 +298,7 @@ It uses only temporary SQLite stores and a fake runtime. It reopens the host out
 The engine executes the routing a caller declares. It never decides which agent should take a request. The optional routing layer in both SDKs makes that decision with a judge you choose, and returns an ordinary declaration for you to review and submit. It decides:
 
 - **Who takes the request.** An idle agent whose work fits it, or a busy one worth waiting for: the request waits up to 20 minutes for it, then starts a fresh session. Otherwise a fresh session runs in parallel.
-- **What the agent receives.** Up to 20 earlier results from other relevant agents, most relevant first.
+- **What the agent receives.** Up to 20 earlier results from other relevant agents, most relevant first. A result over the engine's 32 KiB context limit is left out, with a `CONTEXT_OMITTED` reason.
 - **Which runtime and model fresh work uses.** A read-only or writable runtime, and a small, default or large model.
 - **Who hears about a finding.** The agents a new finding affects receive it as a `finding` message.
 
@@ -348,9 +348,12 @@ A judge is any object with `evaluate({ state, questions })` that answers with pr
 ### Boundaries
 
 - **Nothing runs without you.** `route()` never submits.
-  - `needsConfirmation` is set on low confidence, a narrow margin between the top two options, uncertainty about whether files change, or a missing runtime.
+  - `needsConfirmation` is set when the judge's own confidence, or its probability for the proposed option, is below 0.85; on a narrow margin between the top two options; on uncertainty about whether files change; or on a missing runtime.
   - `reasons` records why each proposal looks the way it does.
-- **A failing judge falls back.** If the judge fails or times out, the proposal becomes a fresh session without context, and it asks for confirmation by default.
+- **A failing judge falls back.** If the judge fails or times out, the proposal becomes a fresh session without context, and it asks for confirmation by default. The Jev judge's timeout bounds the whole evaluation, including its retry.
+- **Findings stay in the group.** The source of a finding must be one of the members. With `scope: 'root'`, a `rootTaskId` other than the source's own root is refused before the judge is asked.
+- **Submitting can still fail.** The engine checks each carried result again on submit. A result collected after 90 days or damaged on disk fails the submission with the engine's error, and nothing is created.
+- **Corrections after rc.12.** The rules above on the judge's confidence, results over 32 KiB, findings and the Jev timeout come from [SPEC-0019](docs/specs/0019-routing-corrections.md), in the current source. The rc.12 candidate package predates them.
 - **What leaves the process.** Only the goal, one description per member and a finding's text are sent to the judge.
   - Agents appear under neutral aliases, never engine ids.
   - The default description is the latest task goal plus the first 600 characters of its result.
