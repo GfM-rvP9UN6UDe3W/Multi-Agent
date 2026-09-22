@@ -26,6 +26,8 @@ const adapter: RuntimeAdapter = {
     yield await gate;
   },
 };
+const progress = (step: string) => process.stderr.write(`fixture: ${step}\n`);
+progress('started');
 const engine = await createEngine({
   workspace: process.argv[2],
   stateDir: process.argv[3],
@@ -40,10 +42,14 @@ const task = (await engine.call('tasks.create', {
   },
   idempotencyKey: 'original',
 })) as TaskSnapshot;
+progress(`task ${task.status}`);
 let session: SessionSnapshot;
+let seen = '';
 do {
   await new Promise((r) => setTimeout(r, 5));
   session = (await engine.call('sessions.get', { sessionId: task.sessionId })) as SessionSnapshot;
+  const state = `session ${session.status}, task ${((await engine.call('tasks.get', { taskId: task.id })) as TaskSnapshot).status}`;
+  if (state !== seen) progress((seen = state));
 } while (session.status !== 'outcome_unknown');
 end({ type: 'error', outcome: 'unknown', message: 'observer closed; no stop proof yet' });
 await new Promise<void>((r) => setImmediate(r));
@@ -72,4 +78,5 @@ process.on('message', () => {
   });
   process.send!({ released: true });
 });
+progress('ready');
 process.send!({ task, session });

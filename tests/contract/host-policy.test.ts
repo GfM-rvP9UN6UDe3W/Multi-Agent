@@ -293,7 +293,8 @@ test('AC-P03 weakening the write sandbox is rejected before a query', async (t) 
 });
 
 async function until<T>(read: () => Promise<T>, condition: (value: T) => boolean): Promise<T> {
-  const deadline = performance.now() + 2000;
+  // Generous for slow CI runners; a correct run observes the state within milliseconds.
+  const deadline = performance.now() + 10000;
   for (;;) {
     const value = await read();
     if (condition(value)) return value;
@@ -311,7 +312,9 @@ for (const proof of [true, false, 'late', 'missing', 'throws'] as const) {
     });
     const adapter = makeAdapter({
       options: { systemPrompt: 'host extensions' },
-      cleanupTimeoutMs: 300,
+      // `late` needs the ceiling to expire, which it does on any runner. The other cases need
+      // cleanup to finish first; 300 ms was too little on a loaded CI runner.
+      cleanupTimeoutMs: proof === 'late' ? 300 : 5000,
       ...(proof === 'missing'
         ? {}
         : {
@@ -333,7 +336,7 @@ for (const proof of [true, false, 'late', 'missing', 'throws'] as const) {
             yield terminal();
           })(),
         // Wait for the offline child to install its handlers before cleanup starts. This keeps
-        // the 300 ms assertion scoped to process exit instead of including cold process startup.
+        // the cleanup ceiling scoped to process exit instead of including cold process startup.
         Promise.resolve(),
       ),
     });

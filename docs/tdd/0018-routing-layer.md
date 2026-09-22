@@ -62,6 +62,34 @@ All 21 were caught: 15 in TypeScript and 6 in Python. In the first pass the Pyth
 - Packages: scratch archives of version `0.1.0-rc.99`, in the session scratchpad only, passed all nine package modes. The SDK tarball exports `./routing`, and the wheel contains `agent_orch/routing.py`.
 - `npm test` on Node 24.14.0: **537/537**. `npm run test:python` on Python 3.14.6: **65/65**. Local IPC was permitted, and nothing was skipped. Typecheck, formatting, the generated-contract check (68 definitions, schema unchanged) and `git diff --check` pass.
 
+## Main CI after the merge
+
+The merge commit `c2eb7fe` failed the Ubuntu job on Node 22.18 twice. The same tree had passed that job twice on the branch.
+
+- **Attempt 1.** The runner was about twice as slow as usual: the Node suite took 89 s, against 49–53 s. Three tests failed:
+  - `host-workflow.test.ts` and `rollover-crashes.test.ts` were stopped at 30 s as whole files;
+  - AC-P05 `true` got `blocked`, because the offline child did not exit within the 300 ms cleanup ceiling.
+- **Attempt 2.** The failed job was rerun and ran at normal speed. A2-09's owner child did not report within its 10 s deadline and was killed; its stderr held only the SQLite warning.
+
+**Cause:**
+- Node 22's test runner applies `--test-timeout` to each test file as a whole, as well as to each test. Node 24 applies it only to tests.
+  - The Node 22 logs report the files themselves as timed out after 30000 ms.
+  - Locally on Node 24, a file whose tests took 62 s under triple load did not time out.
+- On the Ubuntu runner these files normally take 10–17 s. In rc.11, `host-workflow` took 10.2 s and `rollover-crashes` 17.3 s, so a runner twice as slow crosses 30 s.
+- The routing-layer tests add load. Three local runs each, with and without them, measured:
+  - `host-workflow`: about 20 s without them, about 23 s with them;
+  - the Node suite: about 41 s without them, about 45 s with them.
+
+**Fix, in tests only:**
+- `npm test` uses `--test-timeout=120000`.
+- AC-P05 gives cleanup 5 s, except `late`, which needs the ceiling to expire and keeps 300 ms. Its observation wait is 10 s.
+- A2-09 waits 30 s, and its fixture reports progress on stderr, so a future stall names its last state. Its cause is not established: 130 local runs did not reproduce it, 90 of them alongside two full suites.
+
+**Verification:**
+- The full Node (537/537) and Python (65/65) suites pass.
+- The whole `host-policy` file passed 24/24 parallel runs, and A2-09 also passed 24/24.
+- The CI results for the fix are recorded with the rc.12 release evidence.
+
 ## Remaining boundary
 
 - No live Jev call is part of the tests. The adapter follows TypeSafe's documented `POST /v1/systemone` contract, verified against a local HTTP fake. A labelled live evaluation, run by the owner with their own `JEV_API_KEY`, is a follow-up and does not exist yet.
