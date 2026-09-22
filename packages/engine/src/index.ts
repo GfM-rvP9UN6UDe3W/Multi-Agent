@@ -21,6 +21,7 @@ import { readRuntimeCapabilities } from './runtime.ts';
 import { usageRecord } from './usage.ts';
 import {
   contains,
+  checkRulePaths,
   effectiveRules,
   normalizeRules,
   ruleKey,
@@ -180,6 +181,7 @@ class LocalEngine implements Engine {
   /** `ruleKey` of rules registered through `rules.register` (SPEC-0014 W03/W05). */
   private runtimeRuleKeys = new Set<string>();
   private queueTimers = new Map<string, { cancel: () => void; deadline: number }>();
+  private handoffTimer?: () => void;
   private permissionWaits = new Map<
     string,
     { promise: Promise<boolean>; settle: (allow: boolean) => void }
@@ -295,6 +297,7 @@ class LocalEngine implements Engine {
           workspacePath(this.store.workspace, string(path, 'writeScope.path'));
       }
       this.recover();
+      this.tryExpireHandoffs();
       this.storageTimer = setInterval(() => {
         if (this.closing || this.closed) return;
         try {
@@ -840,18 +843,10 @@ class LocalEngine implements Engine {
         { taskId: parent.id, sessionId: target.id },
       );
     });
+    this.tryExpireHandoffs();
     return receipt(record);
   }
-  private expireHandoffs(): void {
-    const now = this.clock.wallNow();
-    const due = (
-      this.store.db
-        .prepare("SELECT data FROM handoffs WHERE json_extract(data,'$.status')='pending'")
-        .all() as { data: string }[]
-    )
-      .map((row) => JSON.parse(row.data) as HandoffRequest)
-      .filter((handoff) => Date.parse(handoff.expiresAt) <= now);
-    if (!due.length) return;
+  private expireHandoffs(due: HandoffRequest[]): void {
     this.store.transaction(() => {
       for (const handoff of due) {
         handoff.status = 'expired';
@@ -866,13 +861,38 @@ class LocalEngine implements Engine {
       }
     });
   }
-  /** Reads apply expiry when the store accepts writes; a read-only store reports stored state. */
+  /**
+   * Reads apply expiry when the store accepts writes; a read-only store reports stored state. One
+   * timer wakes the scheduler at the earliest remaining expiry, so an idle host expires requests on
+   * time (SPEC-0017 A04).
+   */
   private tryExpireHandoffs(): void {
+    this.handoffTimer?.();
+    this.handoffTimer = undefined;
+    let next: number | undefined;
     try {
-      this.expireHandoffs();
+      const now = this.clock.wallNow();
+      const due: HandoffRequest[] = [];
+      for (const row of this.store.db
+        .prepare("SELECT data FROM handoffs WHERE json_extract(data,'$.status')='pending'")
+        .all() as { data: string }[]) {
+        const handoff = JSON.parse(row.data) as HandoffRequest;
+        const at = Date.parse(handoff.expiresAt);
+        if (at <= now) due.push(handoff);
+        else if (next === undefined || at < next) next = at;
+      }
+      if (due.length) this.expireHandoffs(due);
     } catch {
-      // Expiry is retried by the next scheduler pass or mutation.
+      // Due requests are retried by the next scheduler pass, read or mutation.
     }
+    if (next === undefined || this.closing || this.closed) return;
+    this.handoffTimer = this.clock.setTimer(
+      () => {
+        this.handoffTimer = undefined;
+        this.kick();
+      },
+      Math.min(Math.max(0, next - this.clock.wallNow()), 2147483647),
+    );
   }
   private inSubtree(taskId: string, rootId: string): boolean {
     const seen = new Set<string>();
@@ -1668,6 +1688,7 @@ class LocalEngine implements Engine {
     }
     session.revision++;
     this.store.put('sessions', session.id, session);
+    if (status === 'closed') this.expireStoppedMessages(session.id);
   }
   private taskEvent(task: TaskSnapshot, operationId?: string): void {
     this.store.event(
@@ -1834,6 +1855,14 @@ class LocalEngine implements Engine {
             { operationId: op.id },
           );
         }
+      // Stores from rc.10 and earlier can hold pending messages to sessions already stopped.
+      for (const row of this.store.db
+        .prepare(
+          "SELECT DISTINCT json_extract(data,'$.toSessionId') AS id FROM messages WHERE json_extract(data,'$.status')='persisted'",
+        )
+        .all() as { id: string }[])
+        if (this.store.get<SessionSnapshot>('sessions', row.id)?.status === 'closed')
+          this.expireStoppedMessages(row.id);
       this.admissionEvent();
     });
   }
@@ -2325,7 +2354,8 @@ class LocalEngine implements Engine {
           method,
           'local',
           string(p.idempotencyKey, 'idempotencyKey'),
-          spec,
+          // The fixed fallback keeps a retry's digest independent of the host default (SPEC-0017 A02).
+          taskSpec(p.spec),
           (op) => {
             this.admitWork();
             const queued = (
@@ -2365,6 +2395,7 @@ class LocalEngine implements Engine {
                         'UNKNOWN_VERIFICATION_RULE',
                         'Verification rule id/version is not registered',
                       );
+                    checkRulePaths(this.store.workspace, rule);
                     return structuredClone(rule);
                   })
                 : undefined;
@@ -2793,6 +2824,8 @@ class LocalEngine implements Engine {
             fail('STALE_TARGET', 'Session generation changed');
           if (terminalTasks.has(task.status))
             fail('STALE_TARGET', 'Cannot send to a terminal task');
+          if (session.status === 'closed')
+            fail('SESSION_CLOSED', 'A stopped session cannot receive messages');
           const sender = context.runtimeActor?.sessionId ?? 'client:local';
           const recent = this.store.db
             .prepare(
@@ -2952,6 +2985,9 @@ class LocalEngine implements Engine {
               approval.target.taskRevision !== task.revision
             )
               fail('STALE_TARGET', 'Approval is no longer current');
+            // A revision needs a session that can run it (SPEC-0017 A03).
+            if (decision.choice === 'revise' && this.session(task.sessionId).status === 'closed')
+              fail('SESSION_CLOSED', 'The task session is closed; approve or deny the result');
             approval.status =
               decision.choice === 'approve'
                 ? 'approved'
@@ -3483,6 +3519,30 @@ class LocalEngine implements Engine {
           m.status === 'persisted' &&
           (!m.expiresAt || Date.parse(m.expiresAt) > this.clock.wallNow()),
       );
+  }
+  /** A closed session never runs again, so no message to it stays pending (SPEC-0017 A05). */
+  private expireStoppedMessages(sessionId: string): void {
+    for (const row of this.store.db
+      .prepare(
+        "SELECT data FROM messages WHERE json_extract(data,'$.status')='persisted' AND json_extract(data,'$.toSessionId')=?",
+      )
+      .all(sessionId) as { data: string }[]) {
+      const message = JSON.parse(row.data) as MessageSnapshot;
+      message.status = 'expired';
+      this.store.put('messages', message.id, message);
+      const outbox = this.store.get<Record<string, unknown>>('outbox', message.id);
+      if (outbox)
+        this.store.put('outbox', message.id, {
+          ...outbox,
+          status: 'expired',
+          reason: 'session_stopped',
+        });
+      this.store.event(
+        'message.expired',
+        { messageId: message.id, reason: 'session_stopped' },
+        { taskId: message.taskId, sessionId },
+      );
+    }
   }
   private expireMessages(): void {
     const expired = this.store.db
@@ -4742,6 +4802,7 @@ class LocalEngine implements Engine {
       this.store.saveOperation(op);
       for (const { cancel } of this.queueTimers.values()) cancel();
       this.queueTimers.clear();
+      this.handoffTimer?.();
       if (this.storageTimer) clearInterval(this.storageTimer);
       this.store.close();
       this.controlPlane?.close();
@@ -4773,6 +4834,7 @@ class LocalEngine implements Engine {
     }
     for (const { cancel } of this.queueTimers.values()) cancel();
     this.queueTimers.clear();
+    this.handoffTimer?.();
     if (this.storageTimer) clearInterval(this.storageTimer);
     this.store.close();
     this.controlPlane?.close();

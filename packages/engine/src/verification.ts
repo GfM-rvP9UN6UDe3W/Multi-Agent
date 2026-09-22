@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import { lstatSync, realpathSync, readdirSync, readFileSync } from 'node:fs';
 import { isAbsolute, relative, resolve, sep } from 'node:path';
 import { spawn } from 'node:child_process';
-import { fail } from './errors.ts';
+import { fail, OrchestrationError } from './errors.ts';
 import { digest, fields, integer, object, string, strings } from './validation.ts';
 import type { FrozenVerificationRule, VerificationRule } from './types.ts';
 
@@ -18,9 +18,30 @@ export function workspacePath(workspace: string, path: string): string {
   return canonical;
 }
 
+/** Checks that a rule's paths resolve inside the workspace now (SPEC-0017 A01). */
+export function checkRulePaths(workspace: string, rule: VerificationRule): void {
+  for (const path of new Set([rule.cwdRelative, ...(rule.baselinePaths ?? [])]))
+    try {
+      workspacePath(workspace, path);
+    } catch (error) {
+      if (error instanceof OrchestrationError) throw error;
+      const code = (error as NodeJS.ErrnoException).code ?? 'unreadable';
+      fail(
+        'INVALID_WORKSPACE_SCOPE',
+        `Verification rule ${ruleKey(rule.id, rule.version)} path ${JSON.stringify(path)} is unavailable (${code})`,
+      );
+    }
+}
+
+/**
+ * Validates rule definitions. Startup, store switches and configuration loading check only the
+ * shape, so a directory removed later never blocks the host; registration and task admission also
+ * check the paths (SPEC-0017 A01).
+ */
 export function normalizeRules(
   workspace: string,
   input: VerificationRule[] = [],
+  options: { checkPaths?: boolean } = {},
 ): FrozenVerificationRule[] {
   if (!Array.isArray(input) || input.length > 100)
     fail('VALIDATION_ERROR', 'At most 100 verification rules may be registered');
@@ -42,7 +63,6 @@ export function normalizeRules(
     fields(success, ['exitCode']);
     const cwdRelative = string(rule.cwdRelative, 'cwdRelative', 4096);
     if (isAbsolute(cwdRelative)) fail('VALIDATION_ERROR', 'cwdRelative must be relative');
-    workspacePath(workspace, cwdRelative);
     const argv = strings(rule.argv, 'argv', 1, 100);
     if (!isAbsolute(argv[0]))
       fail('VALIDATION_ERROR', 'Verification executable must be an absolute path');
@@ -62,7 +82,11 @@ export function normalizeRules(
           ? [cwdRelative]
           : strings(rule.baselinePaths, 'baselinePaths', 1),
     };
-    for (const path of normalized.baselinePaths!) workspacePath(workspace, path);
+    // By name only: a path must not leave the workspace; symlinks are checked with the paths.
+    for (const path of [cwdRelative, ...normalized.baselinePaths!])
+      if (!contains(resolve(workspace), resolve(workspace, path)))
+        fail('INVALID_WORKSPACE_SCOPE', 'Path leaves the registered workspace');
+    if (options.checkPaths !== false) checkRulePaths(workspace, normalized);
     const key = ruleKey(normalized.id, normalized.version);
     if (seen.has(key)) fail('VALIDATION_ERROR', 'Duplicate verification rule id/version');
     seen.add(key);
@@ -85,11 +109,11 @@ export function effectiveRules(
   configured: VerificationRule[] | undefined,
   stored: unknown[],
 ): { rules: FrozenVerificationRule[]; runtime: Set<string> } {
-  const rules = normalizeRules(workspace, configured);
+  const rules = normalizeRules(workspace, configured, { checkPaths: false });
   const runtime = new Set<string>();
   for (const row of stored) {
     const { digest: _digest, ...value } = row as FrozenVerificationRule;
-    const [rule] = normalizeRules(workspace, [value]);
+    const [rule] = normalizeRules(workspace, [value], { checkPaths: false });
     const key = ruleKey(rule.id, rule.version);
     const existing = rules.find((r) => r.id === rule.id && r.version === rule.version);
     if (existing) {

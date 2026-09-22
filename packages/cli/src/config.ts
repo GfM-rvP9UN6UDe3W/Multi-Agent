@@ -234,9 +234,11 @@ export async function loadConfig(configPath: string): Promise<HostConfig> {
   try {
     if (parsed.allowCrossRootReuse !== undefined && typeof parsed.allowCrossRootReuse !== 'boolean')
       invalid('allowCrossRootReuse must be a boolean');
+    // Shape only: a missing rule directory is refused at task admission (SPEC-0017 A01).
     normalizeRules(
       parsed.workspace as string,
       parsed.verificationRules as EngineConfig['verificationRules'],
+      { checkPaths: false },
     );
     if (parsed.writeScopes !== undefined) {
       if (!object(parsed.writeScopes)) invalid('writeScopes must be an object');
