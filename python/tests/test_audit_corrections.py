@@ -70,6 +70,27 @@ class AuditCorrectionTests(unittest.IsolatedAsyncioTestCase):
                                                                "expected_revision": approval.revision})
             self.assertEqual((await orch.tasks.get(task.id)).status, "completed")
 
+    async def test_0017_a05_python_approval_completes_after_the_session_stopped_with_a_message(self):
+        async with self.local() as orch:
+            task = await orch.tasks.create(self.spec("reviewed"))
+            approval = await self.pending(orch, task.id)
+            message = await orch.messages.send({"task_id": task.id, "to_session_id": task.session_id,
+                                                "expected_generation": 1, "kind": "finding",
+                                                "summary": "one more point"})
+            session = await orch.sessions.get(task.session_id)
+            await orch.sessions.control({"session_id": session.id, "expected_generation": session.generation,
+                                         "expected_revision": session.revision,
+                                         "expected_dispatch_id": session.active_dispatch_id,
+                                         "expected_state": session.status}, {"action": "stop"})
+            self.assertEqual((await orch.messages.get(message.id)).status, "expired")
+            with self.assertRaises(OrchestrationError) as raised:
+                await orch.messages.send({"task_id": task.id, "to_session_id": task.session_id,
+                                          "expected_generation": 1, "kind": "finding", "summary": "late"})
+            self.assertEqual(raised.exception.code, "SESSION_CLOSED")
+            await orch.approvals.decide(approval.approval_id, {"choice": "approve",
+                                                               "expected_revision": approval.revision})
+            self.assertEqual((await orch.tasks.get(task.id)).status, "completed")
+
 
 if __name__ == "__main__":
     unittest.main()

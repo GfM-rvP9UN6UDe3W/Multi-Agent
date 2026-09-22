@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtemp, mkdir, realpath, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { DatabaseSync } from 'node:sqlite';
 import { createEngine, createFakeAdapter } from '../fixtures/engine.ts';
 import { loadConfig } from '../../packages/cli/src/config.ts';
 import type {
@@ -256,6 +257,180 @@ test('0017-A03 revise on a stopped session fails and leaves the approval pending
     assert.deepEqual([after.status, after.revision], ['pending', approval.revision]);
     assert.equal((await get(engine, task.id)).status, 'waiting_approval');
     await approve(engine, task.id);
+  } finally {
+    await stop(engine).catch(() => {});
+    await rm(w.root, { recursive: true, force: true });
+  }
+});
+
+const send = (engine: Engine, task: TaskSnapshot, key: string) =>
+  engine.call('messages.send', {
+    spec: {
+      taskId: task.id,
+      toSessionId: task.sessionId,
+      expectedGeneration: 1,
+      kind: 'finding',
+      summary: 'one more point',
+    },
+    idempotencyKey: key,
+  }) as Promise<{ id: string; status: string }>;
+async function stopSession(engine: Engine, sessionId: string) {
+  const session = (await engine.call('sessions.get', { sessionId })) as SessionSnapshot;
+  await engine.call('sessions.control', {
+    target: target(session),
+    command: { action: 'stop' },
+    idempotencyKey: `stop-${sessionId}`,
+  });
+}
+const expiredReasons = async (engine: Engine, messageId: string) =>
+  ((await engine.call('events.read', { limit: 1000 })) as EventPage).events
+    .filter((event) => event.type === 'message.expired' && event.data.messageId === messageId)
+    .map((event) => event.data.reason);
+
+test('0017-A05 approving a task whose session was stopped with a pending message completes it', async () => {
+  const w = await workspace('orch-audit-approve-stopped-');
+  const engine = await createEngine(w.config);
+  try {
+    const task = await create(engine, 'reviewed');
+    await wait(engine, task.id, 'waiting_approval');
+    const message = await send(engine, task, 'finding');
+    assert.equal(message.status, 'persisted');
+    await stopSession(engine, task.sessionId);
+    const completed = await approve(engine, task.id);
+    assert.equal(completed.status, 'completed');
+    const after = (await engine.call('messages.get', { messageId: message.id })) as {
+      status: string;
+    };
+    assert.equal(after.status, 'expired');
+    assert.deepEqual(await expiredReasons(engine, message.id), ['session_stopped']);
+  } finally {
+    await stop(engine).catch(() => {});
+    await rm(w.root, { recursive: true, force: true });
+  }
+});
+
+test('0017-A05 stopping an idle session expires its pending messages at once', async () => {
+  const w = await workspace('orch-audit-stop-idle-');
+  const engine = await createEngine(w.config);
+  try {
+    const task = await create(engine, 'reviewed');
+    await wait(engine, task.id, 'waiting_approval');
+    const message = await send(engine, task, 'finding');
+    await stopSession(engine, task.sessionId);
+    const after = (await engine.call('messages.get', { messageId: message.id })) as {
+      status: string;
+    };
+    assert.equal(after.status, 'expired', 'expired by the stop, before any decision');
+    assert.deepEqual(await expiredReasons(engine, message.id), ['session_stopped']);
+    assert.equal((await get(engine, task.id)).status, 'waiting_approval');
+  } finally {
+    await stop(engine).catch(() => {});
+    await rm(w.root, { recursive: true, force: true });
+  }
+});
+
+test('0017-A05 stopping a running session expires messages sent during the run when it ends', async () => {
+  let holding = false;
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => (release = resolve));
+  const base = createFakeAdapter();
+  const adapter: RuntimeAdapter = {
+    ...base,
+    async *execute(input: RuntimeInput) {
+      if (holding) await gate;
+      yield* base.execute(input);
+    },
+  };
+  const w = await workspace('orch-audit-stop-running-', { adapters: [adapter] });
+  const engine = await createEngine(w.config);
+  try {
+    const task = await create(engine, 'reviewed');
+    await wait(engine, task.id, 'waiting_approval');
+    const carried = await send(engine, task, 'carried');
+    holding = true;
+    const approval = (await engine.call('approvals.get', {
+      approvalId: (await get(engine, task.id)).approvalId,
+    })) as { approvalId: string; revision: number };
+    await engine.call('approvals.decide', {
+      approvalId: approval.approvalId,
+      decision: { choice: 'approve', expectedRevision: approval.revision },
+      idempotencyKey: 'approve-first',
+    });
+    await wait(engine, task.id, 'running');
+    const late = await send(engine, task, 'late');
+    await stopSession(engine, task.sessionId);
+    const during = (await engine.call('messages.get', { messageId: late.id })) as {
+      status: string;
+    };
+    assert.equal(during.status, 'persisted', 'the session is still open until the run ends');
+    release();
+    await wait(engine, task.id, 'waiting_approval');
+    const status = async (id: string) =>
+      ((await engine.call('messages.get', { messageId: id })) as { status: string }).status;
+    assert.equal(
+      await status(carried.id),
+      'completed',
+      'the last dispatch settles what it carried',
+    );
+    assert.equal(await status(late.id), 'expired');
+    assert.deepEqual(await expiredReasons(engine, late.id), ['session_stopped']);
+    assert.equal(
+      ((await engine.call('sessions.get', { sessionId: task.sessionId })) as SessionSnapshot)
+        .status,
+      'closed',
+    );
+    assert.equal((await approve(engine, task.id)).status, 'completed');
+  } finally {
+    release();
+    await stop(engine).catch(() => {});
+    await rm(w.root, { recursive: true, force: true });
+  }
+});
+
+test('0017-A05 messages to a stopped session are refused with SESSION_CLOSED', async () => {
+  const w = await workspace('orch-audit-send-stopped-');
+  const engine = await createEngine(w.config);
+  try {
+    const task = await create(engine, 'reviewed');
+    await wait(engine, task.id, 'waiting_approval');
+    await stopSession(engine, task.sessionId);
+    await assert.rejects(send(engine, task, 'late'), { code: 'SESSION_CLOSED' });
+    await assert.rejects(send(engine, task, 'late'), { code: 'SESSION_CLOSED' }, 'nothing stored');
+    const types = ((await engine.call('events.read', { limit: 1000 })) as EventPage).events.map(
+      (event) => event.type,
+    );
+    assert.ok(!types.includes('message.persisted'));
+    assert.equal((await approve(engine, task.id)).status, 'completed');
+  } finally {
+    await stop(engine).catch(() => {});
+    await rm(w.root, { recursive: true, force: true });
+  }
+});
+
+test('0017-A05 startup expires pending messages that earlier versions left on stopped sessions', async () => {
+  const w = await workspace('orch-audit-legacy-messages-');
+  let engine = await createEngine(w.config);
+  try {
+    const task = await create(engine, 'reviewed');
+    await wait(engine, task.id, 'waiting_approval');
+    const message = await send(engine, task, 'finding');
+    await stop(engine);
+    // rc.10 closed the session and left the message persisted.
+    const db = new DatabaseSync(join(w.config.stateDir, 'store.sqlite'));
+    try {
+      db.prepare("UPDATE sessions SET data=json_set(data,'$.status','closed') WHERE id=?").run(
+        task.sessionId,
+      );
+    } finally {
+      db.close();
+    }
+    engine = await createEngine(w.config);
+    const after = (await engine.call('messages.get', { messageId: message.id })) as {
+      status: string;
+    };
+    assert.equal(after.status, 'expired');
+    assert.deepEqual(await expiredReasons(engine, message.id), ['session_stopped']);
+    assert.equal((await approve(engine, task.id)).status, 'completed');
   } finally {
     await stop(engine).catch(() => {});
     await rm(w.root, { recursive: true, force: true });

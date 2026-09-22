@@ -1688,6 +1688,7 @@ class LocalEngine implements Engine {
     }
     session.revision++;
     this.store.put('sessions', session.id, session);
+    if (status === 'closed') this.expireStoppedMessages(session.id);
   }
   private taskEvent(task: TaskSnapshot, operationId?: string): void {
     this.store.event(
@@ -1854,6 +1855,14 @@ class LocalEngine implements Engine {
             { operationId: op.id },
           );
         }
+      // Stores from rc.10 and earlier can hold pending messages to sessions already stopped.
+      for (const row of this.store.db
+        .prepare(
+          "SELECT DISTINCT json_extract(data,'$.toSessionId') AS id FROM messages WHERE json_extract(data,'$.status')='persisted'",
+        )
+        .all() as { id: string }[])
+        if (this.store.get<SessionSnapshot>('sessions', row.id)?.status === 'closed')
+          this.expireStoppedMessages(row.id);
       this.admissionEvent();
     });
   }
@@ -2815,6 +2824,8 @@ class LocalEngine implements Engine {
             fail('STALE_TARGET', 'Session generation changed');
           if (terminalTasks.has(task.status))
             fail('STALE_TARGET', 'Cannot send to a terminal task');
+          if (session.status === 'closed')
+            fail('SESSION_CLOSED', 'A stopped session cannot receive messages');
           const sender = context.runtimeActor?.sessionId ?? 'client:local';
           const recent = this.store.db
             .prepare(
@@ -3508,6 +3519,30 @@ class LocalEngine implements Engine {
           m.status === 'persisted' &&
           (!m.expiresAt || Date.parse(m.expiresAt) > this.clock.wallNow()),
       );
+  }
+  /** A closed session never runs again, so no message to it stays pending (SPEC-0017 A05). */
+  private expireStoppedMessages(sessionId: string): void {
+    for (const row of this.store.db
+      .prepare(
+        "SELECT data FROM messages WHERE json_extract(data,'$.status')='persisted' AND json_extract(data,'$.toSessionId')=?",
+      )
+      .all(sessionId) as { data: string }[]) {
+      const message = JSON.parse(row.data) as MessageSnapshot;
+      message.status = 'expired';
+      this.store.put('messages', message.id, message);
+      const outbox = this.store.get<Record<string, unknown>>('outbox', message.id);
+      if (outbox)
+        this.store.put('outbox', message.id, {
+          ...outbox,
+          status: 'expired',
+          reason: 'session_stopped',
+        });
+      this.store.event(
+        'message.expired',
+        { messageId: message.id, reason: 'session_stopped' },
+        { taskId: message.taskId, sessionId },
+      );
+    }
   }
   private expireMessages(): void {
     const expired = this.store.db

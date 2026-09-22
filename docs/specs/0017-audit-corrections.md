@@ -1,6 +1,6 @@
 # SPEC-0017: Audit corrections for rc.10
 
-Date: 2026-09-22. Status: approved by the owner; implemented on branch `axion-rc11` for rc.11. Evidence: [TDD-0017](../tdd/0017-audit-corrections.md). Origin: a self-audit of the code added since rc.7 (`2d50e3e..fbf9bdf`) found four defects. Three were reproduced offline; the fourth was found by reading the code.
+Date: 2026-09-22. Status: approved by the owner; implemented on branch `axion-rc11` for rc.11. Evidence: [TDD-0017](../tdd/0017-audit-corrections.md). Origin: a self-audit of the code added since rc.7 (`2d50e3e..fbf9bdf`) found four defects. Three were reproduced offline; the fourth was found by reading the code. A05 closes an older defect of the same kind as A03; the owner approved its design after the audit report.
 
 ## Acceptance criteria
 
@@ -20,12 +20,21 @@ Date: 2026-09-22. Status: approved by the owner; implemented on branch `axion-rc
 - **A04 — Handoffs expire on time (corrects SPEC-0014 H03):**
   - The problem: pending handoffs expired only when a scheduler pass, a handoff read or a new request happened to run, so an idle host emitted `handoff.expired` arbitrarily late.
   - The engine now keeps one timer for the earliest pending expiry. It is armed at startup, after each new request and after every expiry check, and it wakes the scheduler, which expires due requests. Expiry therefore also happens while the requesting turn is still running. The deadline is wall-clock time, as for queue waits (SPEC-0015 Q05). A timer that fires early only re-checks. If recording an expiry fails, that request is retried by the next scheduler pass, read or mutation, as before; the timer still covers later requests.
+- **A05 — Messages to a stopped session never hold its task:**
+  - The problem: approving a result while messages to the task's stopped session were still pending made the task `paused` as `paused_by_client`. It could not be resumed (`SESSION_CLOSED`), and only `tasks.cancel` ended it, which discarded the approved result and ended its dependents' wait as a cancellation. `messages.send` also accepted messages to a stopped session as `persisted`, where they waited for their TTL (24 hours by default) although nothing could deliver them. Both predate SPEC-0014 and are present at `2d50e3e`.
+  - Rule: a message to a closed session is never `persisted`.
+  - When a session closes, every `persisted` message to it becomes `expired` in the same transaction. A session closes only through `sessions.control` `stop`: at once when no dispatch runs, or when the running dispatch ends with a result or an interruption. The outbox row becomes `expired` with `reason: "session_stopped"`, and the event is `message.expired` with `{messageId, reason: "session_stopped"}`; `tasks.cancel` already uses this shape with `task_cancelled_before_submission`.
+  - `messages.send` to a closed session fails with `SESSION_CLOSED` and stores nothing.
+  - Startup applies the same expiry to `persisted` messages whose session is already closed, which covers rows left by rc.10 and earlier.
+  - Messages carried by the session's last dispatch keep the outcome that dispatch gives them.
+  - Approval code does not change: with no pending message, approve completes the task and deny fails it.
+  - Not repaired: a task already left `paused` by rc.10 after an approve or revise on a stopped session stays paused; `tasks.cancel` ends it.
+  - Timing invariants: the expiry commits with the `closed` status, so no reader sees a closed session with a `persisted` message. A send and a stop are single-writer transactions, so a send committed first is expired by the close and a send after it is refused. While a running dispatch is being stopped the session is not closed yet, so sends are still accepted and the close at the end of that dispatch expires them. If that dispatch fails instead, the stop fails with `RUNTIME_FAILED` and the session stays open, as before.
 
 ## Boundaries
 
-- Approving a result while messages to the task's stopped session are still pending has the same effect as A03's revise: the task becomes `paused` as `paused_by_client` and cannot be resumed (`SESSION_CLOSED`). This predates SPEC-0014 (it is present at `2d50e3e`) and is not changed here, because the fix must decide what happens to the pending messages.
 - Message expiry needs no timer: every call applies it before it runs, including `events.read`.
 
 ## Verification
 
-Record an observed RED for A01–A04 against `fbf9bdf` before changing the engine; the manual engine clock drives A04. The Python SDK repeats A01 and A03 against the real stdio host. Then run the focused tests, the type, format and generated-contract checks and both full suites. No credentials or paid models are used.
+Record an observed RED for A01–A04 against `fbf9bdf` and for A05 against `d4ae686` before changing the engine; the manual engine clock drives A04. The Python SDK repeats A01, A03 and A05 against the real stdio host. Then run the focused tests, the type, format and generated-contract checks and both full suites. No credentials or paid models are used.

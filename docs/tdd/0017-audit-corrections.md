@@ -65,12 +65,43 @@ With all tests passing, each part was removed in turn:
 
 The sources were restored byte for byte.
 
+## A05: messages to a stopped session
+
+The audit report listed this defect as a boundary. The owner then approved the design in SPEC-0017 A05, and it was implemented on top of `d4ae686`, which holds A01–A04.
+
+Two offline probes at `d4ae686` reproduced it. A task waiting for acceptance received a message, its session was stopped, and approve left the task `paused` as `paused_by_client`; `tasks.resume` then failed with `SESSION_CLOSED`. In the second probe, `messages.send` to the stopped session returned a `persisted` message that expired 24 hours later.
+
+RED, run against `d4ae686` before the engine changed: the five engine tests failed 5 of 5, and the Python test failed 1 of 1.
+
+| Test | Failure at `d4ae686` |
+| --- | --- |
+| 0017-A05 approving a task whose session was stopped with a pending message completes it | The task became `paused/paused_by_client` |
+| 0017-A05 stopping an idle session expires its pending messages at once | The message stayed `persisted` |
+| 0017-A05 stopping a running session expires messages sent during the run when it ends | The carried message completed, but the late one stayed `persisted` |
+| 0017-A05 messages to a stopped session are refused with SESSION_CLOSED | The send succeeded |
+| 0017-A05 startup expires pending messages that earlier versions left on stopped sessions | After a restart the message stayed `persisted` |
+| Python approval completes after the session stopped with a message | The message stayed `persisted` |
+
+The legacy test closes the session directly in `store.sqlite` while the engine is stopped. That reproduces what rc.10 left behind, which the API can no longer produce.
+
+Implementation: `saveSession` calls `expireStoppedMessages` whenever it sets `closed`. That covers both stop paths, because the immediate stop and the end of a stopped dispatch save the session inside their transactions. `expireStoppedMessages` expires only `persisted` messages addressed to the session, updates the outbox row and emits `message.expired` with `reason: "session_stopped"`. A carried message is already `dispatching` or `runtime_accepted` by then, and that dispatch settles it first. `messages.send` refuses a closed target inside its operation transaction, so nothing is stored. The recovery transaction at startup expires `persisted` messages whose session is already closed.
+
+| Removed part | Failing tests |
+| --- | --- |
+| Expiring on close | Approve, idle stop, running stop |
+| Refusing sends to a closed session | Send refusal |
+| The startup sweep | Legacy startup |
+| Expiring only when no dispatch is active | Running stop |
+| Limiting expiry to `persisted` messages | Running stop: the carried message was expired |
+
+The sources were restored byte for byte.
+
 ## GREEN
 
-- The twelve engine tests and the two Python tests pass. The engine file passed 24 of 24 runs, eight at a time.
-- `npm test` on Node 24.14.0: **520/520**. `npm run test:python` on Python 3.14.6: **58/58**. Local IPC was permitted, and nothing was skipped. Typecheck, the generated-contract check (68 definitions, schema unchanged), formatting and `git diff --check` pass.
+- The seventeen engine tests and the three Python tests pass. The engine file passed 24 of 24 runs, eight at a time.
+- `npm test` on Node 24.14.0: **525/525**. `npm run test:python` on Python 3.14.6: **59/59**. Local IPC was permitted, and nothing was skipped. Typecheck, the generated-contract check (68 definitions, schema unchanged), formatting and `git diff --check` pass.
 
 ## Remaining boundary
 
-- Approving a result while messages to a stopped session are pending still leaves the task paused and unresumable. An offline probe at this commit confirmed it. It predates SPEC-0014 and is listed in SPEC-0017.
+- A task that rc.10 already left `paused` after an approve or revise on a stopped session is not repaired. `tasks.cancel` ends it.
 - The A04 tests use the manual engine clock. The real timer uses `setTimeout`, clamped to its maximum delay; no test waited a real day.
