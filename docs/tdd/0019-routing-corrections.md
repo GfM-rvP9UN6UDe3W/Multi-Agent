@@ -111,6 +111,23 @@ The owner's commands, run from the branch:
 
 Loopback HTTP and the Unix socket were permitted in this environment; no test was skipped for permissions.
 
+## A pre-existing CI flake fixed on this branch
+
+The first push run of this branch, CI run 35749328231 on `c462405`, failed one job, contracts on Ubuntu with Node 24.14.0. The only failing test was `AC-F07 runtime permission expire is distinct from result acceptance` in `tests/engine/runtime-approval.test.ts`: it expected an approval with purpose `runtime_permission` and read `task_acceptance`. Rerunning that job passed, and the pull-request run of the same commit passed 7 of 7. The owner chose to fix the test on this branch.
+
+- Cause: the test set an 80 ms real-time lifetime for the permission and polled every 5 ms for it. When the first read came later than 80 ms, the permission had already expired and the task was waiting for result acceptance.
+- RED, reproduced with two CPU-bound processes per core and `node --test --test-name-pattern "AC-F07 runtime permission expire" tests/engine/runtime-approval.test.ts`, 24 runs in parallel at a time:
+  - 16 of 120 runs failed at `370085f`, where this test and the engine are byte-identical to this branch;
+  - 6 of 120 runs failed on this branch before the fix.
+  - Every failure showed the CI symptom, or the next assertion of the same race: the permission already reported as denied.
+- Fix, in the test only:
+  - The engine schedules the permission expiry through its clock seam. The test now passes an `EngineClock` that runs every timer on real time except the permission expiry, recognized by its unique lifetime of 61,234 ms. That one is held until the test fires it, after it has observed the pending permission.
+  - The approve, deny and cancel variants never fire it, so no expiry can race their decisions either.
+  - The wait bound grew from 2 to 10 seconds. It only matters on a slow machine; every wait still ends as soon as its state appears.
+- Timing invariant: the test observes the pending permission strictly before it expires, on any machine.
+- GREEN under the same load: 0 of 240 runs of the expire variant and 0 of 48 runs of the whole file failed.
+- Mutation: without firing the held expiry, the expire variant fails; the permission is never answered (`granted` stays `undefined`, not `false`).
+
 ## Parity
 
 | Rule | TypeScript | Python |
