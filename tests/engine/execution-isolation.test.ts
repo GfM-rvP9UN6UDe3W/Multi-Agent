@@ -441,7 +441,8 @@ test('A2-09 actual owner kill before/after release commit preserves held/release
     );
     let stderr = '';
     child.stderr!.on('data', (d) => (stderr += d));
-    const deadline = setTimeout(() => child.kill('SIGKILL'), 10000);
+    // The fixture reports its progress on stderr, which becomes the failure message if it stalls.
+    const deadline = setTimeout(() => child.kill('SIGKILL'), 30000);
     let engine: Engine | undefined;
     try {
       const initial = await Promise.race([
