@@ -372,6 +372,71 @@ const orch = await createOrchestrator({
 });
 ```
 
+### 8.3 Optional routing layer
+
+[SPEC-0018](./docs/specs/0018-routing-layer.md) adds `@agent-orch/sdk/routing` and `agent_orch.routing`. A judge answers typed questions about a request and the agents of one group. Code turns the answers into an ordinary `TaskSpec` with `contextPlan`, and the host submits it or not. The engine, protocol and storage are unchanged, and every engine rule still applies to what is submitted.
+
+**Setup.**
+- Create the router with `createRouter({ orchestrator, judge, runtimes, scope?, describe?, policy? })`, or `Router(orch, judge, read_only=..., writable=..., scope=..., describe=..., policy=...)` in Python.
+- `runtimes` names the provider and default model for fresh read-only and for fresh writable work, each with an optional `small` and `large` model. Those models must be in the provider's configured model list.
+- `scope` sets what a group is:
+  - `'root'`, the default: a group is one root task. Pass the group's `rootTaskId`; the proposed task becomes its child.
+  - `'engine'`: a group is the whole engine. Run one engine per group, with its own workspace and `allowCrossRootReuse: true`. The engine does not report that flag, so a wrong scope shows up as `HISTORY_REUSE_FORBIDDEN` on submit.
+
+**Candidates.** `route({ goal, acceptance, members, rootTaskId?, needsWrites?, spec? })` considers only the given member session ids, at most 16.
+- It reads each member with `sessions.get` and its latest task with `tasks.get`.
+- It drops a member when:
+  - the session is closed, paused, pausing or has an unknown outcome;
+  - the session has no task;
+  - it belongs to another root task under `'root'`;
+  - the request's `spec.writeScope` or `spec.writePath` differs from the member's.
+- A member counts as busy when it is not idle, or when its latest task has not ended. Waiting for approval counts as not ended.
+- A reused member keeps its provider, model, write scope and write path.
+
+**What the judge receives.** One call per route.
+- State: `{ request: { goal }, agents: { A1: { description, status: 'idle' | 'busy', access: 'read-only' | 'writable' }, … } }`. Aliases follow the member order.
+- Questions:
+  - `best`: a choice over the aliases and `fresh`;
+  - `relevant.<alias>`: yes/no, one per member;
+  - `writes`: yes/no, asked only without `needsWrites`;
+  - `size`: a score of trivial, moderate or large, asked only when a ladder has `small` or `large`;
+  - `depends.<alias>` and `clash.<alias>`, for each busy member: a score of none, helpful or essential, and a yes/no.
+- Notifications send `{ finding: { text }, agents }` and ask `affects.<alias>`, a yes/no, for every member except the source.
+
+**Decisions.** The thresholds are `policy` fields.
+
+| Situation | Proposal |
+| --- | --- |
+| The judge fails or times out | Fresh session with no context; `JUDGE_UNAVAILABLE`; confirmation unless `onJudgeFailure: 'fresh'` |
+| `best` is `fresh`, or no eligible member reaches `relevantAt` (0.5) | Fresh session carrying the results of members at `contextAt` (0.7) or above, most relevant first, at most `maxContextRefs` (20) |
+| The best member is idle | `reuse` it, wait up to `busyWaitMs` (20 minutes), fall back to `fresh` |
+| The best member is busy and `clash` ≥ `clashAt` (0.5) or P(essential) ≥ `essentialAt` (0.5) | `reuse` it and wait; no fallback when P(essential) ≥ `essentialNoFallbackAt` (0.7) |
+| The best member is busy otherwise | Fresh session now, carrying that member's result first |
+| The request needs writes | Read-only members are removed and the `best` probabilities renormalized |
+| Model for fresh work | `small` when P(trivial) ≥ `smallAt` (0.85), `large` when P(large) ≥ `largeAt` (0.7), else the default |
+
+`needsConfirmation` is set by any of these reasons:
+- `LOW_CONFIDENCE`: the chosen option is below `confirmBelow` (0.85);
+- `NARROW_MARGIN`: the top two options are within `minMargin` (0.2);
+- `WRITES_UNCERTAIN`: the writes probability is between 0.3 and 0.7;
+- `RUNTIME_MISSING`: the needed runtime is not configured.
+
+`alternatives` lists the options with their renormalized probabilities, as session ids or `fresh`.
+
+**Findings.** `notifications({ text, fromSessionId, members, rootTaskId? })` returns three lists:
+- `notify`: members at `notifyAt` (0.7) or above whose task has not ended. `notify(plan)` sends them `finding` messages.
+- `confirm`: members between 0.5 and 0.7 whose task has not ended; the host decides.
+- `followUp`: affected members whose task ended. The engine does not accept messages for them, so start a follow-up task instead.
+
+If the judge fails, the plan is empty and reports why.
+
+**Jev.** `createJevJudge({ apiKey, model?, baseUrl?, timeoutMs? })`, or `JevJudge(api_key, ...)` in Python:
+- calls `POST https://api.typesafe.ai/v1/systemone` with a bearer token, and pins `jev-1.13.0` by default;
+- retries once on HTTP 429, 529, 5xx or a network error, within `timeoutMs` (10 seconds by default);
+- raises `JudgeError` with one of these codes: `JUDGE_AUTH`, `JUDGE_INVALID_REQUEST`, `JUDGE_RATE_LIMITED`, `JUDGE_UNAVAILABLE`, `JUDGE_TIMEOUT`, `JUDGE_PROTOCOL`.
+
+Any other judge only has to return the documented answer shapes; malformed answers count as `JUDGE_PROTOCOL`.
+
 ## 9. Usage, costs and context estimates
 
 Usage belongs to the original dispatch/task/root even when a native session is reused. Callback/yield replay deduplicates observations by dispatch and source ID. Late records remain on the original owner. Missing fields and ambiguous cumulative scope remain unknown; overlapping total/cached token buckets are not billed twice.
