@@ -1,6 +1,6 @@
 # SPEC-0018: Optional routing layer with pluggable judges
 
-Date: 2026-09-22. Status: approved by the owner (TypeScript and Python ship together; routing never crosses a group; a group is one engine, or one root task inside an engine); implemented on branch `routing-layer`. Evidence: [TDD-0018](../tdd/0018-routing-layer.md). It changes the product boundary in [AGENT_ORCHESTRATION_DESIGN.md](../../AGENT_ORCHESTRATION_DESIGN.md) §5.1.
+Date: 2026-09-22. Status: approved by the owner (TypeScript and Python ship together; routing never crosses a group; a group is one engine, or one root task inside an engine); implemented on branch `routing-layer`. Evidence: [TDD-0018](../tdd/0018-routing-layer.md). [SPEC-0019](0019-routing-corrections.md) corrects four of its rules in the source after rc.12: the judge's own confidence, notifications across groups, oversized results and the Python Jev deadline. The rc.12 package predates it. It changes the product boundary in [AGENT_ORCHESTRATION_DESIGN.md](../../AGENT_ORCHESTRATION_DESIGN.md) §5.1.
 
 ## Why
 
@@ -29,7 +29,7 @@ TypeScript, exported as `@agent-orch/sdk/routing`; Python mirrors them in `agent
   - `score`: ordered levels, answered with level probabilities and a confidence.
 - `createJevJudge({ apiKey, model = 'jev-1.13.0', baseUrl = 'https://api.typesafe.ai', timeoutMs = 10000, fetch? })`:
   - calls `POST /v1/systemone` with a bearer token and maps the three kinds to Jev's choice, noul and score;
-  - retries 429, 529 and 5xx once within the timeout, and never retries 401 or 422.
+  - retries 429, 529 and 5xx once within the timeout, and never retries 401 or 422. The timeout bounds the whole evaluation, including the retry and its pause, in both languages (SPEC-0019 C04).
 - `createRouter({ orchestrator, judge, runtimes, scope?, describe?, policy? })`. `runtimes` names the provider and default model for fresh read-only and writable work, each with an optional `small` and `large` model. It has these methods:
   - `route(request)` takes the goal, acceptance, the group's member session ids, the group's root task id for `scope: 'root'`, and optional `needsWrites` and extra task fields. It returns a `RouteProposal` and has no side effects. Under `scope: 'root'` without a root task id, the request starts a new group, and the only possible proposal is a fresh session.
   - `submit(proposal)` calls `tasks.create(proposal.spec)`.
@@ -56,7 +56,7 @@ TypeScript, exported as `@agent-orch/sdk/routing`; Python mirrors them in `agent
 
 ## Judgments (one judge call per route)
 
-- `best`: a choice over the remaining candidates plus `fresh`. When the request needs writes, read-only candidates are removed after the answer and the remaining probabilities are renormalized.
+- `best`: a choice over the remaining candidates plus `fresh`. When the request needs writes, read-only candidates are removed after the answer and the remaining probabilities are renormalized. The renormalized shares only order the alternatives; the confidence that is checked uses the judge's own figures (SPEC-0019 C01).
 - `relevant_<session>`: yes/no, whether that agent's work helps this request.
 - `writes`: yes/no, asked only when the host did not set `needsWrites`.
 - `size`: trivial, moderate or large, asked only when the host gave a model ladder.
@@ -67,14 +67,14 @@ TypeScript, exported as `@agent-orch/sdk/routing`; Python mirrors them in `agent
 ## Policy (deterministic; all thresholds configurable)
 
 - **Judge unavailable** (error or timeout): propose a fresh session on the default runtime with no context references, with reason `JUDGE_UNAVAILABLE`, and require confirmation by default.
-- **Fresh**: when `best` is `fresh`, or no candidate is relevant (every `relevant` below 0.5), propose `fresh`. Candidates with `relevant` of at least 0.7 contribute their latest result artifact to `contextRefs`, highest probability first, at most 20.
+- **Fresh**: when `best` is `fresh`, or no candidate is relevant (every `relevant` below 0.5), propose `fresh`. Candidates with `relevant` of at least 0.7 contribute their latest result artifact to `contextRefs`, highest probability first, at most 20. A result over the engine's 32 KiB inline limit is left out with `CONTEXT_OMITTED` (SPEC-0019 C03).
 - **Idle best**: reuse it.
 - **Busy best**:
   - If `clash` is at least 0.5, or `depends` is essential with at least 0.5, reuse it and wait up to `policy.busyWaitMs` (default 20 minutes). The fallback is `fresh` carrying its latest result, unless `depends` is essential with at least 0.7; then there is no fallback.
   - Otherwise propose `fresh` now, carrying its latest result.
 - **Model**: only fresh sessions choose one. A trivial `size` of at least 0.85 selects the small model, a large `size` of at least 0.7 selects the large one, and anything else keeps the default. Reuse keeps the candidate's model, because the engine requires it.
 - **needsConfirmation** is set when any of these holds:
-  - `best` confidence is below 0.85;
+  - `best` confidence is below 0.85, or the judge's own probability for the proposed option is (SPEC-0019 C01);
   - the top two options are within 0.2 of each other;
   - `writes` is between 0.3 and 0.7;
   - the judge was unavailable.
@@ -82,7 +82,7 @@ TypeScript, exported as `@agent-orch/sdk/routing`; Python mirrors them in `agent
 
 ## Notifications
 
-For each other session in the source's group whose current task is not terminal, the judge answers yes/no: could this finding change what that agent should do or has done?
+For each other session in the source's group whose current task is not terminal, the judge answers yes/no: could this finding change what that agent should do or has done? The source must be one of the members. Under `scope: 'root'` its group is its own root task, and a different `rootTaskId` is refused before the judge is asked (SPEC-0019 C02).
 
 - At 0.7 or more, the session is proposed for a `finding` message.
 - Between 0.5 and 0.7, it is listed for confirmation.

@@ -5,7 +5,41 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { createOrchestrator } from '../../packages/sdk-typescript/src/index.ts';
 import { createFakeAdapter } from '../fixtures/engine.ts';
-import type { ApprovalRequest, RuntimeInput } from '../../packages/engine/src/types.ts';
+import type {
+  ApprovalRequest,
+  EngineClock,
+  RuntimeInput,
+} from '../../packages/engine/src/types.ts';
+
+/** Only the permission expiry uses this duration; the engine's other timers derive theirs from budgets. */
+const PERMISSION_TTL_MS = 61_234;
+/**
+ * Real time, except that the permission expiry is held until the test fires it. The test then always
+ * observes the pending permission before it expires, however loaded the machine is.
+ */
+function heldExpiry() {
+  const held = new Set<() => void>();
+  const clock: EngineClock = {
+    wallNow: () => Date.now(),
+    monotonicNow: () => performance.now(),
+    setTimer(callback, delayMs) {
+      if (delayMs !== PERMISSION_TTL_MS) {
+        const timer = setTimeout(callback, delayMs);
+        return () => clearTimeout(timer);
+      }
+      held.add(callback);
+      return () => held.delete(callback);
+    },
+  };
+  /** Fires every held expiry, as if its time had passed, and returns how many there were. */
+  const fire = () => {
+    const due = [...held];
+    held.clear();
+    for (const callback of due) callback();
+    return due.length;
+  };
+  return { clock, fire };
+}
 
 for (const mode of ['approve', 'deny', 'expire', 'cancel'])
   test(`AC-F07 runtime permission ${mode} is distinct from result acceptance`, async () => {
@@ -13,6 +47,7 @@ for (const mode of ['approve', 'deny', 'expire', 'cancel'])
     await mkdir(join(root, 'workspace'));
     const fake = createFakeAdapter();
     let binding: RuntimeInput | undefined, granted: boolean | undefined;
+    const expiry = heldExpiry();
     const orch = await createOrchestrator({
       workspace: join(root, 'workspace'),
       stateDir: join(root, 'state'),
@@ -32,7 +67,8 @@ for (const mode of ['approve', 'deny', 'expire', 'cancel'])
           },
         },
       ],
-      runtimeApprovals: { enabled: true, ttlMs: mode === 'expire' ? 80 : 2000 },
+      runtimeApprovals: { enabled: true, ttlMs: PERMISSION_TTL_MS },
+      clock: expiry.clock,
     });
     try {
       const task = await orch.tasks.create({
@@ -40,7 +76,8 @@ for (const mode of ['approve', 'deny', 'expire', 'cancel'])
         runtime: { provider: 'fake', model: 'fixture' },
         acceptance: { mode: 'human', criteria: ['review'] },
       });
-      const deadline = Date.now() + 2000;
+      // A bound on slow machines only; every wait below ends as soon as its state appears.
+      const deadline = Date.now() + 10_000;
       let approval: ApprovalRequest | undefined;
       while (Date.now() < deadline) {
         const state = await orch.tasks.get(task.id);
@@ -67,6 +104,7 @@ for (const mode of ['approve', 'deny', 'expire', 'cancel'])
         );
         assert.equal(decision.id, replay.id);
       } else if (mode === 'cancel') await orch.tasks.cancel(task.id);
+      else assert.equal(expiry.fire(), 1, 'the pending permission had one expiry timer');
       while (granted === undefined && Date.now() < deadline)
         await new Promise((done) => setTimeout(done, 5));
       assert.equal(granted, mode === 'approve');

@@ -374,7 +374,7 @@ const orch = await createOrchestrator({
 
 ### 8.3 Optional routing layer
 
-[SPEC-0018](./docs/specs/0018-routing-layer.md) adds `@agent-orch/sdk/routing` and `agent_orch.routing`. A judge answers typed questions about a request and the agents of one group. Code turns the answers into an ordinary `TaskSpec` with `contextPlan`, and the host submits it or not. The engine, protocol and storage are unchanged, and every engine rule still applies to what is submitted.
+[SPEC-0018](./docs/specs/0018-routing-layer.md) adds `@agent-orch/sdk/routing` and `agent_orch.routing`, and [SPEC-0019](./docs/specs/0019-routing-corrections.md) corrects it in the current source; the rc.12 package predates the corrections. A judge answers typed questions about a request and the agents of one group. Code turns the answers into an ordinary `TaskSpec` with `contextPlan`, and the host submits it or not. The engine, protocol and storage are unchanged, and every engine rule still applies to what is submitted.
 
 **Setup.**
 - Create the router with `createRouter({ orchestrator, judge, runtimes, scope?, describe?, policy? })`, or `Router(orch, judge, read_only=..., writable=..., scope=..., describe=..., policy=...)` in Python.
@@ -408,22 +408,24 @@ const orch = await createOrchestrator({
 | Situation | Proposal |
 | --- | --- |
 | The judge fails or times out | Fresh session with no context; `JUDGE_UNAVAILABLE`; confirmation unless `onJudgeFailure: 'fresh'` |
-| `best` is `fresh`, or no eligible member reaches `relevantAt` (0.5) | Fresh session carrying the results of members at `contextAt` (0.7) or above, most relevant first, at most `maxContextRefs` (20) |
+| `best` is `fresh`, or no eligible member reaches `relevantAt` (0.5) | Fresh session carrying the results of members at `contextAt` (0.7) or above, most relevant first, at most `maxContextRefs` (20); a result over 32 KiB is left out with `CONTEXT_OMITTED` |
 | The best member is idle | `reuse` it, wait up to `busyWaitMs` (20 minutes), fall back to `fresh` |
 | The best member is busy and `clash` ≥ `clashAt` (0.5) or P(essential) ≥ `essentialAt` (0.5) | `reuse` it and wait; no fallback when P(essential) ≥ `essentialNoFallbackAt` (0.7) |
 | The best member is busy otherwise | Fresh session now, carrying that member's result first |
-| The request needs writes | Read-only members are removed and the `best` probabilities renormalized |
+| The request needs writes | Read-only members are removed and the `best` probabilities renormalized; the shares only order the alternatives |
 | Model for fresh work | `small` when P(trivial) ≥ `smallAt` (0.85), `large` when P(large) ≥ `largeAt` (0.7), else the default |
 
 `needsConfirmation` is set by any of these reasons:
-- `LOW_CONFIDENCE`: the chosen option is below `confirmBelow` (0.85);
+- `LOW_CONFIDENCE`: `confidence` is below `confirmBelow` (0.85). It is the lower of the judge's own `best` confidence (`judgeConfidence`) and the judge's probability for the proposed option; for a fresh session because no member is relevant, 1 minus the highest relevance takes that probability's place;
 - `NARROW_MARGIN`: the top two options are within `minMargin` (0.2);
 - `WRITES_UNCERTAIN`: the writes probability is between 0.3 and 0.7;
 - `RUNTIME_MISSING`: the needed runtime is not configured.
 
-`alternatives` lists the options with their renormalized probabilities, as session ids or `fresh`.
+`alternatives` lists the options as session ids or `fresh`, each with `probability`, its share among the options that can take the work, and `judgeProbability` (Python `judge_probability`), the probability the judge gave it.
 
-**Findings.** `notifications({ text, fromSessionId, members, rootTaskId? })` returns three lists:
+**Carried results.** Every path that carries results, including a busy member's own, measures each result in UTF-8 bytes from the task snapshot and leaves out any over the engine's 32 KiB inline limit. It records a `CONTEXT_OMITTED` reason with `sessionId`, `artifactRef`, `reason: 'too_large'`, `maxBytes` and, when known, `bytes`; the result takes no `maxContextRefs` place and is never summarized. It does not set `needsConfirmation`; a host that wants a confirmation checks `reasons` for `CONTEXT_OMITTED`. Whether a result's content was collected or damaged is not visible before submitting: `submit` then fails with the engine's `ARTIFACT_HISTORY_EXPIRED` or `ARTIFACT_CORRUPT` and creates nothing.
+
+**Findings.** `notifications({ text, fromSessionId, members, rootTaskId? })` first checks the group, before the judge is asked. The source must be one of `members`, or it fails with `RoutingError` `ROUTING_SOURCE_NOT_MEMBER`. Under `'root'` the group is the source's own root task, and a different `rootTaskId` fails with `ROUTING_ROOT_MISMATCH`; under `'engine'` `rootTaskId` is ignored. It returns three lists:
 - `notify`: members at `notifyAt` (0.7) or above whose task has not ended. `notify(plan)` sends them `finding` messages.
 - `confirm`: members between 0.5 and 0.7 whose task has not ended; the host decides.
 - `followUp`: affected members whose task ended. The engine does not accept messages for them, so start a follow-up task instead.
@@ -432,7 +434,7 @@ If the judge fails, the plan is empty and reports why.
 
 **Jev.** `createJevJudge({ apiKey, model?, baseUrl?, timeoutMs? })`, or `JevJudge(api_key, ...)` in Python:
 - calls `POST https://api.typesafe.ai/v1/systemone` with a bearer token, and pins `jev-1.13.0` by default;
-- retries once on HTTP 429, 529, 5xx or a network error, within `timeoutMs` (10 seconds by default);
+- retries once on HTTP 429, 529, 5xx or a network error, within `timeoutMs` (10 seconds by default), which bounds the whole evaluation, including the retry, its pause and a slowly arriving response. Python runs each request on its own thread and shuts the connection down at the deadline or on cancellation; a name lookup cannot be interrupted, so that thread then only ends when the lookup returns;
 - raises `JudgeError` with one of these codes: `JUDGE_AUTH`, `JUDGE_INVALID_REQUEST`, `JUDGE_RATE_LIMITED`, `JUDGE_UNAVAILABLE`, `JUDGE_TIMEOUT`, `JUDGE_PROTOCOL`.
 
 Any other judge only has to return the documented answer shapes; malformed answers count as `JUDGE_PROTOCOL`.
