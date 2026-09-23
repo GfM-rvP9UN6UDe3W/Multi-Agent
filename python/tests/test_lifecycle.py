@@ -6,8 +6,8 @@ import sys
 import unittest
 from unittest.mock import patch
 
-from agent_orch import Orchestrator, OrchestrationError
-from agent_orch.transport import RpcTransport
+from orchvia import Orchestrator, OrchestrationError
+from orchvia.transport import RpcTransport
 
 
 FIXTURE = Path(__file__).with_name("fake_protocol_server.py")
@@ -114,7 +114,7 @@ class LifecycleTests(unittest.IsolatedAsyncioTestCase):
             await release.wait()
             return process
 
-        with patch("agent_orch.transport.asyncio.create_subprocess_exec", side_effect=gated):
+        with patch("orchvia.transport.asyncio.create_subprocess_exec", side_effect=gated):
             starting = asyncio.create_task(orch.start())
             try:
                 await asyncio.wait_for(created.wait(), 2)

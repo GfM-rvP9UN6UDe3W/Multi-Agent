@@ -2,7 +2,7 @@
 
 ## Package contract
 
-The five modular npm packages are `@agent-orch/sdk`, `@agent-orch/engine`, `@agent-orch/adapter-claude`, `@agent-orch/adapter-codex` and `@agent-orch/cli`. They export ESM and declarations. Direct CommonJS `require()` is not exported. A build tool may include the first three in either a CJS or ESM host bundle. SDK installation alone does not supply a provider.
+The five modular npm packages are `@orchvia/sdk`, `@orchvia/engine`, `@orchvia/adapter-claude`, `@orchvia/adapter-codex` and `@orchvia/cli`. They export ESM and declarations. Direct CommonJS `require()` is not exported. A build tool may include the first three in either a CJS or ESM host bundle. SDK installation alone does not supply a provider.
 
 The engine requires the filesystem, child-process and SQLite APIs available in Node.js 22.18+. Embedded startup does not reject Electron by runtime brand or automatically resolve a native provider before considering host injection. CLI `doctor` is a separate explicit diagnostic command.
 
@@ -17,7 +17,7 @@ import {
   createClaudeAdapter,
   createClaudeMcpServer,
   inspectClaudeSession,
-} from '@agent-orch/adapter-claude';
+} from '@orchvia/adapter-claude';
 
 const adapter = createClaudeAdapter({
   query: (request) => sdk.query({
@@ -34,7 +34,7 @@ const adapter = createClaudeAdapter({
 
 Keep the adapter's supplied `spawnClaudeCodeProcess` callback when wrapping native query options so the engine can observe cleanup. For ordinary Node installations without injection, install the Claude SDK and its peers; the adapter explicitly declares optional peers `@anthropic-ai/claude-agent-sdk` and `zod: 4.4.3`. They are optional because complete host injection needs no runtime dependency lookup. Claude SDK 0.3.274 with Zod 4.6.5 fails native tools/list schema conversion; do not widen the tested Zod peer without repeating native enumeration. Missing MCP peers produce `CLAUDE_DEPENDENCY_UNAVAILABLE` with the dependency names.
 
-All adapter default imports use literal module names so bundlers can analyze them. A host that excludes native peers from its main bundle must provide its own callbacks and may mark those peer names external in its bundler. The host is responsible for how it packages third-party SDK code. The pinned SDK 0.3.274 itself uses `import.meta.url`; the CJS smoke applies a narrowly scoped URL shim to that third-party file only. It applies no URL shim to any agent-orch source. See [the smoke implementation](../../scripts/package-bundles-smoke.mjs) for the exact configuration.
+All adapter default imports use literal module names so bundlers can analyze them. A host that excludes native peers from its main bundle must provide its own callbacks and may mark those peer names external in its bundler. The host is responsible for how it packages third-party SDK code. The pinned SDK 0.3.274 itself uses `import.meta.url`; the CJS smoke applies a narrowly scoped URL shim to that third-party file only. It applies no URL shim to any orchvia source. See [the smoke implementation](../../scripts/package-bundles-smoke.mjs) for the exact configuration.
 
 The protocol validator imports a generated TypeScript constant and needs no adjacent JSON. Codex's executable MCP bridge and CLI doctor use package-backed resource resolution and are outside this three-package Claude bundle. Their installed-package smoke remains required; this RC does not claim arbitrary Codex/CLI single-file bundling.
 
@@ -54,9 +54,9 @@ The same directory contains npm 0.1.0-rc.7 and Python 0.1.0rc7 (PEP 440 spelling
 Install the three Claude tarballs from the same candidate and keep the resulting lockfile:
 
 ```sh
-npm install /absolute/rc/agent-orch-sdk-0.1.0-rc.7.tgz \
-  /absolute/rc/agent-orch-engine-0.1.0-rc.7.tgz \
-  /absolute/rc/agent-orch-adapter-claude-0.1.0-rc.7.tgz
+npm install /absolute/rc/orchvia-sdk-0.1.0-rc.7.tgz \
+  /absolute/rc/orchvia-engine-0.1.0-rc.7.tgz \
+  /absolute/rc/orchvia-adapter-claude-0.1.0-rc.7.tgz
 ```
 
 Verify each file against `npm-manifest.json` before installation. npm additionally records local tarball SHA-512 integrity in the consumer lockfile. The smoke verifies the SHA-256 manifest, lockfile integrity, adapter isolation, installed native MCP, and separate CJS/ESM bundles after deleting their entire temporary node_modules. Both bundles execute fake and Claude protocol-fixture tasks through human approval to completion, four real engine MCP operations, and an injected history reader. No model requests are made.

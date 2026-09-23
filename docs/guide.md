@@ -43,7 +43,7 @@ python -m build --no-isolation --sdist --wheel --outdir dist/release python
 PACKAGE_BUILD_PYTHON="$(command -v python)" npm run test:packages
 ```
 
-Install the engine and SDK tarballs together with the chosen adapter. An embedded Claude consumer needs `@agent-orch/sdk`, `@agent-orch/engine` and `@agent-orch/adapter-claude`; add `@agent-orch/cli` only for a standalone/managed host. Keep the npm package versions aligned, currently `0.1.0-rc.1` for the local RC. Claude's optional SDK and Zod 4 peers and Codex's native executable are separate runtime dependencies; ordinary startup does not download them. Host-injected Claude query owns dependency selection: provide matching MCP/inspection callbacks as described in the [bundled-host guide](acceptance/bundled-host.md). Python installs the unchanged wheel with `python -m pip install --no-index --no-deps /absolute/release/agent_orch-0.1.0-py3-none-any.whl`.
+Install the engine and SDK tarballs together with the chosen adapter. An embedded Claude consumer needs `@orchvia/sdk`, `@orchvia/engine` and `@orchvia/adapter-claude`; add `@orchvia/cli` only for a standalone/managed host. Keep the npm package versions aligned, currently `0.1.0-rc.1` for the local RC. Claude's optional SDK and Zod 4 peers and Codex's native executable are separate runtime dependencies; ordinary startup does not download them. Host-injected Claude query owns dependency selection: provide matching MCP/inspection callbacks as described in the [bundled-host guide](acceptance/bundled-host.md). Python installs the unchanged wheel with `python -m pip install --no-index --no-deps /absolute/release/orchvia-0.1.0-py3-none-any.whl`.
 
 Keep workspace, private state, and application/native credentials separate. The workspace and private directories must be canonical existing paths as required by CLI validation; state is outside the workspace. If using archive rollover, controlDir/storesRoot/archiveRoot must be private canonical outside-workspace directories, exclusively owned by this host. Do not use another application's state or history for fixture tests.
 
@@ -72,11 +72,11 @@ Host options also include verificationRules, registered writeScopes, pricing, bu
 
 ## 5. Embedded TypeScript wiring
 
-Source entry points are under packages; installed imports use `@agent-orch/sdk`, `@agent-orch/engine/fake`, and the selected `@agent-orch/adapter-*` package. The complete [local example](../examples/typescript/local.ts) creates a task, collects explicit fixture approval, handles shutdown and preserves supplied state. The [hosted example](../examples/typescript/hosted.ts) tests an existing-runtime seam without a model.
+Source entry points are under packages; installed imports use `@orchvia/sdk`, `@orchvia/engine/fake`, and the selected `@orchvia/adapter-*` package. The complete [local example](../examples/typescript/local.ts) creates a task, collects explicit fixture approval, handles shutdown and preserves supplied state. The [hosted example](../examples/typescript/hosted.ts) tests an existing-runtime seam without a model.
 
 ```ts
-import { createOrchestrator } from '@agent-orch/sdk';
-import { createFakeAdapter } from '@agent-orch/engine/fake';
+import { createOrchestrator } from '@orchvia/sdk';
+import { createFakeAdapter } from '@orchvia/engine/fake';
 
 const orch = await createOrchestrator({
   workspace: '/absolute/workspace',
@@ -223,10 +223,10 @@ A message waits for the target session's next dispatch until its TTL (`messages.
 Run `PYTHONPATH=python/src python3 examples/python/fake_roundtrip.py` from the checkout for a complete owned-host example, including known-fixture review and shutdown. Installed Python still needs the Node CLI and selected adapter in a stable tool directory.
 
 ```python
-from agent_orch import Orchestrator, RuntimeSpec, TaskSpec, CheckAcceptanceSpec
+from orchvia import Orchestrator, RuntimeSpec, TaskSpec, CheckAcceptanceSpec
 
 orch = await Orchestrator.local(engine_command=[
-    "/absolute/node", "/absolute/agent-orch-cli/dist/main.js",
+    "/absolute/node", "/absolute/orchvia-cli/dist/main.js",
     "host", "--stdio", "--config", "/absolute/host.json",
 ])
 try:
@@ -374,7 +374,7 @@ const orch = await createOrchestrator({
 
 ### 8.3 Optional routing layer
 
-[SPEC-0018](./specs/0018-routing-layer.md) adds `@agent-orch/sdk/routing` and `agent_orch.routing`, and [SPEC-0019](./specs/0019-routing-corrections.md) corrects it; rc.13 includes the corrections, and the rc.12 package predates them. A judge answers typed questions about a request and the agents of one group. Code turns the answers into an ordinary `TaskSpec` with `contextPlan`, and the host submits it or not. The router adds no engine rule or storage. Its one engine addition is the read-only `context.checkRefs` of [SPEC-0020](./specs/0020-context-check.md), after rc.13, and every engine rule still applies to what is submitted.
+[SPEC-0018](./specs/0018-routing-layer.md) adds `@orchvia/sdk/routing` and `orchvia.routing`, and [SPEC-0019](./specs/0019-routing-corrections.md) corrects it; rc.13 includes the corrections, and the rc.12 package predates them. A judge answers typed questions about a request and the agents of one group. Code turns the answers into an ordinary `TaskSpec` with `contextPlan`, and the host submits it or not. The router adds no engine rule or storage. Its one engine addition is the read-only `context.checkRefs` of [SPEC-0020](./specs/0020-context-check.md), after rc.13, and every engine rule still applies to what is submitted.
 
 **Setup.**
 - Create the router with `createRouter({ orchestrator, judge, runtimes, scope?, describe?, policy? })`, or `Router(orch, judge, read_only=..., writable=..., scope=..., describe=..., policy=...)` in Python.
@@ -436,7 +436,7 @@ Any client, including a socket client that is not the owner, can call `orch.cont
 
 If the judge fails, the plan is empty and reports why.
 
-**Jev.** `createJevJudge({ apiKey, model?, baseUrl?, timeoutMs? })`, or `JevJudge(api_key, ...)` in Python:
+**Jev.** TypeSafe's Jev is a third-party paid service; Orchvia is not affiliated with TypeSafe. `createJevJudge({ apiKey, model?, baseUrl?, timeoutMs? })`, or `JevJudge(api_key, ...)` in Python:
 - calls `POST https://api.typesafe.ai/v1/systemone` with a bearer token, and pins `jev-1.13.0` by default;
 - retries once on HTTP 429, 529, 5xx or a network error, within `timeoutMs` (10 seconds by default), which bounds the whole evaluation, including the retry, its pause and a slowly arriving response. Python runs each request on its own thread and shuts the connection down at the deadline or on cancellation; a name lookup cannot be interrupted, so that thread then only ends when the lookup returns;
 - raises `JudgeError` with one of these codes: `JUDGE_AUTH`, `JUDGE_INVALID_REQUEST`, `JUDGE_RATE_LIMITED`, `JUDGE_UNAVAILABLE`, `JUDGE_TIMEOUT`, `JUDGE_PROTOCOL`.
@@ -499,7 +499,7 @@ Reconcile each unknown dispatch with `sessions.reconcile` (section 11.4). The ev
 
 Current A/A2 accounts for execution resources separately from business reconciliation. Confirmed execution/cleanup releases the lease while business unknown remains quarantined. Two possibly running unknowns fill two execution slots; larger quarantine capacity cannot bypass concurrency. [A2 evidence](./tdd/0003-a2-wiring.md) covers offline TS/Python and actual Node stdio/Unix hosts, not real models.
 
-Host defaults are acceptanceMs=30000, turnMs=1800000, drainMs=300000, interruptMs=30000, reconcileMs=60000, each integer 1..86400000 ms. Embedded TS passes createOrchestrator configuration; CLI/Python use [README host JSON](./reference.md#standalone-host-and-cross-language-integration). Python passes engine_command=[node, cli, "host", "--stdio", "--config", config_file], not local(timeouts=...). Convert LifecycleTimeouts snake_case values with agent_orch.types.to_wire. SDK wait does not renew deadlines.
+Host defaults are acceptanceMs=30000, turnMs=1800000, drainMs=300000, interruptMs=30000, reconcileMs=60000, each integer 1..86400000 ms. Embedded TS passes createOrchestrator configuration; CLI/Python use [README host JSON](./reference.md#standalone-host-and-cross-language-integration). Python passes engine_command=[node, cli, "host", "--stdio", "--config", config_file], not local(timeouts=...). Convert LifecycleTimeouts snake_case values with orchvia.types.to_wire. SDK wait does not renew deadlines.
 
 Total budget starts at dispatch and includes initialization/acceptance; acknowledgments/output do not renew it. Use the shorter host/explicit-provider cap; longer provider caps cannot extend host time. CLI requestTimeoutMs/turnTimeoutMs accept integer 1..3600000 ms. Cleanup fields are Claude cleanupTimeoutMs and Codex closeTimeoutMs with the same range; crossed names fail. Claude additionally accepts interruptTimeoutMs with the same range. No implicit 300-second cap remains when unspecified. Upgrades/config changes do not renew old deadlines.
 
@@ -544,7 +544,7 @@ export async function reconcileReviewedTask(
 ```
 
 ```python
-from agent_orch import Orchestrator, ReconcileEvidence
+from orchvia import Orchestrator, ReconcileEvidence
 
 
 async def reconcile_reviewed_task(

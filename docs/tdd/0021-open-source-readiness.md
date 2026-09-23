@@ -1,6 +1,6 @@
 # TDD-0021: Open-source readiness
 
-Date: 2026-09-23. Base: `7af317c`. Branch `oss-launch`. Specification: [SPEC-0021](../specs/0021-open-source-readiness.md). This record covers groups G, R and C and the repository rename (N05). Groups N (package names), P, E and L are not implemented yet.
+Date: 2026-09-23. Base: `7af317c`. Branch `oss-launch`. Specification: [SPEC-0021](../specs/0021-open-source-readiness.md). This record covers groups G, R and C and the repository rename (merged as pull request #10), then the package rename (N) and publishing (P) on branch `orchvia-rename`. E and L are recorded when they are done.
 
 ## RED
 
@@ -67,9 +67,53 @@ Each change was made in turn, the matching test was run, and the file was restor
 
 ## Not done or not verified
 
-- R06: the documents do not yet state the project's relationship to TypeSafe; the owner has not confirmed it.
-- R10: the READMEs inside the npm packages and the PyPI description still say "unpublished". They change with the packaging work (P).
+- R06: at this point the documents did not state the relationship to TypeSafe; the rename branch below adds it, after the owner confirmed there is none.
+- R10: at this point the package READMEs and the PyPI description still said "unpublished"; the rename branch below replaces them.
 - R01: the quickstart variant with real Claude waits for E01 and E02.
 - The diagram in the README is the existing detailed one. A simpler overview may suit first-time readers better; that is a judgment, not a failing check.
 - Old links: GitHub redirects the old repository URL. Historical records keep their original URLs.
-- Remote branches named after the downstream product still exist on GitHub; deleting them needs the owner's word.
+- Remote branches named after the downstream product still existed on GitHub; the owner approved deleting them with the plan (D-oss-10).
+
+## Package rename and publishing (N, P)
+
+Base: `702a3d7`. Branch `orchvia-rename`.
+
+### RED
+
+- `node --test tests/contract/naming.test.ts`: 2 of 3 failed. 0021-N01 found the packages named `@agent-orch/*`, the command `agent-orch` and the Python distribution `agent-orch`. 0021-N02 found the old names in current files. 0021-N06 passed: it fixes identifiers that were already right, as a guard for the rename.
+- `python/tests/test_naming.py`: both tests stopped with `ModuleNotFoundError: No module named 'orchvia'`. That only shows the new module did not exist yet; it is not counted as a defect.
+- The golden request digest `1c80623d…dc42` was computed at the base in both languages before any change, and the tests assert it afterwards.
+
+### Changes
+
+- `python/src/agent_orch` moved to `python/src/orchvia`. A script renamed the package names, imports, the command, file names and temporary-directory prefixes in 58 files, and skipped specifications and TDD records. A second pass fixed five places the first missed: text that followed an escaped newline in a string, and module attributes in one test.
+- Kept on purpose (N06): the MCP server name and tool names, the Codex client name, the request digest prefix, the schema identifier and the bridge variables.
+- `scripts/build-packages.mjs` builds publishable packages: no `private`, public access, `repository`, `homepage`, `bugs`, a description and keywords, and a README for users. It accepts final and pre-release versions.
+- `scripts/build-python.py` and `python/pyproject.toml`: the distribution `orchvia`, PEP 440 versions for pre-releases, project links and classifiers. `python/README.md` is the PyPI description, with absolute links.
+- `scripts/package-smoke.mjs` checks every archive's metadata and README and the wheel's metadata.
+- `.github/workflows/release.yml` (P02, P03), `scripts/registry-check.mjs` (P04), `CHANGELOG.md` (P05), `docs/release/publishing.md` (P06). `offline.yml` can be called by the release workflow.
+- R06: the reference and the guide say Orchvia is not affiliated with TypeSafe. L03: issue and pull request templates, `SECURITY.md` and an updated `CONTRIBUTING.md`.
+
+### GREEN
+
+- `node --test tests/contract/naming.test.ts`: 3 of 3; `python/tests/test_naming.py`: 2 of 2.
+- A build of 0.1.0 and the package smoke: all nine installation and bundle modes passed, with the new metadata checks.
+- Two builds of 0.1.0 produced byte-identical npm archives. That matters because the first npm publish is built locally and the release workflow compares the registry's bytes with its own build.
+- `npm publish --dry-run` works without a login when the archive path starts with `./`; without it, npm read `out/<file>` as a GitHub repository. The workflow and the guide use `./`.
+- Full checks: `npm test` 567 passed (564 before, plus three naming tests), `npm run test:python` 81 passed (79 plus two), and typecheck, formatting, the generated-contract check and `git diff --check` passed. The quickstart and the Python example ran.
+
+### Mutation checks
+
+| Mutation | Result |
+| --- | --- |
+| A package keeps its old name | caught (N01) |
+| The command keeps its old name | caught (N01) |
+| An example imports the old module | caught (N02) |
+| The request digest prefix changes, in TypeScript | caught (N06) |
+| The request digest prefix changes, in Python | caught (N06) |
+| The MCP server name changes | caught (N06) |
+| The schema identifier changes | caught (N06) |
+
+### Not verified yet
+
+- The release workflow's publishing jobs and `scripts/registry-check.mjs` run for the first time with the 0.1.0 tag; only the build job runs on pull requests.

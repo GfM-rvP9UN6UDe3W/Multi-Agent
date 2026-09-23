@@ -9,8 +9,8 @@ import threading
 import time
 import unittest
 
-from agent_orch import AcceptanceSpec, Orchestrator, RuntimeSpec, TaskSpec
-from agent_orch.routing import JevJudge, JudgeError, Router, RouteRuntime
+from orchvia import AcceptanceSpec, Orchestrator, RuntimeSpec, TaskSpec
+from orchvia.routing import JevJudge, JudgeError, Router, RouteRuntime
 
 
 ROOT = Path(__file__).resolve().parents[2]

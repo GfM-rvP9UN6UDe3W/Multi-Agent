@@ -84,7 +84,7 @@ export async function main(argv = process.argv.slice(2)): Promise<void> {
   }
   if (command === '--help' || command === 'help') {
     process.stdout.write(
-      'agent-orch host --config FILE [--stdio | --socket PATH]\nagent-orch doctor --config FILE | --socket PATH\nagent-orch submit --socket PATH --task FILE [--idempotency-key KEY]\nagent-orch status --socket PATH --task TASK_ID\nagent-orch run --socket PATH --task FILE [--interactive] [--follow] [--timeout-ms N] [--idempotency-key KEY]\nagent-orch attach --socket PATH --task TASK_ID [--interactive] [--follow] [--after-cursor N] [--timeout-ms N]\nagent-orch control --socket PATH --target FILE --action pause|resume|stop|compact|rotate [--mode drain|interrupt] [--idempotency-key KEY]\nagent-orch approve --socket PATH --approval ID --revision N --decision approve|deny [--idempotency-key KEY]\n',
+      'orchvia host --config FILE [--stdio | --socket PATH]\norchvia doctor --config FILE | --socket PATH\norchvia submit --socket PATH --task FILE [--idempotency-key KEY]\norchvia status --socket PATH --task TASK_ID\norchvia run --socket PATH --task FILE [--interactive] [--follow] [--timeout-ms N] [--idempotency-key KEY]\norchvia attach --socket PATH --task TASK_ID [--interactive] [--follow] [--after-cursor N] [--timeout-ms N]\norchvia control --socket PATH --target FILE --action pause|resume|stop|compact|rotate [--mode drain|interrupt] [--idempotency-key KEY]\norchvia approve --socket PATH --approval ID --revision N --decision approve|deny [--idempotency-key KEY]\n',
     );
     return;
   }
@@ -111,7 +111,7 @@ export async function main(argv = process.argv.slice(2)): Promise<void> {
         await waitForHostSignals(connection.closed, connection.shutdown, shutdown);
       } else {
         const host = await startUnixHost(engine, { socketPath: socketPath! });
-        process.stderr.write(`agent-orch listening on ${socketPath}\n`);
+        process.stderr.write(`orchvia listening on ${socketPath}\n`);
         await waitForHostSignals(host.closed, host.close, shutdown);
       }
     } catch (error) {

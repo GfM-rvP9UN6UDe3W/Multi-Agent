@@ -22,7 +22,7 @@ export async function smokeClaudeBundles({ root, isolated, run }) {
           '-e',
           `
 import assert from 'node:assert/strict';
-import {createClaudeMcpServer} from '@agent-orch/adapter-claude';
+import {createClaudeMcpServer} from '@orchvia/adapter-claude';
 await assert.rejects(createClaudeMcpServer({definitions:[],call:async()=>null}), error => error.code === 'CLAUDE_DEPENDENCY_UNAVAILABLE' && error.message.includes('zod 4.4.3') && error.cause?.message.includes('zod'));
 `,
         ],
@@ -65,7 +65,7 @@ await assert.rejects(createClaudeMcpServer({definitions:[],call:async()=>null}),
               {
                 name: 'host-owned-native-sdk-cjs-url',
                 setup(context) {
-                  // This compatibility shim applies ONLY to the third-party SDK, never agent-orch.
+                  // This compatibility shim applies ONLY to the third-party SDK, never orchvia.
                   context.onLoad(
                     { filter: /[\\/]@anthropic-ai[\\/]claude-agent-sdk[\\/]sdk\.mjs$/ },
                     async ({ path }) => ({
@@ -86,10 +86,10 @@ await assert.rejects(createClaudeMcpServer({definitions:[],call:async()=>null}),
     const inputs = Object.keys(result.metafile.inputs);
     for (const name of ['sdk', 'engine', 'adapter-claude'])
       assert.ok(
-        inputs.some((path) => path.includes(`@agent-orch/${name}/`)),
+        inputs.some((path) => path.includes(`@orchvia/${name}/`)),
         name,
       );
-    assert.ok(!inputs.some((path) => /@agent-orch\/(adapter-codex|cli)\//.test(path)));
+    assert.ok(!inputs.some((path) => /@orchvia\/(adapter-codex|cli)\//.test(path)));
     for (const output of Object.values(result.metafile.outputs))
       for (const dependency of output.imports)
         assert.ok(

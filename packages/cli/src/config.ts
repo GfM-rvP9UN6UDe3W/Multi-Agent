@@ -97,8 +97,8 @@ export async function loadConfig(configPath: string): Promise<HostConfig> {
     if (!object(settings)) invalid(`providers.${provider} must be an object`);
     if (
       settings.adapter !== undefined &&
-      settings.adapter !== `@agent-orch/adapter-${provider}` &&
-      !(provider === 'fake' && settings.adapter === '@agent-orch/engine/fake')
+      settings.adapter !== `@orchvia/adapter-${provider}` &&
+      !(provider === 'fake' && settings.adapter === '@orchvia/engine/fake')
     )
       invalid(`Adapter module is not allowed for ${provider}`);
     if (settings.models === undefined) {

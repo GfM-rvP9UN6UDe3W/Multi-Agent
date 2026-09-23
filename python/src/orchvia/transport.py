@@ -24,8 +24,8 @@ class RpcTransport:
         self._failure: OrchestrationError | None = None
         self._closed = False
         self._stderr = bytearray()
-        self._reader_task = asyncio.create_task(self._read_loop(), name="agent-orch-replies")
-        self._stderr_task = (asyncio.create_task(self._read_stderr(), name="agent-orch-stderr")
+        self._reader_task = asyncio.create_task(self._read_loop(), name="orchvia-replies")
+        self._stderr_task = (asyncio.create_task(self._read_stderr(), name="orchvia-stderr")
                              if process is not None else None)
 
     @classmethod

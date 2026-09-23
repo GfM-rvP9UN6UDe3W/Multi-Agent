@@ -5,7 +5,7 @@ import sys
 import tempfile
 import unittest
 
-from agent_orch import AcceptanceSpec, Orchestrator, OrchestrationError, RuntimeSpec, ShutdownIncomplete, TaskSpec
+from orchvia import AcceptanceSpec, Orchestrator, OrchestrationError, RuntimeSpec, ShutdownIncomplete, TaskSpec
 
 
 FIXTURE = Path(__file__).with_name("fake_protocol_server.py")

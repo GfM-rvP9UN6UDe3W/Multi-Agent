@@ -5,7 +5,7 @@ from pathlib import Path
 import shutil
 import tempfile
 
-from agent_orch import CheckAcceptanceSpec, Orchestrator, RuntimeSpec, TaskSpec
+from orchvia import CheckAcceptanceSpec, Orchestrator, RuntimeSpec, TaskSpec
 
 ROOT = Path(__file__).resolve().parents[2]
 

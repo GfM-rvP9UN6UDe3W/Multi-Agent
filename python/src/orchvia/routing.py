@@ -1,4 +1,4 @@
-"""Optional routing layer (SPEC-0018), mirroring ``@agent-orch/sdk/routing``.
+"""Optional routing layer (SPEC-0018), mirroring ``@orchvia/sdk/routing``.
 
 A pluggable judge answers typed questions about a request and the agents of one group;
 deterministic policy turns the answers into an ordinary declaration that the engine validates and
@@ -256,7 +256,7 @@ class JevJudge:
             except RuntimeError:  # The event loop closed; nobody waits any more.
                 pass
 
-        threading.Thread(target=work, name="agent-orch-jev", daemon=True).start()
+        threading.Thread(target=work, name="orchvia-jev", daemon=True).start()
         try:
             await asyncio.wait((settled,), timeout=max(0.0, deadline - time.monotonic()))
         finally:

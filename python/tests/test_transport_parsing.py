@@ -5,8 +5,8 @@ import sys
 import unittest
 from unittest.mock import patch
 
-from agent_orch import OrchestrationError
-from agent_orch.transport import MAX_FRAME_BYTES, RpcTransport
+from orchvia import OrchestrationError
+from orchvia.transport import MAX_FRAME_BYTES, RpcTransport
 
 
 class WriterFixture:
@@ -68,7 +68,7 @@ class DecoderFailureTests(unittest.IsolatedAsyncioTestCase):
         decoder.scan_once = json.scanner.py_make_scanner(decoder)
         with self.assertRaises(RecursionError):
             decoder.decode(value.decode())
-        with patch("agent_orch.transport.json.loads", side_effect=decoder.decode):
+        with patch("orchvia.transport.json.loads", side_effect=decoder.decode):
             await self.assert_fatal_decode_failure(value)
 
 

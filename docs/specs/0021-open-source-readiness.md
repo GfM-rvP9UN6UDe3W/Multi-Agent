@@ -1,6 +1,6 @@
 # SPEC-0021: Open-source readiness
 
-Date: 2026-09-23. Status: approved by the owner on 2026-09-23, with D-oss-1 to D-oss-4 each set to option 1. G, R, C and the repository rename (N05) are implemented on branch `oss-launch`; the package rename, P, E and L are not. Evidence: [TDD-0021](../tdd/0021-open-source-readiness.md). The owner asked for one plan that answers an outside assessment of why the public repository draws little attention. The owner chose the name Orchvia (D-oss-5). The project's relationship to TypeSafe is still open. It supersedes no specification. It changes packaging ([SPEC-0010](0010-bundled-host-delivery.md), [SPEC-0011](0011-release-readiness.md)) and the documentation layout, not the engine.
+Date: 2026-09-23. Status: approved by the owner on 2026-09-23, with D-oss-1 to D-oss-4 each set to option 1. G, R and C and the repository rename (N05) were merged in pull request #10. The rename (N), P01 to P03, P05, P06, R06, R10 and L03 are implemented on branch `orchvia-rename`; P04 runs with the first release; E, L01, L02 and L04 are not implemented yet. Evidence: [TDD-0021](../tdd/0021-open-source-readiness.md). The owner asked for one plan that answers an outside assessment of why the public repository draws little attention. The owner chose the name Orchvia (D-oss-5). The project's relationship to TypeSafe is still open. It supersedes no specification. It changes packaging ([SPEC-0010](0010-bundled-host-delivery.md), [SPEC-0011](0011-release-readiness.md)) and the documentation layout, not the engine.
 
 ## Why
 
@@ -72,11 +72,10 @@ The repository became public on 2026-09-19. A reader who arrives cannot tell wha
 
 - **N01** The repository, the README title, the npm scope or names, the PyPI project, the Python import name and the CLI command use one name.
 - **N02** No existing npm package has that name, and the CLI command is not `agent-orch`. Both are checked against the registry when the name is chosen.
-- **N03** With option 1 only:
-  - the old Python import `agent_orch` keeps working through the 0.1.x line: it re-exports the new module and warns once with `DeprecationWarning`;
-  - the old npm names were never published, so they get no alias. A migration table maps each old name to the new one, for existing consumers such as the downstream host.
+- **N03** No aliases (D-oss-10): the old npm names were never published, and the old Python import `agent_orch` is removed. A migration table in the changelog and in the release notice maps each old name to the new one, for existing consumers such as the downstream host.
 - **N04** Behavior does not change. The full Node and Python suites and the nine package modes pass before and after the rename, with the same test counts.
 - **N05** The GitHub rename keeps the old URL redirecting, and the local remotes are updated.
+- **N06** Protocol identifiers do not change with the name, because stored data and native histories contain them: the MCP server name `agent_orch` and its tool names `mcp__agent_orch__<tool>`, the request digest prefix `agent-orch-request-v1:`, the schema identifier `urn:agent-orch:protocol:2.0`, and the bridge variables `AGENT_ORCH_BRIDGE_*`. A test fixes a request digest in both languages and each identifier.
 
 ### P: Publishing (packaging code; the design is reviewed before any code)
 
@@ -164,7 +163,9 @@ Each public action waits for the owner's explicit authorization: renaming, chang
 - **D-oss-2, internal names:** remove them from current files and keep history (option 1).
 - **D-oss-3, versions:** publish 0.1.0 as `latest` (option 1).
 - **D-oss-4, evidence:** a pilot, then the full benchmark (option 1).
-- Still open: the project's relationship to TypeSafe, the vendor of Jev, for R06.
+- **Facts from the owner:** the project has no relationship with TypeSafe (R06); orchvia.com is not the owner's, so the homepage is the npm package page; the owner had no PyPI account.
+- **D-oss-10, the plan:** everything that can be done now is done now: no compatibility layer for the old names, protocol identifiers kept for good, and every step the maintainer may do is done by the maintainer. The owner does only what needs the owner's identity or money: npm and PyPI sign-in and two-factor confirmation, the PyPI account, the model budget, and forwarding the notice to the downstream host.
+- **D-oss-11, the model budget:** a pilot of at most $10 and a full run of at most $50, on the owner's local Claude Code account; the run stops and asks when a limit would be passed.
 
 ## Boundaries
 

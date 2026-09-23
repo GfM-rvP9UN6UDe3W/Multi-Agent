@@ -18,7 +18,7 @@ function input(overrides: Partial<RuntimeInput> = {}): RuntimeInput {
     providerSessionId: null,
     model: 'test-model',
     workspace: process.cwd(),
-    stateDir: '/tmp/agent-orch-adapter-test',
+    stateDir: '/tmp/orchvia-adapter-test',
     prompt: 'Read this project',
     permissionProfile: 'read-only',
     signal: new AbortController().signal,
@@ -294,7 +294,7 @@ test('AC adapter Codex: unsupported write profile does not spawn app-server', as
 });
 
 test('AC adapter Codex: isolated managed home and defensive flags override inherited user state', async () => {
-  const dir = await mkdtemp(join(tmpdir(), 'agent-orch-codex-'));
+  const dir = await mkdtemp(join(tmpdir(), 'orchvia-codex-'));
   const capture = join(dir, 'capture.json');
   try {
     const adapter = createCodexAdapter({
@@ -326,7 +326,7 @@ test('AC adapter Codex: isolated managed home and defensive flags override inher
 });
 
 test('AC adapter Codex: refuses modified managed configuration before spawn', async () => {
-  const dir = await mkdtemp(join(tmpdir(), 'agent-orch-config-'));
+  const dir = await mkdtemp(join(tmpdir(), 'orchvia-config-'));
   try {
     const home = join(dir, 'runtime', 'codex');
     await mkdir(home, { recursive: true });

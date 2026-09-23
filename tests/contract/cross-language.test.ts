@@ -41,7 +41,7 @@ test(
     try {
       await new Promise<void>((resolve, reject) => {
         let settled = false;
-        const readyMarker = `agent-orch listening on ${socketPath}\n`;
+        const readyMarker = `orchvia listening on ${socketPath}\n`;
         const timer = setTimeout(
           () => finish(new Error(`Host startup timed out after 10000 ms: ${diagnostics}`)),
           10000,
@@ -89,7 +89,7 @@ test(
           '-c',
           `
 import asyncio, json, sys
-from agent_orch import Orchestrator
+from orchvia import Orchestrator
 async def main():
     async with Orchestrator.connect(socket_path=sys.argv[1]) as orch:
         async for event in orch.events(task_id=sys.argv[2]):

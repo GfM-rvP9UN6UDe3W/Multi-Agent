@@ -20,8 +20,8 @@ const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const out = resolve(process.argv[2] ?? join(root, 'dist', 'release'));
 const versionIndex = process.argv.indexOf('--version');
 const releaseVersion = versionIndex < 0 ? undefined : process.argv[versionIndex + 1];
-if (versionIndex >= 0 && !/^\d+\.\d+\.\d+-rc\.\d+$/.test(releaseVersion ?? ''))
-  throw new Error('--version requires an explicit immutable RC version, e.g. 0.1.0-rc.1');
+if (versionIndex >= 0 && !/^\d+\.\d+\.\d+(?:-(?:alpha|beta|rc)\.\d+)?$/.test(releaseVersion ?? ''))
+  throw new Error('--version requires an explicit release version, e.g. 0.1.0 or 0.2.0-rc.1');
 if (
   releaseVersion &&
   (await access(join(out, 'npm-manifest.json')).then(
@@ -30,16 +30,52 @@ if (
   ))
 )
   throw new Error(
-    'RC output already contains a manifest; choose a new version and output directory',
+    'Release output already contains a manifest; choose a new version and output directory',
   );
-const temp = await mkdtemp(join(tmpdir(), 'agent-orch-build-'));
+const temp = await mkdtemp(join(tmpdir(), 'orchvia-build-'));
+const repository = 'https://github.com/masonlee39/orchvia';
 const packageNames = {
-  engine: '@agent-orch/engine',
-  'sdk-typescript': '@agent-orch/sdk',
-  'adapter-claude': '@agent-orch/adapter-claude',
-  'adapter-codex': '@agent-orch/adapter-codex',
-  cli: '@agent-orch/cli',
+  engine: '@orchvia/engine',
+  'sdk-typescript': '@orchvia/sdk',
+  'adapter-claude': '@orchvia/adapter-claude',
+  'adapter-codex': '@orchvia/adapter-codex',
+  cli: '@orchvia/cli',
 };
+const descriptions = {
+  engine:
+    'Orchvia engine: one local scheduler with durable SQLite state for Claude Code and Codex agents.',
+  'sdk-typescript': 'TypeScript SDK for Orchvia: run Claude Code and Codex agents as a team.',
+  'adapter-claude': 'Claude Code runtime adapter for Orchvia.',
+  'adapter-codex': 'Codex runtime adapter for Orchvia.',
+  cli: 'Orchvia host and command-line tools.',
+};
+/** The README that npm shows for one package. */
+function packageReadme(name, directory, version) {
+  const install =
+    directory === 'cli'
+      ? 'npm install @orchvia/cli @orchvia/engine @orchvia/adapter-claude'
+      : 'npm install @orchvia/sdk @orchvia/engine @orchvia/adapter-claude';
+  return [
+    `# ${name}`,
+    '',
+    `${descriptions[directory]} Part of [Orchvia](${repository}), version ${version}.`,
+    '',
+    'Orchvia runs Claude Code and Codex agents as a team from your own application: warm sessions that keep their history, a durable mailbox, human approval of results, and per-task token records.',
+    '',
+    '```sh',
+    install,
+    '```',
+    '',
+    'A Claude application installs the SDK, the engine and the Claude adapter; use `@orchvia/adapter-codex` for Codex. The Claude adapter loads `@anthropic-ai/claude-agent-sdk` and `zod` 4.4.3 when they are installed, or takes host-supplied callbacks.',
+    '',
+    '- Requires Node.js 22.18 or later. The packages are ESM-only.',
+    '- Python applications use the [`orchvia`](https://pypi.org/project/orchvia/) package, which talks to a Node host from `@orchvia/cli`.',
+    `- [Quickstart and documentation](${repository}#readme). This project is alpha software; see its [status](${repository}/blob/main/docs/status.md).`,
+    '',
+    'MIT licensed; see LICENSE. Third-party SDKs and runtimes keep their own licenses.',
+    '',
+  ].join('\n');
+}
 async function files(path) {
   const result = [];
   for (const entry of await readdir(path, { withFileTypes: true })) {
@@ -109,7 +145,8 @@ try {
         );
         await writeFile(path, code);
       }
-    const original = JSON.parse(
+    // The source manifests stay private so that nothing publishes from the workspace by mistake.
+    const { private: _workspaceOnly, ...original } = JSON.parse(
       await readFile(join(root, 'packages', directory, 'package.json'), 'utf8'),
     );
     const version = releaseVersion ?? original.version;
@@ -124,42 +161,47 @@ try {
       directory === 'engine'
         ? {}
         : {
-            '@agent-orch/engine': version,
-            ...(directory === 'cli' ? { '@agent-orch/sdk': version } : {}),
+            '@orchvia/engine': version,
+            ...(directory === 'cli' ? { '@orchvia/sdk': version } : {}),
           };
     const peers =
       directory === 'cli'
         ? {
-            '@agent-orch/adapter-claude': version,
-            '@agent-orch/adapter-codex': version,
+            '@orchvia/adapter-claude': version,
+            '@orchvia/adapter-codex': version,
           }
         : original.peerDependencies;
     const peerMeta =
       directory === 'cli'
         ? {
-            '@agent-orch/adapter-claude': { optional: true },
-            '@agent-orch/adapter-codex': { optional: true },
+            '@orchvia/adapter-claude': { optional: true },
+            '@orchvia/adapter-codex': { optional: true },
           }
         : original.peerDependenciesMeta;
     const pkg = {
       ...original,
       version,
-      private: true,
-      repository: { type: 'git', url: 'git+https://github.com/masonlee39/Multi-Agent.git' },
+      description: descriptions[directory],
+      keywords: ['orchvia', 'multi-agent', 'claude-code', 'codex', 'orchestration', 'agents'],
+      homepage: `${repository}#readme`,
+      bugs: { url: `${repository}/issues` },
+      repository: {
+        type: 'git',
+        url: `git+${repository}.git`,
+        directory: `packages/${directory}`,
+      },
+      publishConfig: { access: 'public' },
       license: 'MIT',
       engines: { node: '>=22.18.0' },
       files: ['dist', 'README.md', 'LICENSE'],
       exports: exported,
       ...(Object.keys(dependencies).length ? { dependencies } : {}),
       ...(peers ? { peerDependencies: peers, peerDependenciesMeta: peerMeta } : {}),
-      ...(directory === 'cli' ? { bin: { 'agent-orch': './dist/main.js' } } : {}),
+      ...(directory === 'cli' ? { bin: { orchvia: './dist/main.js' } } : {}),
     };
     await writeFile(join(stage, 'package.json'), JSON.stringify(pkg, null, 2) + '\n');
     await cp(join(root, 'LICENSE'), join(stage, 'LICENSE'));
-    await writeFile(
-      join(stage, 'README.md'),
-      `# ${name}\n\n**ESM-only package; direct require() is not exported.** Host-side single-file CJS and ESM bundles of SDK + engine + Claude adapter are tested without node_modules.\n\nLicensed under the MIT License; see LICENSE. Third-party dependencies retain their own licenses.\n\nUnpublished local distribution, version ${version}. Requires the Node APIs available in Node.js 22.18+; embedded Electron is not rejected by runtime brand.\n\nThere are five modular packages: @agent-orch/sdk, @agent-orch/engine, @agent-orch/adapter-claude, @agent-orch/adapter-codex and @agent-orch/cli. A Claude consumer installs the first three; installing the SDK alone does not install a provider.\n\nClaude native SDK and zod 4.4.3 are optional peers: provide them for default loading, or inject the host-owned query, createMcpServer and inspectSession callbacks. createClaudeMcpServer(tools, {sdk, zod}) and inspectClaudeSession(input, sdk) are public helpers. An injected query never falls back to a different default SDK for MCP/inspection. The host owns the native executable.\n\nSee https://github.com/masonlee39/Multi-Agent/blob/main/docs/acceptance/bundled-host.md for integration and verification boundaries. Wire protocol 2.0. Internal exports are unstable. No paid-model, Electron, OS sandbox, or public-release acceptance is implied.\n`,
-    );
+    await writeFile(join(stage, 'README.md'), packageReadme(name, directory, version));
     if (directory === 'cli') await chmod(join(destination, 'main.js'), 0o755);
     if (
       releaseVersion &&
@@ -168,7 +210,7 @@ try {
         () => false,
       ))
     )
-      throw new Error('An RC tarball with this version already exists; never overwrite it');
+      throw new Error('A tarball with this version already exists; never overwrite it');
     const packed = JSON.parse(
       execFileSync('npm', ['pack', '--ignore-scripts', '--json', '--pack-destination', out], {
         cwd: stage,

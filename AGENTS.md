@@ -7,7 +7,7 @@ Orchvia uses one Node.js engine for scheduling and SQLite persistence; Python co
 - `packages/engine/`: orchestration, storage, types, and deterministic fake runtime.
 - `packages/sdk-typescript/`, `packages/cli/`: TypeScript client and local host/CLI.
 - `packages/adapter-claude/`, `packages/adapter-codex/`: provider adapters.
-- `python/src/agent_orch/`: async Python SDK; `python/tests/`: Python tests.
+- `python/src/orchvia/`: async Python SDK; `python/tests/`: Python tests.
 - `tests/engine/`, `tests/contract/`, `tests/fixtures/`: engine tests, integration/contract tests, and subprocess fixtures.
 - `schemas/`: wire schema; `examples/`: runnable examples; `docs/specs/` and `docs/tdd/`: acceptance contracts and verification evidence; `docs/`: guide, reference, concepts, design and status; `docs/images/`: diagrams.
 

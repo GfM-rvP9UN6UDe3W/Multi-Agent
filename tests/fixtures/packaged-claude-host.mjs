@@ -2,13 +2,13 @@ import assert from 'node:assert/strict';
 import { mkdtemp, mkdir, rm, access } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { createOrchestrator, validateWire } from '@agent-orch/sdk';
-import { createFakeAdapter } from '@agent-orch/engine/fake';
+import { createOrchestrator, validateWire } from '@orchvia/sdk';
+import { createFakeAdapter } from '@orchvia/engine/fake';
 import {
   createClaudeAdapter,
   createClaudeMcpServer,
   inspectClaudeSession,
-} from '@agent-orch/adapter-claude';
+} from '@orchvia/adapter-claude';
 import * as nativeSdk from '@anthropic-ai/claude-agent-sdk';
 import * as zod from 'zod';
 

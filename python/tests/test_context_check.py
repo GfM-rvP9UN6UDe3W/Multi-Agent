@@ -6,9 +6,9 @@ import shutil
 import tempfile
 import unittest
 
-from agent_orch import AcceptanceSpec, OrchestrationError, Orchestrator, RuntimeSpec, TaskSpec
-from agent_orch.routing import Router, RouteRuntime
-from agent_orch.types import snapshot
+from orchvia import AcceptanceSpec, OrchestrationError, Orchestrator, RuntimeSpec, TaskSpec
+from orchvia.routing import Router, RouteRuntime
+from orchvia.types import snapshot
 
 
 ROOT = Path(__file__).resolve().parents[2]

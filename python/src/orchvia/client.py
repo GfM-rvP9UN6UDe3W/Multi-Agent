@@ -419,7 +419,7 @@ class Orchestrator:
         return await self.start()
 
     async def __aexit__(self, exc_type: Any, exc: BaseException | None, traceback: Any) -> bool:
-        cleanup = asyncio.create_task(self.close(), name="agent-orch-context-close")
+        cleanup = asyncio.create_task(self.close(), name="orchvia-context-close")
         cancelled: asyncio.CancelledError | None = None
         while True:
             try:
@@ -462,7 +462,7 @@ class Orchestrator:
                 raise OrchestrationError("VALIDATION_ERROR", "Use Orchestrator.local or Orchestrator.connect")
             # A subprocess may already exist before its async factory returns. Do not
             # cancel that factory and lose ownership of resources it has created.
-            opening = asyncio.create_task(factory, name="agent-orch-open-transport")
+            opening = asyncio.create_task(factory, name="orchvia-open-transport")
             try:
                 self._transport = await asyncio.shield(opening)
                 result = await self._transport.request("initialize", {
@@ -476,7 +476,7 @@ class Orchestrator:
                 self.info = snapshot(result)
             except BaseException as startup_error:
                 cleanup = asyncio.create_task(self._cleanup_failed_start(opening),
-                                              name="agent-orch-start-cleanup")
+                                              name="orchvia-start-cleanup")
                 while True:
                     try:
                         await asyncio.shield(cleanup)

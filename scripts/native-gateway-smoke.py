@@ -2,8 +2,8 @@
 import asyncio
 import json
 import sys
-from agent_orch import Orchestrator, TaskSpec, RuntimeSpec, AcceptanceSpec
-from agent_orch.types import to_wire
+from orchvia import Orchestrator, TaskSpec, RuntimeSpec, AcceptanceSpec
+from orchvia.types import to_wire
 
 
 async def main():

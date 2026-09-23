@@ -6,7 +6,7 @@ import shutil
 import tempfile
 import unittest
 
-from agent_orch import AcceptanceSpec, CheckAcceptanceSpec, Orchestrator, RuntimeSpec, ShutdownIncomplete, TaskSpec
+from orchvia import AcceptanceSpec, CheckAcceptanceSpec, Orchestrator, RuntimeSpec, ShutdownIncomplete, TaskSpec
 
 
 ROOT = Path(__file__).resolve().parents[2]

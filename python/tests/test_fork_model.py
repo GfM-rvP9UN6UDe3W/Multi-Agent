@@ -7,7 +7,7 @@ import sys
 import tempfile
 import unittest
 
-from agent_orch import AcceptanceSpec, OrchestrationError, Orchestrator, RuntimeSpec, TaskSpec
+from orchvia import AcceptanceSpec, OrchestrationError, Orchestrator, RuntimeSpec, TaskSpec
 
 
 ROOT = Path(__file__).resolve().parents[2]
