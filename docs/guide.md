@@ -164,6 +164,17 @@ Codex accepts `permissionProfile`, `networkAccess` (default false), and `webSear
 
 For extended Claude options or either write profile, `observeExecutionStop({ target, terminal, signal, remainingMs })` must observe complete remote/background stop for the exact dispatch/generation/native IDs. Return true only after actual host observation. False, rejection, absence, and timeout retain unknown execution. Waiting is bounded by cleanup time; late true evidence is retained without clearing business quarantine or resubmitting. Local child-process exit is independently required. With an observer configured, `terminalCoversExecution` denotes this combined proof; native-terminal evidence retains `remoteExecution: unknown` until host confirmation.
 
+On macOS and Linux each Claude Code process leads its own process group, which its descendants share, and the context also lists `processes: [{ pid, processGroupId }]` for the dispatch (SPEC-0023 P). `processGroupsStopped(context)` from `@orchvia/adapter-claude` returns true only when none of those groups has a member left, and any unexpected error counts as not stopped. It does not see a descendant that left its group, for example a daemon that called `setsid`, or remote work, so an observer combines it with its own checks:
+
+```ts
+import { processGroupsStopped } from '@orchvia/adapter-claude';
+
+const observeExecutionStop = async (context) =>
+  processGroupsStopped(context) && (await remoteWorkStopped(context.target));
+```
+
+When the adapter has to end a Claude process that did not stop by itself, it sends SIGTERM to the whole group and, when the cleanup window ends, SIGKILL to what is left of it. Because the processes no longer share the host's process group, a terminal's Ctrl-C or hang-up reaches only the host; `orchvia host` shuts down in order on SIGINT, SIGTERM and SIGHUP.
+
 The writable Claude profile always requires the runtime's OS sandbox (`enabled` and `failIfUnavailable`, with no unsandboxed fallback). It works only where Claude Code can sandbox Bash. macOS uses its built-in sandbox; Linux needs `bubblewrap` and `socat` installed. Without them a writable task fails at its first dispatch with the runtime's `Sandbox required but unavailable` reason, and nothing runs unsandboxed. The engine's native checks cover macOS and Ubuntu CI with those packages. Other platforms are unverified; check Claude Code's sandbox support before enabling the writable profile there.
 
 Usage consumers subscribe to existing engine events and read exact records:

@@ -27,6 +27,8 @@ class RpcTransport:
         self._reader_task = asyncio.create_task(self._read_loop(), name="orchvia-replies")
         self._stderr_task = (asyncio.create_task(self._read_stderr(), name="orchvia-stderr")
                              if process is not None else None)
+        self._exit_task = (asyncio.create_task(self._watch_exit(), name="orchvia-host-exit")
+                           if process is not None else None)
 
     @classmethod
     async def stdio(cls, command: Sequence[str], *, env: Mapping[str, str] | None,
@@ -60,6 +62,21 @@ class RpcTransport:
                 if len(self._stderr) > MAX_STDERR_BYTES:
                     del self._stderr[:-MAX_STDERR_BYTES]
         except (OSError, asyncio.CancelledError):
+            return
+
+    async def _watch_exit(self) -> None:
+        """SPEC-0023 E03: notice an owned host's exit even while another process holds its output."""
+        assert self.process is not None
+        try:
+            while self.process.returncode is None:
+                await asyncio.sleep(0.1)
+            # Answers that the host wrote before it exited may still be arriving.
+            await asyncio.wait({self._reader_task}, timeout=1.0)
+            if not self._reader_task.done():
+                self._reader_task.cancel()
+                self._fail(OrchestrationError("CONNECTION_CLOSED", "Engine process exited"))
+                self.writer.close()
+        except asyncio.CancelledError:
             return
 
     def _fail(self, error: OrchestrationError) -> None:
@@ -175,9 +192,21 @@ class RpcTransport:
                         self.process.kill()
                         await self.process.wait()
         tasks = [self._reader_task]
+        if self._exit_task is not None:
+            tasks.append(self._exit_task)
         if self._stderr_task is not None:
+            if self.process is not None and self.process.returncode is not None:
+                # SPEC-0023 E02: keep the last error output of an exited host, waiting at most 1 s,
+                # because a leftover process can hold the pipe open.
+                await asyncio.wait({self._stderr_task}, timeout=1.0)
             tasks.append(self._stderr_task)
         for task in tasks:
             if not task.done():
                 task.cancel()
         await asyncio.gather(*tasks, return_exceptions=True)
+        if self.process is not None and self.process.returncode is not None:
+            # A process that the host left behind can hold its pipes open; release our ends. Only an
+            # exited host's transport is closed, because closing it would kill a running one.
+            transport = getattr(self.process, "_transport", None)
+            if transport is not None:
+                transport.close()

@@ -502,6 +502,12 @@ export interface RuntimeStopContext {
     }
   >;
   readonly terminal: Readonly<RuntimeTerminalEvent>;
+  /**
+   * SPEC-0023 P02: every operating-system process that the adapter started for this dispatch, each
+   * the leader of its own process group, including those that already exited. Left out by adapters
+   * that start no process, and on Windows. Never stored or sent on the wire.
+   */
+  readonly processes?: readonly Readonly<{ pid: number; processGroupId: number }>[];
   readonly signal: AbortSignal;
   readonly remainingMs: () => number;
 }

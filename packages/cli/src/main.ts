@@ -66,11 +66,14 @@ async function waitForHostSignals(
   };
   process.on('SIGTERM', stop);
   process.on('SIGINT', stop);
+  // SPEC-0023 P05: Claude processes lead their own groups, so a closing terminal reaches only the host.
+  process.on('SIGHUP', stop);
   try {
     await closed;
   } finally {
     process.removeListener('SIGTERM', stop);
     process.removeListener('SIGINT', stop);
+    process.removeListener('SIGHUP', stop);
   }
 }
 

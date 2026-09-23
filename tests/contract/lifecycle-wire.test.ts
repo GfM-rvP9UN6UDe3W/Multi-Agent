@@ -41,8 +41,16 @@ const target = (session: SessionSnapshot): SessionControlTarget => ({
   expectedState: session.status,
 });
 
-async function eventually<T>(read: () => Promise<T>, ready: (value: T) => boolean): Promise<T> {
-  const end = Date.now() + 5000;
+// SPEC-0023 F01: fixture waits only detect a host that hangs. A host that starts or answers slowly on
+// a loaded runner gets 10 s, as the CLI shutdown fixtures do, and a test that starts one gets 60 s.
+const HOST_WAIT_MS = 10_000;
+
+async function eventually<T>(
+  read: () => Promise<T>,
+  ready: (value: T) => boolean,
+  waitMs = 5000,
+): Promise<T> {
+  const end = Date.now() + waitMs;
   while (true) {
     const value = await read();
     if (ready(value)) return value;
@@ -91,7 +99,7 @@ class Wire {
       const timer = setTimeout(() => {
         this.pending.delete(id);
         reject(new Error(`No stdio response for ${method}`));
-      }, 5000);
+      }, HOST_WAIT_MS);
       this.pending.set(id, {
         resolve: (value) => {
           clearTimeout(timer);
@@ -169,6 +177,7 @@ async function fixture(t: TestContext, mode: 'stdio' | 'unix') {
         return stderr;
       },
       (value) => value.includes('listening on'),
+      HOST_WAIT_MS,
     );
   return { proc, socketPath, exited, stderr: () => stderr };
 }
@@ -191,7 +200,7 @@ async function stdioFixture(t: TestContext) {
 
 test(
   '0003-A real stdio exposes durable deadline and permits owner reconcile without rerunning completed work',
-  { timeout: 10000 },
+  { timeout: 60_000 },
   async (t) => {
     const f = await stdioFixture(t);
     const operation = await f.wire.call<OperationSnapshot>('sessions.control', {
@@ -256,7 +265,7 @@ test(
 
 test(
   '0003-A real Unix client can inspect lifecycle but cannot attest reconciliation or stop shared host',
-  { timeout: 10000 },
+  { timeout: 60_000 },
   async (t) => {
     const f = await fixture(t, 'unix');
     const client = await connectOrchestrator({ socketPath: f.socketPath });
@@ -294,7 +303,7 @@ test(
 
 test(
   '0003-A real owner stdio shutdown remains queryable after timeout and continue closes the same operation',
-  { timeout: 10000 },
+  { timeout: 60_000 },
   async (t) => {
     const f = await stdioFixture(t);
     let operationId: string | undefined;
@@ -368,7 +377,7 @@ async function within<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
 for (const stalledAt of ['initialize', 'turn-start']) {
   test(
     `0003-A real owner EOF reaps its Codex ${stalledAt} child, preserves outcome on restart, and leaves another process alive`,
-    { timeout: 15000 },
+    { timeout: 60_000 },
     async (t) => {
       const root = await realpath(await mkdtemp(join(tmpdir(), 'oe-')));
       const workspace = join(root, 'workspace'),

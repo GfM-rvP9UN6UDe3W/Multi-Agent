@@ -1,0 +1,143 @@
+# TDD-0023: Corrections before 0.1.2
+
+Date: 2026-09-23. Base: the last tree of the branch `one-version`, which sits on `community-12-13-14`. Specification: [SPEC-0023](../specs/0023-corrections-before-0.1.2.md). The owner approved the designs of E03 and P on 2026-09-23 (D-known-6 = 1, D-known-7 = 1) before any of their code was written.
+
+## F: Stdio fixture waits
+
+### RED
+
+The CI failure itself cannot be replayed: GitHub serves the logs of the failed first run of the rc.10 pull request only to signed-in users. A test-only preload, used for the reproduction and not committed, delayed the start of every `orchvia host` by 6 seconds, as a loaded runner can. `node --test tests/contract/lifecycle-wire.test.ts` then failed all five tests that start a host after 5.01 to 5.04 seconds: four with `No stdio response for initialize` and the socket test with `Timed out waiting for wire state: ""`. Without the delay they pass in about 0.3 seconds each. On this machine a host answers `initialize` 90 ms after it starts, and 0.9 seconds with 54 starting at once.
+
+### Changes
+
+`tests/contract/lifecycle-wire.test.ts` waits 10 seconds for each response and for a socket host to listen, and the five tests allow 60 seconds. The owner-EOF tests still require the host to exit within 5 seconds of the disconnect (SPEC-0003-A).
+
+### GREEN
+
+- With the host start delayed by 6 seconds: 5 of 5 passed. Delayed by 11 seconds: all five failed with the fixture's own messages, so a host that stalls is still reported at the step that stalled.
+- Twelve runs of the file at once, next to 18 busy loops on 18 cores: 12 of 12 passed; the slowest took 4.3 seconds.
+
+## E: Why a host did not start
+
+### RED
+
+`python3 -m unittest python/tests/test_host_start_errors.py` failed 4 of 5 before the change:
+
+- `test_0023_e01_the_host_error_output_ends_the_message`: the message was only `Engine connection ended before the next complete response`.
+- `test_0023_e01_a_real_host_with_an_invalid_configuration`: `'INVALID_CONFIG' not found in 'Engine connection ended before the next complete response'`, although the host printed `{"code":"INVALID_CONFIG","message":"Configure at least one provider explicitly; fake is never enabled by default"}`.
+- The two E02 tests stopped with `KeyError: 'stderrTail'`.
+- `test_0023_e01_a_host_without_error_output_keeps_the_error` passed; it guards the unchanged case.
+
+The first version of the test for an error output held open by a leftover process took 30.0 seconds: that process had also inherited the host's standard output, so the start waited for the request timeout. That is a separate defect, E03 below; this test now leaves only the error output open.
+
+### Changes
+
+- `python/src/orchvia/transport.py`: after an owned host's process exited, closing the connection waits at most 1 second for the reader of its error output to finish.
+- `python/src/orchvia/client.py`: a start that fails with `CONNECTION_CLOSED` or `PROTOCOL_ERROR` on an owned host appends the host's last error output, at most 2,000 characters, to the message and puts all of it that the transport kept into `error.data["stderrTail"]`.
+
+### GREEN
+
+- `python/tests/test_host_start_errors.py`: 6 of 6, in about 1.2 seconds; the test with an error output held open finishes about 1 second after the host exits.
+- The test in which a leftover process writes its line 0.3 seconds after the host exits was added after its mutation below went unnoticed by the first five tests. Without the wait it failed five times out of five, with only the first line kept; with the wait it passed three times out of three.
+
+### Mutation checks
+
+| Mutation | Result |
+| --- | --- |
+| No wait for the error output after the exit | caught, 5 of 5 runs (the late line) |
+| An unbounded wait for the error output | caught (the error output held open) |
+| The output only in `data`, not in the message | caught (two E01 tests) |
+| An empty output still appended | caught (the unchanged case) |
+
+## E03: A host that exits while its output stays open
+
+### RED
+
+`python3 -m unittest -k e03 python/tests/test_host_start_errors.py` failed both tests after 30.0 seconds, the request timeout: a start whose host exits at once, and a request pending when the host exits after it answered `initialize`. In both, a process that the host left behind held its standard output.
+
+### Changes
+
+`python/src/orchvia/transport.py`: while an owned host runs, a task checks every 100 ms whether its process has exited. After an exit it waits at most 1 second for the reader, so answers written before the exit still arrive; if the output has not ended by then, it fails every pending request with `CONNECTION_CLOSED` (`Engine process exited`) and stops reading. Closing the connection stops the task.
+
+### A leak found on the way
+
+With these tests the SDK printed `ResourceWarning: unclosed transport`: after a failed start, its ends of the pipes that the leftover process held stayed open until garbage collection. A test that compares `/dev/fd` before and after the start found two descriptors left, `8` and `10`. Once the host's process has exited, closing the connection now closes the subprocess transport. It is never closed while the host runs, because that would kill it; `test_0023_e02_disconnect_leaves_a_host_that_still_runs_to_finish` covers that already-correct behavior. The descriptor test then passed, and the warnings were gone.
+
+### GREEN
+
+- `python/tests/test_host_start_errors.py`: 10 of 10 in about 9 seconds, three runs in a row.
+- The leftover processes of these tests sleep 10 seconds, longer than every bound under test.
+
+### Mutation checks
+
+| Mutation | Result |
+| --- | --- |
+| No exit check | caught (both E03 tests took 10 seconds) |
+| The transport closed while the host still runs | caught (the host was stopped before it finished) |
+
+The 1-second allowance for answers written just before an exit has no test of its own: the reader has read such an answer long before the next 100 ms check.
+
+## W: Workflow actions
+
+### RED
+
+Every job of the CI run on `main` at `5d95079` carried the annotation `Node.js 20 is deprecated. The following actions target Node.js 20 but are being forced to run on Node.js 24: actions/checkout@v4, actions/setup-node@v4, actions/setup-python@v5, actions/upload-artifact@v4`. `node --test tests/contract/workflows.test.ts` failed with 21 problems: eight actions in `offline.yml` named by movable tags such as `actions/checkout@v4`, and 13 pinned actions in `release.yml` older than the first major version that runs on Node.js 24.
+
+### Changes
+
+Both workflows name `actions/checkout` v7.0.1, `actions/setup-node` v7.0.0, `actions/setup-python` v7.0.0, `actions/upload-artifact` v7.0.1 and `actions/download-artifact` v8.0.1 by their commits. Each commit's `action.yml` says `node24`, and each of the 31 inputs that the workflows pass exists in it. setup-node v7 no longer exports a placeholder `NODE_AUTH_TOKEN`; `npm view` of a public package worked with a placeholder token, with an unset one and without one, so the npm job's check for published versions is not affected.
+
+### GREEN
+
+`node --test tests/contract/workflows.test.ts`: 1 of 1. W02 is checked on the pull request's CI: no deprecation annotation, and the release dry run passes.
+
+### Mutation checks
+
+| Mutation | Result |
+| --- | --- |
+| An action named by a movable tag again | caught |
+| download-artifact pinned at v6, which runs on Node.js 20 | caught |
+| A pinned action without its version comment | caught |
+| A shortened commit | caught |
+
+## P: Process identity for the stop proof
+
+### RED
+
+`node --test tests/contract/claude-process-groups.test.ts` failed 5 of 5 against a stub of `processGroupsStopped` that always returned false, with the optional `processes` field declared but never filled:
+
+- `0023-P01 0023-P02`: the observer's context had no `processes`, and the grandchild of the Claude stand-in shared the test runner's process group.
+- `0023-P03`, with real processes: the check stayed false after the grandchild ended. With an injected error, `ESRCH` did not count as stopped.
+- `0023-P04`: a Claude stand-in and its grandchild that ignore SIGTERM were both alive 3 seconds after a cleanup with a 300 ms window.
+- `0023-P05`: `orchvia host` died of the signal (`{ code: null, signal: 'SIGHUP' }`) instead of shutting down.
+
+### Changes
+
+- `packages/adapter-claude/src/index.ts`: on macOS and Linux each Claude Code process is spawned `detached`, so it leads a new process group. The observer's context lists `processes: [{ pid, processGroupId }]`. A forced cleanup signals the group with SIGTERM and, when the cleanup window ends, SIGKILLs what is left of it.
+- `packages/adapter-claude/src/process-groups.ts`: `processGroupsStopped`, and the group signals. SIGKILL goes only to a group that still has a member, whose ID cannot have been reused.
+- `packages/engine/src/types.ts` and `stop-observation.ts`: the optional, frozen `processes` of `RuntimeStopContext`.
+- `packages/cli/src/main.ts`: `orchvia host` handles SIGHUP as it handles SIGTERM.
+- The guide's paragraph on `observeExecutionStop`, with an example, and the changelog.
+
+### GREEN
+
+`node --test tests/contract/claude-process-groups.test.ts`: 5 of 5.
+
+### Mutation checks
+
+| Mutation | Result |
+| --- | --- |
+| The Claude process does not lead its own group | caught |
+| The context lists no processes | caught |
+| An EPERM from the check counts as stopped | caught |
+| No SIGKILL when the cleanup window ends | caught |
+| The host has no SIGHUP handler | caught |
+
+Checking the group before its SIGKILL guards against a reused group ID, which no test can bring about.
+
+## Not verified
+
+- W02 until the pull request's CI runs, and the npm publish through setup-node v7 until the 0.1.2 release.
+- F on GitHub's runners: the reproduction delays the host start on this machine.
+- P with a real Claude Code process and on Linux: the tests use a stand-in process on macOS; CI runs them on Linux too. A descendant that leaves its group, such as a daemon, stays invisible to the check, as the specification states.
+- P on Windows, where the adapter does not create groups and leaves `processes` out.

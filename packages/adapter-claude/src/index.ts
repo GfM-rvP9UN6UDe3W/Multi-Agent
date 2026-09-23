@@ -22,6 +22,8 @@ import { createClaudeMcpServer } from './mcp.ts';
 import { inspectClaudeSession } from './inspection.ts';
 export { createClaudeMcpServer, type ClaudeMcpDependencies } from './mcp.ts';
 export { inspectClaudeSession, type ClaudeInspectionDependencies } from './inspection.ts';
+export { processGroupsStopped } from './process-groups.ts';
+import { killProcessGroup, signalProcessGroup } from './process-groups.ts';
 import type {
   ClaudeAdapterConfig,
   ClaudeHostOptions,
@@ -263,6 +265,8 @@ export function createClaudeAdapter<Extra extends object = object>(
       signal: options.signal,
       stdio: 'pipe',
       windowsHide: true,
+      // SPEC-0023 P01: the process leads its own group, which its descendants share.
+      detached: process.platform !== 'win32',
     });
     const state = { child, exited: false };
     handle.processes.add(state);
@@ -305,11 +309,18 @@ export function createClaudeAdapter<Extra extends object = object>(
             /* Still attempt signalling if the private pipe cannot be closed. */
           }
           try {
-            child.kill('SIGTERM');
+            signalProcessGroup(child, 'SIGTERM');
           } catch {
             /* Failed signalling is not exit proof; retain the original handle. */
           }
         }
+        // SPEC-0023 P04: when the cleanup window ends, kill what is left of each group.
+        setTimeout(
+          () => {
+            for (const { child } of handle.processes) killProcessGroup(child);
+          },
+          Math.max(0, cleanupTimeoutMs - (performance.now() - startedAt)),
+        );
       };
       let closeStarted = false;
       try {
@@ -579,6 +590,13 @@ export function createClaudeAdapter<Extra extends object = object>(
       let stopObservation: Promise<boolean> | undefined;
       const observeStop = (): void => {
         if (coversExecution || !matchedTerminal || stopObservation) return;
+        // SPEC-0023 P02: every Claude process this dispatch started, each leading its own group.
+        const started =
+          process.platform === 'win32'
+            ? []
+            : [...(handle?.processes ?? [])].flatMap(({ child }) =>
+                child.pid === undefined ? [] : [{ pid: child.pid, processGroupId: child.pid }],
+              );
         stopObservation = observeRuntimeStop(
           config.observeExecutionStop,
           {
@@ -591,6 +609,7 @@ export function createClaudeAdapter<Extra extends object = object>(
               providerSessionId: sessionId,
             },
             terminal: matchedTerminal,
+            ...(started.length ? { processes: started } : {}),
           },
           cleanupTimeoutMs,
           () => {
