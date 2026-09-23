@@ -82,6 +82,7 @@ SPEC-0007 adds `adapter-claude/src/options.ts` for typed native options, reserve
 - **Treat unknown conservatively:** no automatic outcome resolution, resend, retry, or unsupported lease release. Missing usage stays null; registered-price cost estimates must preserve unknown coverage and must not be presented as invoices.
 - **Reject unsupported capabilities explicitly:** session operations and checks are implemented, but each still requires its exact declared runtime capability/evidence. Never simulate a native fork or compact boundary.
 - **No credentials or real models in ordinary tests:** temporary workspace/stateDir, explicit fake provider, and no default fake configuration. Unix-socket EPERM requires a permitted environment and a rerun, not a passing result.
+- **4 KiB test reserve:** a test engine passes `storage: { emergencyBytes: 4096 }`, or `"storage": {"emergencyBytes": 4096}` in a CLI configuration. `npm test` and `npm run test:python` load `tests/fixtures/reserve-guard.mjs`, which fails any other process that would write a larger emergency reserve (SPEC-0011 R10). Only the runnable examples keep the 256 MiB production default. A single-file `node --test` run needs `--import ./tests/fixtures/reserve-guard.mjs` to be checked.
 - Agents do not commit, push or publish packages without the maintainer's explicit authorization.
 - Write documentation, examples, and source comments in English. Keep intentional multilingual fixtures used to test Unicode behavior.
 

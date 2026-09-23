@@ -20,6 +20,7 @@ test('B08 namespace/protocol checks precede every business write', async () => {
     workspace,
     stateDir: join(root, 'state'),
     adapters: [createFakeAdapter()],
+    storage: { emergencyBytes: 4096 },
   });
   try {
     await assert.rejects(
@@ -58,7 +59,12 @@ test('B08 TypeScript receipt retry keeps its original namespace on another host'
   const workspace = join(root, 'work');
   await mkdir(workspace);
   const make = (name: string) =>
-    createOrchestrator({ workspace, stateDir: join(root, name), adapters: [createFakeAdapter()] });
+    createOrchestrator({
+      workspace,
+      stateDir: join(root, name),
+      adapters: [createFakeAdapter()],
+      storage: { emergencyBytes: 4096 },
+    });
   const first = await make('first'),
     second = await make('second');
   try {

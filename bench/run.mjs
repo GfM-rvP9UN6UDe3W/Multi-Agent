@@ -240,6 +240,8 @@ async function orchviaArm(rep) {
     writeScopes: { restock: ['restock'], report: ['report'] },
     allowCrossRootReuse: true,
     limits: { maxActiveSessions: 2 },
+    // --fake runs are tests (SPEC-0011 R10): a 4 KiB emergency reserve, not the 256 MiB default.
+    ...(fake ? { storage: { emergencyBytes: 4096 } } : {}),
   });
   const rows = [];
   const started = performance.now();

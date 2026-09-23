@@ -157,3 +157,75 @@ GREEN:
 - Mutation: when `close()` reports `SHUTDOWN_INCOMPLETE` once persistence has passed the budget, R03 still passes and R09 fails at the watchdog after 30.1 s. The failure message shows the host's stderr, with its `SHUTDOWN_INCOMPLETE` line.
 
 Not verified: the Ubuntu disk latency during the failed run is inferred, not measured. The fix covers any cause that only delays a successful exit. A cause that keeps the host alive would still fail, now with the host's stderr in the message.
+
+## Production-size reserves in the test suite
+
+Date: 2026-09-23. Found while investigating the 0011-R03 failure in [run 35832001307](https://github.com/masonlee39/orchvia/actions/runs/35832001307) (Ubuntu 24.04, Node 24.14.0). Source `702a3d7`; no engine, CLI, SDK or example code changes.
+
+Fixtures use a 4 KiB emergency reserve (Initial GREEN above): `tests/fixtures/engine.ts`, the CLI shutdown fixtures and the optional conformance harness. Tests added since then that call `createOrchestrator` or the engine directly, or write their own CLI configuration, set no `storage`. Each engine they start writes and fsyncs the 256 MiB production reserve (`reserveEmergency` in `packages/engine/src/storage.ts`, skipped only when free space is below the reserve plus 1 GiB).
+
+Measurement: one whole-suite run of the `npm test` command with a preload in `NODE_OPTIONS="--import …"`. The preload wraps `fs.openSync`, `writeSync`, `fsyncSync` and `closeSync` and calls `syncBuiltinESMExports()`, so the engine's named imports use the wrappers. It logs every `emergency.reserve` with its size and open-to-close time, and every process's pid, parent pid and argv. An allocation belongs to the nearest ancestor process that runs a test file. The preload also adds itself to children spawned with their own environment; those 125 spawns were runtime stubs, and none allocated a reserve. It changes nothing a test does. Machine: Apple M5 Pro, Darwin 25.6.0 arm64, Node 24.14.0.
+
+Before: **564/564** pass. 404 reserves: **48 of 256 MiB**, 12 GiB written and fsynced, and 356 of 4 KiB. Each 256 MiB reserve took 132–525 ms from open to close (median 304 ms), 14.7 s in total.
+
+| Test file | Engine started by | 256 MiB reserves |
+| --- | --- | --- |
+| `engine/routing-layer` | in-process `createOrchestrator` | 10 |
+| `engine/routing-corrections` | in-process `createOrchestrator` | 9 |
+| `engine/context-check` | in-process `createOrchestrator` | 6 |
+| `contract/lifecycle-wire` | CLI hosts, 4 stdio and 1 socket | 5 |
+| `engine/runtime-approval` | in-process `createOrchestrator` | 4 |
+| `contract/sdk` | in-process `createOrchestrator` | 3 |
+| `contract/store-namespaces` | in-process, 1 engine and 2 `createOrchestrator` | 3 |
+| `contract/host-cli` | CLI hosts, socket | 2 |
+| `contract/cross-language` | CLI host, socket | 1 |
+| `contract/execution-isolation-wire` | CLI host, socket | 1 |
+| `contract/claude-cleanup-recovery` | in-process `createOrchestrator` | 1 |
+| `contract/docs` | `examples/typescript/quickstart.ts` | 1 |
+| `contract/host-runtime-process` | `examples/typescript/hosted.ts` | 1 |
+| `contract/usage-recovery` | `examples/typescript/usage-forwarding.ts` | 1 |
+
+Decisions:
+
+- The first eleven files now pass `storage: { emergencyBytes: 4096 }` in their own helper or CLI configuration, as `tests/fixtures/engine.ts` does; `minFreeBytes` keeps its default. None of them asserts the storage policy, the reserve or free space. `routing-corrections` and `context-check` collect old records and compare record counts, which the reserve does not affect. The reserve and the storage policy stay covered by `storage-governance`, `storage-faults`, `store-rollover` and `rollover-crashes`, which already use 4 KiB.
+- The three examples keep the production default, and their source is unchanged. These tests run each example as a reader does: 0021-R01 is the README quickstart, AC-H09 and AC-P08 the offline host and usage forwarding examples. They are now the only tests in `npm test` that write the 256 MiB default in 1 MiB chunks. Cost: 768 MiB per run, one reserve in each of three files. AC-H09 and AC-P08 give their example 5 s; the two tests took 0.33–0.82 s, reserve included.
+- No production default, engine, CLI or example changed.
+
+After, on the same machine with the same command:
+
+- Preload run: **564/564**. 404 reserves: 401 of 4 KiB and **3 of 256 MiB**, the examples. **770 MiB** instead of **12,289 MiB**.
+- Whole suite, 7 runs each, all 564/564 with zero skips: before 47.3–50.9 s (mean **49.2 s**), after 43.9–48.2 s (mean **45.8 s**). Four of the pairs were interleaved, reverting and reapplying the change between runs; the change was faster in each of those pairs.
+- Bytes written by all disks during a run, including other activity on the machine: before 14.6–16.2 GiB, after 3.3–4.7 GiB.
+- `npm test` **564/564** (46.3 s), exact Node 22.18.0 **564/564** (51.5 s), `npm run test:python` **79/79**, zero skips; typecheck, format and diff checks pass.
+
+Python suite, measured the same way with its own command: 39 reserves, **11 of 256 MiB** (2,816 MiB), from the CLI hosts started by `test_node_e2e` (4), `test_node_execution_isolation` (3), `test_node_reconcile` (3) and `test_fork_model` (1). The owner chose to fix these in the same change. Their configurations now set `"storage": {"emergencyBytes": 4096}`, as `test_store_namespaces` already did; none of the four checks storage. After: 39 reserves of 4 KiB, 156 KiB in total. Four interleaved pairs, each **79/79**: before 18.9–20.7 s (mean **19.6 s**), after 17.4–18.9 s (mean **18.0 s**), faster in each pair. Bytes written by all disks during a run: before 3.0–3.1 GiB, after 0.3–0.6 GiB.
+
+Not verified: the time saved on the Ubuntu runner, where the Node 24 test step took 79–97 s against 38–54 s on macOS; that needs a CI run.
+
+### R10: the reserve guard
+
+Three new test files brought back 25 of the 48 reserves within a week, so the owner chose a check that runs in both test commands, locally and in CI. [SPEC-0011](../specs/0011-release-readiness.md) R10 states it.
+
+`tests/fixtures/reserve-guard.mjs` wraps `fs.openSync`, `writeSync` and `closeSync` and calls `syncBuiltinESMExports()`. When a write would take a file named `emergency.reserve` past 4,096 bytes, it throws `TEST_RESERVE_GUARD` before writing, unless the process's entry script is under `examples/`. It adds its absolute, quoted path to `NODE_OPTIONS`, so the CLI hosts, fixtures and examples that tests start load it too. A child started with its own environment and no `NODE_OPTIONS` is not checked; today those are only runtime stubs. `npm test` loads the guard with `node --import`, and `npm run test:python` sets `NODE_OPTIONS` for Python, which passes it to the hosts it starts. The chain through npm, sh, Python and Node works on Node 22.18.0 and 24.14.0, including a path with a space.
+
+RED: `tests/contract/reserve-guard.test.ts` starts a Node process that loads only the guard, as a test file does, and that process starts a stdio CLI host. With an empty guard module, `0011-R10 a CLI host started by a test cannot write the 256 MiB default reserve` failed: the host exited 0 after writing a 268,435,456-byte reserve. `0011-R10 a 4 KiB test reserve passes the guard` passed, which is regression coverage.
+
+GREEN:
+
+- Both R10 tests pass on Node 24.14.0 and 22.18.0. The host exits 1 with `{"code":"TEST_RESERVE_GUARD","message":"<stateDir>/emergency.reserve would grow past 4096 bytes in …/main.ts host --config … --stdio. Test engines use storage: { emergencyBytes: 4096 }; …"}` on stderr, and its reserve file has 0 bytes. An in-process `createOrchestrator` rejects with the same code.
+- With this change's fixture edits reverted and the guard on, `npm test` failed 43 tests, all in the eleven files above, and `npm run test:python` failed 11, all in the four Python files. With the edits, both pass.
+- With the examples exception removed from the guard, exactly the three example tests failed with `TEST_RESERVE_GUARD`. The examples run under the guard and keep their default only through that exception.
+- Guarded `npm test`: **566/566** on Node 24.14.0 in three runs (43.5, 64.2 and 45.4 s; during the 64.2 s run other work on the machine held the load average near 8–11, and the same tests were slower across the board) and on Node 22.18.0 (44.7 s). Guarded `npm run test:python`: **79/79** on both.
+- Cost: starting Node with the guard took 22.0 ms against 18.9 ms without it (means of 30 interleaved runs), about 3 ms for each of the roughly 300 Node processes in a suite run.
+
+Limits: a Python stdio test reports only `Engine connection ended before the next complete response`. The guard's message is in the host's stderr, which the Python client keeps in `stderr_tail` but does not add to that error. A single-file `node --test` run is checked only when it adds `--import ./tests/fixtures/reserve-guard.mjs`. The remote CI run is pending.
+
+### Temporary directories left by a failed startup
+
+The owner asked whether the tests remove their temporary files. None of the 847 reserve files written in the three measured runs remained. Listing the temporary directory before and after one run showed `npm test` leaving 12 directories, each holding an empty `workspace`. `setup()` in `tests/engine/host-workflow.test.ts` and in `tests/engine/fork-model.test.ts` creates its directory before `createEngine`; six cases in each file expect startup to fail, so `close()` never runs. Both helpers now remove their directory when startup fails; a directory the caller passed in stays. Running the two files left 12 new directories before the change and none after, **46/46**. A whole-suite run, logged to confirm that no other test process ran on the machine at the time, left no new entry; `npm run test:python` left none either.
+
+### On main `e1609fd`
+
+The change was rebased onto main `e1609fd`, which adds the benchmark harness (PR #17) and the CLI shutdown watchdogs (PR #16). There the guard found one more source: the harness's offline mode, `bench/run.mjs --fake`, which `tests/contract/bench.test.ts` runs, started its orchvia arm with the default reserve, and `0021-E04` failed with `TEST_RESERVE_GUARD`. `--fake` runs now use a 4 KiB reserve; `--gateway` and real benchmark runs keep the production default.
+
+On that tree: guarded `npm test` **576/576** on Node 24.14.0 (46.9 s) and 22.18.0 (46.9 s), and guarded `npm run test:python` **81/81** on both. A run wrote 408 reserves: 404 of 4 KiB, **3 of 256 MiB** from the examples, and one that the guard stopped at 0 bytes, in the R10 test's own host. It left no new temporary entry. Typecheck, format, generated-artifact and diff checks pass.

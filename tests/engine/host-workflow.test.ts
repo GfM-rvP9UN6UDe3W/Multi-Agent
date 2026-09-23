@@ -55,6 +55,10 @@ async function setup(
     stateDir: join(root, 'state'),
     adapters: [adapter ?? probe.adapter],
     ...overrides,
+  }).catch(async (error) => {
+    // Tests that expect startup to fail get no close(), so remove the directory here.
+    await rm(root, { recursive: true, force: true });
+    throw error;
   });
   return {
     root,

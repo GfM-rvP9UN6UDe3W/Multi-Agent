@@ -78,6 +78,7 @@ async function setup(options: { allowCrossRootReuse?: boolean } = {}) {
     },
     limits: { maxActiveSessions: 8 },
     writeScopes: { app: ['app'] },
+    storage: { emergencyBytes: 4096 },
     ...(options.allowCrossRootReuse ? { allowCrossRootReuse: true } : {}),
   });
   const root = await orch.tasks.create({

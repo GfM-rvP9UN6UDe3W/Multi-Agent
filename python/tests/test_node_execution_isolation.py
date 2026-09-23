@@ -40,6 +40,7 @@ class NodeExecutionIsolationTests(unittest.IsolatedAsyncioTestCase):
             }},
             "limits": {"maxActiveSessions": 1},
             "shutdown": {"timeoutMs": 1000},
+            "storage": {"emergencyBytes": 4096},
         }
         if short_budget:
             config["limits"]["maxQuarantinedDispatches"] = 1

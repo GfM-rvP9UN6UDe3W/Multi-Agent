@@ -31,6 +31,7 @@ class NodeReconcileTests(unittest.IsolatedAsyncioTestCase):
             "stateDir": str(state), "providers": {"fake": {"model": "fake-model",
             "delayMs": 300, "result": "late fake result", "permissionProfile": "read-only"}},
             "limits": {"maxActiveSessions": 1}, "shutdown": {"timeoutMs": 1000},
+            "storage": {"emergencyBytes": 4096},
             "timeouts": to_wire(LifecycleTimeouts(acceptance_ms=1000, turn_ms=2000, drain_ms=40))}),
             encoding="utf-8")
 

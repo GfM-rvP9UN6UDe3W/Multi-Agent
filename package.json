@@ -11,8 +11,8 @@
     "packages/*"
   ],
   "scripts": {
-    "test": "node --test --test-concurrency=4 --test-timeout=120000 tests/engine/*.test.ts tests/contract/*.test.ts",
-    "test:python": "PYTHONPATH=python/src python3 -m unittest discover -s python/tests -v",
+    "test": "node --import ./tests/fixtures/reserve-guard.mjs --test --test-concurrency=4 --test-timeout=120000 tests/engine/*.test.ts tests/contract/*.test.ts",
+    "test:python": "NODE_OPTIONS=\"${NODE_OPTIONS:-} --import \\\"$PWD/tests/fixtures/reserve-guard.mjs\\\"\" PYTHONPATH=python/src python3 -m unittest discover -s python/tests -v",
     "typecheck": "tsc --noEmit",
     "cli": "node packages/cli/src/main.ts",
     "format:check": "prettier --check \"packages/**/*.ts\" \"tests/**/*.{ts,mjs}\" \"examples/typescript/*.ts\" \"schemas/*.json\" \"scripts/*.{ts,mjs}\" package.json tsconfig.json",

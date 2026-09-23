@@ -26,6 +26,7 @@ test(
         workspace,
         stateDir,
         providers: { fake: { model: 'fixture', result: 'known mixed-language evidence' } },
+        storage: { emergencyBytes: 4096 },
       }),
     );
     const host = spawn(

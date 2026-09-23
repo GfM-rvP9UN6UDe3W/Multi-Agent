@@ -66,6 +66,10 @@ async function setup(overrides: Partial<EngineConfig> = {}, dir?: string) {
     adapters: [probe.adapter],
     providers: models,
     ...overrides,
+  }).catch(async (error) => {
+    // Tests that expect startup to fail get no close(); a directory passed in stays the caller's.
+    if (!dir) await rm(root, { recursive: true, force: true });
+    throw error;
   });
   return {
     root,
