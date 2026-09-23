@@ -2,6 +2,12 @@
 
 All notable changes to Orchvia are recorded here. Versions follow [Semantic Versioning](https://semver.org/); before 1.0, a minor version may change the API.
 
+## [Unreleased]
+
+### Added
+
+- `orchvia --version` prints the version of the installed `@orchvia/cli` package (#12).
+
 ## [0.1.1] - 2026-09-23
 
 The first release on PyPI and on GitHub Releases.

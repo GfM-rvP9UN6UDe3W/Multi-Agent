@@ -164,6 +164,22 @@ test('CLI rejects unsupported commands, implicit fake, arbitrary adapter module 
   assert.match(flags.stderr, /mutually exclusive/);
 });
 
+test('0021-P07 --version prints the version of the CLI package, and --help lists it', async () => {
+  const { version } = JSON.parse(
+    await readFile(new URL('../../packages/cli/package.json', import.meta.url), 'utf8'),
+  );
+  const result = await command(['--version']);
+  assert.equal(result.code, 0, result.stderr);
+  assert.equal(result.stdout, `${version}\n`);
+  const help = await command(['--help']);
+  assert.equal(help.code, 0, help.stderr);
+  assert.match(help.stdout, /^orchvia --version$/m);
+  // No short form: the CLI has no short options, and -v often means verbose.
+  const short = await command(['-v']);
+  assert.equal(short.code, 1);
+  assert.match(short.stderr, /UNSUPPORTED_COMMAND/);
+});
+
 test('doctor rejects limits and deadlines that the engine cannot accept', async (t) => {
   const { config, configPath } = await fixture(t);
   for (const invalid of [

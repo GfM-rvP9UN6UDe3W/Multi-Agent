@@ -84,8 +84,14 @@ export async function main(argv = process.argv.slice(2)): Promise<void> {
   }
   if (command === '--help' || command === 'help') {
     process.stdout.write(
-      'orchvia host --config FILE [--stdio | --socket PATH]\norchvia doctor --config FILE | --socket PATH\norchvia submit --socket PATH --task FILE [--idempotency-key KEY]\norchvia status --socket PATH --task TASK_ID\norchvia run --socket PATH --task FILE [--interactive] [--follow] [--timeout-ms N] [--idempotency-key KEY]\norchvia attach --socket PATH --task TASK_ID [--interactive] [--follow] [--after-cursor N] [--timeout-ms N]\norchvia control --socket PATH --target FILE --action pause|resume|stop|compact|rotate [--mode drain|interrupt] [--idempotency-key KEY]\norchvia approve --socket PATH --approval ID --revision N --decision approve|deny [--idempotency-key KEY]\n',
+      'orchvia host --config FILE [--stdio | --socket PATH]\norchvia doctor --config FILE | --socket PATH\norchvia submit --socket PATH --task FILE [--idempotency-key KEY]\norchvia status --socket PATH --task TASK_ID\norchvia run --socket PATH --task FILE [--interactive] [--follow] [--timeout-ms N] [--idempotency-key KEY]\norchvia attach --socket PATH --task TASK_ID [--interactive] [--follow] [--after-cursor N] [--timeout-ms N]\norchvia control --socket PATH --target FILE --action pause|resume|stop|compact|rotate [--mode drain|interrupt] [--idempotency-key KEY]\norchvia approve --socket PATH --approval ID --revision N --decision approve|deny [--idempotency-key KEY]\norchvia --version\n',
     );
+    return;
+  }
+  if (command === '--version') {
+    // The CLI package's own manifest: packages/cli/package.json, or the package root for dist/main.js.
+    const manifest = await readFile(new URL('../package.json', import.meta.url), 'utf8');
+    process.stdout.write(`${JSON.parse(manifest).version}\n`);
     return;
   }
   if (command === 'host') {

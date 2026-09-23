@@ -123,6 +123,8 @@ try {
   results.push(JSON.parse(run(process.execPath, ['embedded.mjs'])));
   const cli = join(base, 'node_modules/@orchvia/cli/dist/main.js');
   run(process.execPath, [cli, '--help']);
+  // SPEC-0021 P07: the installed CLI reports the version of the package it was built as.
+  assert.equal(run(process.execPath, [cli, '--version']), `${releaseVersion}\n`);
   for (const selected of ['codex', 'claude']) {
     const isolated = join(base, selected);
     await mkdir(isolated);

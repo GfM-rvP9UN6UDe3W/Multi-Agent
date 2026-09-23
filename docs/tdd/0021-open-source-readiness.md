@@ -235,3 +235,35 @@ Two corrections concern the drawing and the layout, so a rendering checks them r
 
 - How github.com shows the image: it was checked with Chrome and Quick Look on this machine, before anything was pushed.
 - Fonts on Windows and Linux: `system-ui` falls back to Segoe UI, Roboto or the default sans-serif.
+
+### P07: `orchvia --version` (issue #12)
+
+#### RED
+
+- `node --test --test-name-pattern 0021-P07 tests/contract/host-cli.test.ts` failed before the change: `{"code":"UNSUPPORTED_COMMAND","message":"Unknown command: --version"}`, with exit code 1 instead of 0.
+- With the new branch removed from `main.ts` again, a build followed by `npm run test:packages` failed at the new check: `Command failed: node …/node_modules/@orchvia/cli/dist/main.js --version`, with the same message.
+
+#### Changes
+
+- `packages/cli/src/main.ts`: `--version`, next to `--help`, reads `../package.json` next to the running module when it is asked for, and prints its `version` and a newline. `--help` lists `orchvia --version`.
+- `scripts/package-smoke.mjs`: the installed CLI must print the version the packages were built as.
+- The CLI paragraph of the reference, and the changelog.
+
+#### GREEN
+
+- `node --test tests/contract/host-cli.test.ts`: 6 of 6.
+- `npm run build:packages`, `scripts/build-python.py dist/release` and `npm run test:packages`, with the Python build tools pinned as in CI: all nine installation and bundle modes passed. The built `dist/main.js` keeps `new URL('../package.json', import.meta.url)`; the build rewrites only `../../` URLs and `.ts` or `.js` paths.
+- A build as `0.2.0-rc.7`, a version that no source manifest holds, passed the same smoke, so the installed CLI prints the version it was built as.
+- From a checkout the command prints `0.1.0`, the version in `packages/cli/package.json`.
+
+#### Mutation checks
+
+| Mutation | Result |
+| --- | --- |
+| `--help` does not list `--version` | caught (source test) |
+| JSON instead of the bare version | caught (source test) |
+| No newline | caught (source test) |
+| `-v` prints the version too | caught (source test) |
+| The version is written into the code as `0.1.0` | not caught by the source test, whose manifest also says 0.1.0; caught by the smoke of the build as `0.2.0-rc.7` (`'0.1.0\n'` instead of `'0.2.0-rc.7\n'`). The release workflow runs that smoke with the tag's version, and with `0.0.0-rc.N` on pull requests that touch packaging. |
+
+The check that `-v` stays an unknown command was added after its mutation first went unnoticed. It covers behavior that was already right, so it has no failing run of its own.

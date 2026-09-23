@@ -1,6 +1,6 @@
 # SPEC-0021: Open-source readiness
 
-Date: 2026-09-23. Status: approved by the owner on 2026-09-23, with D-oss-1 to D-oss-4 each set to option 1. G, R and C and the repository rename (N05) were merged in pull request #10. The rename (N), P01 to P03, P05, P06, R06, R10 and L03 were merged in pull request #11 (`f331930`); P04 runs with the first release. E01, E03 and E04 were merged in pull request #17 (`0b36181`). E02, E05 and E06 are not run: on 2026-09-23 the owner decided against paid model runs for now. On 2026-09-23 the owner published the five npm packages as 0.1.0, and npm trusted publishing and approval of releases in GitHub were set up (D-oss-13); The tagged release of 0.1.0 stopped in its dry run, before publishing anything; with the dry run corrected, 0.1.1 is the first release on PyPI and GitHub Releases, where P04 runs (D-rel-1). L01, L02 and L04 are not implemented yet. L03's good first issue #14 was implemented by the maintainer as R11, keeping the outside contributor's commit. Evidence: [TDD-0021](../tdd/0021-open-source-readiness.md). The owner asked for one plan that answers an outside assessment of why the public repository draws little attention. The owner chose the name Orchvia (D-oss-5). The project has no relationship with TypeSafe. It supersedes no specification. It changes packaging ([SPEC-0010](0010-bundled-host-delivery.md), [SPEC-0011](0011-release-readiness.md)) and the documentation layout, not the engine.
+Date: 2026-09-23. Status: approved by the owner on 2026-09-23, with D-oss-1 to D-oss-4 each set to option 1. G, R and C and the repository rename (N05) were merged in pull request #10. The rename (N), P01 to P03, P05, P06, R06, R10 and L03 were merged in pull request #11 (`f331930`); P04 runs with the first release. E01, E03 and E04 were merged in pull request #17 (`0b36181`). E02, E05 and E06 are not run: on 2026-09-23 the owner decided against paid model runs for now. On 2026-09-23 the owner published the five npm packages as 0.1.0, and npm trusted publishing and approval of releases in GitHub were set up (D-oss-13); The tagged release of 0.1.0 stopped in its dry run, before publishing anything; with the dry run corrected, 0.1.1 is the first release on PyPI and GitHub Releases, where P04 runs (D-rel-1). L01, L02 and L04 are not implemented yet. L03's good first issues #12 and #14 were implemented by the maintainer as P07 and R11; #14 keeps the outside contributor's commit. Evidence: [TDD-0021](../tdd/0021-open-source-readiness.md). The owner asked for one plan that answers an outside assessment of why the public repository draws little attention. The owner chose the name Orchvia (D-oss-5). The project has no relationship with TypeSafe. It supersedes no specification. It changes packaging ([SPEC-0010](0010-bundled-host-delivery.md), [SPEC-0011](0011-release-readiness.md)) and the documentation layout, not the engine.
 
 ## Why
 
@@ -109,6 +109,10 @@ The repository became public on 2026-09-19. A reader who arrives cannot tell wha
   - a first manual publish, if the registry requires a package to exist before trusted publishing can be configured;
   - the PyPI pending publisher;
   - GitHub environment protection for the release workflow.
+- **P07** `orchvia --version` prints the version in the `package.json` of the installed `@orchvia/cli`, followed by a newline, and exits with 0 (issue #12). `orchvia --help` lists it.
+  - The CLI reads the file only when asked, at `../package.json` next to its running module: `packages/cli/package.json` in a checkout, and the package's own `package.json` when the built `dist/main.js` runs. A release build writes the released version into the package it builds, so a checkout prints the version its source manifest holds.
+  - There is no `-v`: the command line has no short options, and many tools use `-v` for verbose output.
+  - A test runs it from the source; the package smoke runs it from the installed package.
 
 ### E: Real-model evidence (new code outside the engine; paid runs only on the owner's account, within D-oss-11)
 
@@ -133,7 +137,7 @@ The repository became public on 2026-09-19. A reader who arrives cannot tell wha
   - posts for r/ClaudeAI and r/ChatGPTCoding;
   - one article built on the benchmark.
   - Communities about local models are not targeted: the engine runs no local model.
-- **L03** Community files: issue and pull request templates, `SECURITY.md`, a `CONTRIBUTING.md` updated for outside contributors, and three "good first issue" items. The maintainer implemented #14 as R11. It keeps the outside contributor's commit from pull request #15, merged unchanged; the corrections follow in a separate commit.
+- **L03** Community files: issue and pull request templates, `SECURITY.md`, a `CONTRIBUTING.md` updated for outside contributors, and three "good first issue" items. The maintainer implemented #12 as P07 and #14 as R11. #14 keeps the outside contributor's commit from pull request #15, merged unchanged; the corrections follow in a separate commit.
 - **L04** A social preview image and a short terminal recording of the quickstart.
 
 ## Timing invariants
