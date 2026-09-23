@@ -1,6 +1,6 @@
 # SPEC-0023: Corrections before 0.1.2
 
-Date: 2026-09-23. Status: approved by the owner on 2026-09-23 and implemented: F, E01, E02 and W with D-known-1 = 1, D-known-2 = 1 and D-known-3 = 2; E03, found while testing E02, with D-known-6 = 1; and P, implemented before the release (D-known-4 = 1), with its design approved as D-known-7 = 1. The owner decided that 0.1.2 is released only after every known issue is solved, and that the verification gaps that the README lists as not verified do not block it (D-known-5 = 1). Evidence: [TDD-0023](../tdd/0023-corrections-before-0.1.2.md).
+Date: 2026-09-23. Status: approved by the owner and implemented: F01, E01, E02 and W with D-known-1 = 1, D-known-2 = 1 and D-known-3 = 2 on 2026-09-23; F02, found by CI on 2026-09-24, with D-known-8 = 1; E03, found while testing E02, with D-known-6 = 1; and P, implemented before the release (D-known-4 = 1), with its design approved as D-known-7 = 1. The owner decided that 0.1.2 is released only after every known issue is solved, and that the verification gaps that the README lists as not verified do not block it (D-known-5 = 1). Evidence: [TDD-0023](../tdd/0023-corrections-before-0.1.2.md).
 
 ## Why
 
@@ -17,6 +17,7 @@ Besides the work already on branches (issues #12 to #14, one version number in S
 
 - **F01** The lifecycle-wire stdio fixture waits up to 10 seconds for each response, as the CLI shutdown fixtures do (D-R03-2), and each lifecycle-wire test that starts a host allows 60 seconds. Product bounds stay asserted as they are, such as the 5-second cleanup after an owner disconnects (SPEC-0003-A).
 - Timing invariants: a fixture's wait only detects a host that hangs; it does not require a host to start quickly. A test's own timeout is longer than the fixture waits it can spend one after another, so a stall is reported as the step that stalled.
+- **F02** The Claude deadline tests (`tests/contract/claude-deadlines.test.ts`) give 500 ms more to every deadline that must outlast the adapter's preparation before it submits, and allow each test 2.5 seconds. The adapter's request and turn deadlines include that preparation, which resolves paths with synchronous file calls. On a loaded runner it took longer than the 20 ms that one test allowed, and the adapter rightly reported a timeout before submission (`failed`) where the test expected `unknown`. The deadline rules under test are unchanged. Approved as D-known-8 = 1, on the principle of D-known-1.
 
 ### E: Why a host did not start (Python SDK)
 

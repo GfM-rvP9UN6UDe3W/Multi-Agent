@@ -17,6 +17,22 @@ The CI failure itself cannot be replayed: GitHub serves the logs of the failed f
 - With the host start delayed by 6 seconds: 5 of 5 passed. Delayed by 11 seconds: all five failed with the fixture's own messages, so a host that stalls is still reported at the step that stalled.
 - Twelve runs of the file at once, next to 18 busy loops on 18 cores: 12 of 12 passed; the slowest took 4.3 seconds.
 
+## F02: Claude deadline tests
+
+### RED
+
+The push CI run of `one-version` ([35886905684](https://github.com/masonlee39/orchvia/actions/runs/35886905684)) failed `Claude cleanup timeout stays bounded and adapter.close rejects unconfirmed resource` on macOS 14 with Node 22: `'failed' !== 'unknown'`. The test allowed the request 20 ms, which also covers the adapter's preparation before it submits, and on that runner the preparation took longer, so the adapter reported a timeout before submission. The branch did not change this file; the test had been timing-sensitive before. Thirty-six busy loops next to 24 runs did not reproduce it on this machine. A test-only preload that made every `realpathSync` 30 ms slower did: 10 of the file's 16 tests failed, 8 of them with `'failed'` where `'unknown'` was expected. The four other test files with small deadlines passed with the same preload.
+
+### Changes
+
+`tests/contract/claude-deadlines.test.ts` adds `PREPARE_MS = 500` to the twelve deadlines, in ten tests, that must outlast the preparation, and `within` allows 2.5 seconds instead of 300 ms. The tests of pre-submission outcomes, the one driven by an injected execution budget and the validation of deadline values are unchanged.
+
+### GREEN
+
+- 16 of 16 without a delay, with `realpathSync` 30 ms slower, and with it 100 ms slower.
+- Ten runs at once next to 18 busy loops: 10 of 10.
+- The file takes 6.2 seconds instead of 1.7.
+
 ## E: Why a host did not start
 
 ### RED
