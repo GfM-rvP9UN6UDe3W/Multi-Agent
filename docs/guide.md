@@ -1,6 +1,6 @@
 # Multi-agent orchestration SDK usage and detailed wiring
 
-Updated 2026-09-21 for SPEC-0010. This guide describes implemented interfaces. All packages remain unpublished; use the local artifacts or source checkout. The five npm packages are **ESM-only**; direct require is not exported. A Claude consumer installs SDK + engine + adapter-claude. See [the local RC and CJS/ESM bundled-host contract](acceptance/bundled-host.md). Offline process/transport/storage acceptance is recorded separately from real-model, sandbox, external-host and release acceptance in the [completion matrix](specs/0009-complete-design.md#completion-matrix).
+Updated 2026-09-21 for SPEC-0010. This guide describes implemented interfaces. The npm packages are published as 0.1.0; the Python package is not on PyPI yet, so Python uses a source build. The five npm packages are **ESM-only**; direct require is not exported. A Claude consumer installs SDK + engine + adapter-claude. See [the local RC and CJS/ESM bundled-host contract](acceptance/bundled-host.md). Offline process/transport/storage acceptance is recorded separately from real-model, sandbox, external-host and release acceptance in the [completion matrix](specs/0009-complete-design.md#completion-matrix).
 
 ## 1. Choose an integration mode
 

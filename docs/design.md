@@ -163,7 +163,7 @@ Wait cancellation is separate from work cancellation. Python coroutine cancellat
 
 ### 3.3 Equivalent language examples
 
-These are interface-review sketches. Proposed package names @orchvia/* and orchvia are unpublished and availability is unverified; do not treat them as installation instructions. The caller supplies model/path variables. Human acceptance requires a separately authorized approval.requested consumer.
+These are interface-review sketches. The npm packages @orchvia/* are published and the PyPI package orchvia is not yet; these sketches are not installation instructions. The caller supplies model/path variables. Human acceptance requires a separately authorized approval.requested consumer.
 
 Embedded TypeScript:
 

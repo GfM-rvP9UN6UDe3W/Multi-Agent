@@ -39,7 +39,13 @@ From Python, the same kind of task runs through a Node host that Python starts:
 PYTHONPATH=python/src python3 examples/python/fake_roundtrip.py
 ```
 
-To let agents edit files, run Codex, or wire the engine into your application, follow the [integration guide](docs/guide.md). The packages are not on npm or PyPI yet; the first release publishes them as `@orchvia/*` and `orchvia`. Until then, [build them from source](docs/reference.md#install).
+To use Orchvia in your own project, install it from npm (Node.js 22.18 or later):
+
+```sh
+npm install @orchvia/sdk @orchvia/engine @orchvia/adapter-claude
+```
+
+Use `@orchvia/adapter-codex` for Codex and add `@orchvia/cli` for a separate host. The Python package `orchvia` is not on PyPI yet; until it is, [build it from source](docs/reference.md#install). To let agents edit files, run Codex, or wire the engine into your application, follow the [integration guide](docs/guide.md).
 
 ## How it compares
 

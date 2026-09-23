@@ -14,7 +14,13 @@ Choose packages for the process that will own or connect to the engine:
 | `@orchvia/adapter-codex` | Codex App Server adapter | Codex execution |
 | `@orchvia/cli` | Standalone/managed Node host and commands | CLI or Python-owned host operation |
 
-The packages are not on npm or PyPI yet. Build them from source into a fresh directory:
+The npm packages are published. Install the three Claude packages together in the consuming project:
+
+```sh
+npm install @orchvia/sdk @orchvia/engine @orchvia/adapter-claude
+```
+
+Keep the generated npm lockfile. The Python package is not on PyPI yet. Until it is, build it, or all packages, from source into a fresh directory:
 
 ```sh
 npm ci --ignore-scripts
@@ -22,15 +28,7 @@ npm run build:packages -- /absolute/out
 /absolute/build-env/bin/python scripts/build-python.py /absolute/out
 ```
 
-The builds write five npm tarballs, a Python wheel and sdist, and SHA-256 manifests. Verify the hashes, then install the three Claude packages together in the consuming project:
-
-```sh
-npm install /absolute/out/orchvia-sdk-0.1.0.tgz \
-  /absolute/out/orchvia-engine-0.1.0.tgz \
-  /absolute/out/orchvia-adapter-claude-0.1.0.tgz
-```
-
-Keep the generated npm lockfile. Install the Codex adapter instead for Codex execution; add the CLI when running a separate Node host. Python installs its wheel separately and connects to that Node host; the Python package does not bundle or download an engine. Earlier candidate builds are listed in [status](status.md#candidate-builds).
+The builds write five npm tarballs, a Python wheel and sdist, and SHA-256 manifests; verify the hashes before installing them. Install the Codex adapter instead for Codex execution; add the CLI when running a separate Node host. Python installs its wheel separately and connects to that Node host; the Python package does not bundle or download an engine. Earlier candidate builds are listed in [status](status.md#candidate-builds).
 
 ### Claude in a bundled application
 

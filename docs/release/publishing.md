@@ -9,8 +9,8 @@ This file is the only source for how Orchvia is released ([SPEC-0021](../specs/0
 3. The [release workflow](../../.github/workflows/release.yml) then runs, in this order:
    1. the full offline test matrix;
    2. one build of every package from the tag, with recorded hashes, an offline installation of the archives, `npm publish --dry-run` and `twine check`;
-   3. npm publishing through trusted publishing, in dependency order: engine, the adapters, sdk, cli. A version already on the registry is skipped, so a rerun continues where a failed run stopped;
-   4. PyPI publishing through trusted publishing;
+   3. npm publishing through trusted publishing, in dependency order: engine, the adapters, sdk, cli. A version already on the registry is skipped, so a rerun continues where a failed run stopped. The job waits until the owner approves the `npm` deployment in the workflow run;
+   4. PyPI publishing through trusted publishing, after the owner approves the `pypi` deployment;
    5. the GitHub Release, with every archive and `SHA256SUMS`, created only after both registries have the version;
    6. on fresh Linux and macOS runners, an installation from npm and PyPI into empty directories that runs a quickstart and a Python host. It also checks that each npm archive has the bytes the workflow built.
 4. A release is announced only after step 6 has passed.
@@ -25,7 +25,7 @@ Done on 2026-09-23 by the owner.
 
 ### 2. The first npm publish (owner, about 3 minutes)
 
-npm allows trusted publishing and staged publishing only for packages that already exist, so the first version of each package is published once with the owner's npm login. npm requires two-factor authentication on the account to publish, and it asks for it in an interactive terminal, so the owner runs the publishing command.
+Done on 2026-09-23 by the owner for 0.1.0. npm allows trusted publishing and staged publishing only for packages that already exist, so the first version of each package is published once with the owner's npm login. npm requires two-factor authentication on the account to publish, and it asks for it in an interactive terminal, so the owner runs the publishing command.
 
 1. The owner turns on two-factor authentication on npmjs.com (Account, Two-Factor Authentication), then runs `npm login --auth-type=web` in a terminal on the release machine and confirms in the browser.
    - Success: `npm whoami` prints the owner's npm user name.
@@ -43,10 +43,12 @@ npm allows trusted publishing and staged publishing only for packages that alrea
 
 ### 3. npm trusted publishers (maintainer, in the owner's signed-in browser)
 
-For each of the five packages, on npmjs.com under the package's Settings, Trusted publishing: GitHub Actions, organization or user `masonlee39`, repository `orchvia`, workflow `release.yml`, environment `npm`.
+Done on 2026-09-23 for all five packages.
 
-- Success: each package lists the trusted publisher.
-- Failure: if npm asks for two-factor confirmation, the owner approves it.
+For each package, on npmjs.com under the package's Settings, Trusted publishing: GitHub Actions, organization or user `masonlee39`, repository `orchvia`, workflow `release.yml`, environment `npm`, and **Allow `npm publish`** checked, because the release workflow publishes directly. npm marks that option "not recommended" and otherwise allows only staged publishing, which a maintainer must approve on npmjs.com; here the human approval is the GitHub environment in step 5 (D-oss-13). Publishing access stays at "Require two-factor authentication or a granular access token with bypass 2fa enabled" (D-npm-1).
+
+- Success: each package lists `masonlee39/orchvia`, `release.yml`, `npm` with the permissions `npm publish` and `npm stage publish`.
+- Failure: npm asks for the owner's security key for every settings change; the owner confirms it.
 
 ### 4. PyPI (owner, about 5 minutes)
 
@@ -57,4 +59,9 @@ For each of the five packages, on npmjs.com under the package's Settings, Truste
 
 ### 5. GitHub environments
 
-The environments `npm` and `pypi` exist under the repository's Settings, Environments; GitHub creates them on the first run if they are missing. The tag push is the approval, so they need no reviewers.
+Done on 2026-09-23. The environments `npm` and `pypi` exist under the repository's Settings, Environments. Each has one protection rule: the owner (`masonlee39`) is a required reviewer, administrators cannot bypass it, and self-review is allowed, so the owner approves the runs they start.
+
+When a release runs, the owner approves it in the workflow run on GitHub (Review deployments, select `npm` and `pypi`, Approve and deploy).
+
+- Success: the npm and PyPI jobs start after the approval.
+- Failure: GitHub fails a job that waits more than 30 days for approval; rerun it with Re-run failed jobs.
