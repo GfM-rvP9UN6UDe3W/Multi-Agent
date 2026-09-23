@@ -61,7 +61,8 @@ jobs:
         shell: bash
         run: |
           # A path must start with ./ or npm reads it as a GitHub repository.
-          for archive in ./out/*.tgz; do npm publish "$archive" --dry-run --ignore-scripts; done
+          # npm requires a tag for a pre-release version, such as the throwaway version of a pull request.
+          for archive in ./out/*.tgz; do npm publish "$archive" --dry-run --ignore-scripts --tag next; done
           python -m twine check --strict out/*.whl out/*.tar.gz
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
