@@ -399,6 +399,9 @@ MAX_CONTEXT_REF_BYTES = 32768
 """The engine's inline limit for one context reference, in UTF-8 bytes."""
 _COMPLETE_RESULT_BYTES = 64 * 1024
 """The engine returns a task's complete result up to this size, and a marked preview beyond."""
+_OMISSION = {"ARTIFACT_TOO_LARGE": "too_large", "ARTIFACT_HISTORY_EXPIRED": "expired",
+             "ARTIFACT_CORRUPT": "corrupt", "NOT_FOUND": "missing"}
+"""``CONTEXT_OMITTED`` reasons for the codes ``context.checkRefs`` reports (SPEC-0020)."""
 
 
 def _code(error: BaseException) -> str:
@@ -448,6 +451,13 @@ class Router:
             found.append(Candidate(f"A{len(found) + 1}", session, task,
                                    session.status != "idle" or task.status not in _TERMINAL))
         return found
+
+    def _can_check(self) -> bool:
+        """Whether the engine offers ``context.checkRefs`` (SPEC-0020)."""
+        info = getattr(self._orch, "info", None)
+        capabilities = info.get("capabilities") if isinstance(info, Mapping) else None
+        workflow = capabilities.get("workflow") if isinstance(capabilities, Mapping) else None
+        return isinstance(workflow, Mapping) and workflow.get("context_check") is True
 
     async def _description(self, candidate: Candidate) -> dict[str, Any]:
         if self._describe:
@@ -607,6 +617,21 @@ class Router:
             sources.sort(key=relevance, reverse=True)
             return sources
 
+        top = ranked[0] if ranked else None
+        chosen = by_alias.get(top[0]) if top and top[0] != "fresh" else None
+        # SPEC-0020: the engine checks every result that could be carried, at most 20 per call. An engine
+        # without the check leaves them unchecked, and the proposal says so.
+        checked = self._can_check()
+        verdicts: dict[str, Mapping[str, Any]] = {}
+        if checked:
+            possible = [result_of(candidate) for candidate in [*by_relevance(), *([chosen] if chosen else [])]]
+            candidate_refs = list(dict.fromkeys(result[0] for result in possible
+                                                if result and result[1] <= MAX_CONTEXT_REF_BYTES))
+            for start in range(0, len(candidate_refs), 20):
+                answer = await self._orch.context.check_refs(
+                    [{"artifact_ref": ref, "version": 1} for ref in candidate_refs[start:start + 20]])
+                for entry in answer.context_refs:
+                    verdicts[entry["artifactRef"]] = entry
         omitted: set[str] = set()
 
         def carry(sources: list[Candidate]) -> list[str]:
@@ -623,12 +648,23 @@ class Router:
                 if result is None or result[0] in carried:
                     continue
                 artifact, size = result
-                if size <= MAX_CONTEXT_REF_BYTES:
+                verdict = verdicts.get(artifact)
+                if size <= MAX_CONTEXT_REF_BYTES and (verdict is None or verdict.get("admissible")):
                     carried.append(artifact)
                     continue
                 if artifact in omitted:
                     continue
                 omitted.add(artifact)
+                if verdict is not None and size <= MAX_CONTEXT_REF_BYTES:
+                    code = verdict.get("code")
+                    refused: dict[str, Any] = {"session_id": candidate.session.id, "artifact_ref": artifact,
+                                               "reason": _OMISSION.get(code, "unreadable")}
+                    if code:
+                        refused["code"] = code
+                    if isinstance(verdict.get("bytes"), int):
+                        refused["bytes"] = verdict["bytes"]
+                    reasons.append({"code": "CONTEXT_OMITTED", "detail": refused})
+                    continue
                 detail: dict[str, Any] = {"session_id": candidate.session.id, "artifact_ref": artifact,
                                           "reason": "too_large"}
                 if size <= _COMPLETE_RESULT_BYTES:  # Beyond the preview size it is only known to be larger.
@@ -647,8 +683,6 @@ class Router:
                 return runtime.large
             return runtime.model
 
-        top = ranked[0] if ranked else None
-        chosen = by_alias.get(top[0]) if top and top[0] != "fresh" else None
         any_relevant = any(relevance(candidate) >= policy.relevant_at for candidate in eligible)
         if not pool:
             reasons.append({"code": "NO_CANDIDATES"})
@@ -694,6 +728,8 @@ class Router:
         count = len(proposal_spec.context_plan["context_refs"])
         if count:
             reasons.append({"code": "CONTEXT_CARRIED", "detail": {"count": count}})
+            if not checked:
+                reasons.append({"code": "CONTEXT_UNCHECKED", "detail": {"count": count}})
         # A judge that reports low confidence in its own choice is unsure, however probable it made that
         # choice look.
         judge_confidence = best["confidence"] if best else None

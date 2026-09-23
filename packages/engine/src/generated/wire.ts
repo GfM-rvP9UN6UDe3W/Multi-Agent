@@ -1,4 +1,4 @@
-// Generated from schemas/protocol.schema.json; SHA-256 f8717c8ea9ef2402fe0efdb2ef256fa4df29367ec893dfe393419ae9efb05f13. Do not edit.
+// Generated from schemas/protocol.schema.json; SHA-256 1fe5197a0546b5f5a34bc3c07618e9ad77eb11405e4e7c5ae2b10ac857526bce. Do not edit.
 // Structural types; validateWire enforces numeric and conditional constraints.
 export type RuntimeSpec = { provider: string; model: string };
 export type TaskSpec = {
@@ -383,6 +383,21 @@ export type RetryIdentity = {
   requestDigest: string;
 };
 export type MoneyBudget = { currency: string; maxCost: string; reservePerDispatch: string };
+export type ContextRefCheck = {
+  contextRefs: Array<{
+    artifactRef: string;
+    admissible: boolean;
+    code?:
+      | 'ARTIFACT_TOO_LARGE'
+      | 'ARTIFACT_HISTORY_EXPIRED'
+      | 'ARTIFACT_CORRUPT'
+      | 'NOT_FOUND'
+      | 'ARTIFACT_UNREADABLE';
+    bytes?: number;
+    [key: string]: unknown;
+  }>;
+  [key: string]: unknown;
+};
 export type ContextEstimate = {
   inputTokens: number;
   outputReserveTokens: number;
@@ -641,5 +656,6 @@ export type WorkflowCapability = {
   writePath?: true;
   runtimeRules?: true;
   taskList?: true;
+  contextCheck?: true;
   [key: string]: unknown;
 };

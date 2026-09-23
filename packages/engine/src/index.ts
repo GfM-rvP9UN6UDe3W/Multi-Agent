@@ -15,6 +15,7 @@ import {
   messageSpec,
   digest,
   contextPlan as validateContextPlan,
+  contextRefs as validateContextRefs,
   MAX_QUEUE_WAIT_MS,
 } from './validation.ts';
 import { readRuntimeCapabilities } from './runtime.ts';
@@ -94,6 +95,8 @@ const realClock: EngineClock = {
   },
 };
 
+/** The inline limit of one context reference, for admission, the prompt and `context.checkRefs`. */
+const CONTEXT_REF_MAX_BYTES = 32768;
 function resultText(value: unknown): string {
   if (typeof value !== 'string' || value.length > 524288)
     fail(
@@ -648,6 +651,20 @@ class LocalEngine implements Engine {
       writePaths,
     };
   }
+  /**
+   * Reads one context reference as admission, the prompt and `context.checkRefs` do (SPEC-0020). A
+   * read failure that is not already an engine error becomes ARTIFACT_UNREADABLE.
+   */
+  private contextRefText(artifactRef: string): string {
+    try {
+      return this.store.artifactText(artifactRef, CONTEXT_REF_MAX_BYTES);
+    } catch (error) {
+      if (error instanceof OrchestrationError) throw error;
+      return fail('ARTIFACT_UNREADABLE', 'Context reference could not be read', {
+        ref: artifactRef,
+      });
+    }
+  }
   private selectSession(
     spec: TaskSpec,
     taskId: string,
@@ -673,7 +690,7 @@ class LocalEngine implements Engine {
         },
       };
     }
-    for (const ref of plan.contextRefs) this.store.artifactText(ref.artifactRef, 32768);
+    for (const ref of plan.contextRefs) this.contextRefText(ref.artifactRef);
     if (
       (plan.requestedMode === 'reuse' ||
         plan.requestedMode === 'fork' ||
@@ -2327,6 +2344,7 @@ class LocalEngine implements Engine {
               writePath: true,
               runtimeRules: true,
               taskList: true,
+              contextCheck: true,
             },
             providers: [...this.adapters.keys()],
             lifecycle: { version: 1, reconcile: 'owner-attestation', durableDeadlines: true },
@@ -3070,6 +3088,23 @@ class LocalEngine implements Engine {
           p.taskId === undefined ? undefined : string(p.taskId, 'taskId', 128),
           scope as 'direct' | 'tree' | 'host_overhead',
         );
+      }
+      case 'context.checkRefs': {
+        // SPEC-0020: what admission would decide for each reference now. Reads only; returns no content.
+        fields(p, ['contextRefs']);
+        return {
+          contextRefs: validateContextRefs(p.contextRefs, 1).map(({ artifactRef }) => {
+            const record = this.store.get<{ sizeBytes?: unknown }>('artifacts', artifactRef);
+            const bytes = typeof record?.sizeBytes === 'number' ? { bytes: record.sizeBytes } : {};
+            try {
+              this.contextRefText(artifactRef);
+              return { artifactRef, admissible: true, ...bytes };
+            } catch (error) {
+              if (!(error instanceof OrchestrationError)) throw error;
+              return { artifactRef, admissible: false, code: error.code, ...bytes };
+            }
+          }),
+        };
       }
       case 'context.estimate': {
         fields(p, [
@@ -4255,7 +4290,7 @@ class LocalEngine implements Engine {
       task.spec.goal,
       ...(task.spec.contextPlan?.contextRefs ?? []).map(
         (ref) =>
-          `\nUntrusted versioned context ${JSON.stringify(ref)}:\n${JSON.stringify(this.store.artifactText(ref.artifactRef, 32768))}`,
+          `\nUntrusted versioned context ${JSON.stringify(ref)}:\n${JSON.stringify(this.contextRefText(ref.artifactRef))}`,
       ),
       ...dependencyBlocks,
       ...((task.verificationAttempts ?? 0) > 0

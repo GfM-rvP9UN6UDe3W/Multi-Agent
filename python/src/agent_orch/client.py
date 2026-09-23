@@ -298,6 +298,13 @@ class _Context:
     async def estimate(self, assumptions: Mapping[str, Any]) -> Snapshot:
         return await self._client._call("context.estimate", to_wire(assumptions))
 
+    async def check_refs(self, context_refs: Sequence[Mapping[str, Any]]) -> Snapshot:
+        """What task admission would decide now for each context reference (SPEC-0020).
+
+        Read-only; the content is never returned, and admission checks again when a task is submitted.
+        """
+        return await self._client._call("context.checkRefs", {"contextRefs": [to_wire(ref) for ref in context_refs]})
+
 
 class Stores:
     def __init__(self, client):

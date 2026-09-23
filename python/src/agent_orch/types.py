@@ -78,6 +78,7 @@ _WIRE_TO_PYTHON = {
     "writePath": "write_path", "revisionRequest": "revision_request",
     "dependencyResultsDelivered": "dependency_results_delivered", "dependencyResults": "dependency_results",
     "delegationApproval": "delegation_approval", "runtimeRules": "runtime_rules", "taskList": "task_list",
+    "contextCheck": "context_check",
     "handoffId": "handoff_id", "targetSessionId": "target_session_id", "fromTaskId": "from_task_id",
     "fromSessionId": "from_session_id", "fromDispatchId": "from_dispatch_id",
     "fromGeneration": "from_generation", "resolvedAt": "resolved_at", "nextCursor": "next_cursor",

@@ -1699,6 +1699,45 @@
       "required": ["currency", "maxCost", "reservePerDispatch"],
       "additionalProperties": false
     },
+    "ContextRefCheck": {
+      "type": "object",
+      "description": "SPEC-0020 result of context.checkRefs: whether task admission would accept each context reference at the time of the call. It never contains the content.",
+      "required": ["contextRefs"],
+      "properties": {
+        "contextRefs": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 20,
+          "items": {
+            "type": "object",
+            "required": ["artifactRef", "admissible"],
+            "properties": {
+              "artifactRef": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128
+              },
+              "admissible": {
+                "type": "boolean"
+              },
+              "code": {
+                "enum": [
+                  "ARTIFACT_TOO_LARGE",
+                  "ARTIFACT_HISTORY_EXPIRED",
+                  "ARTIFACT_CORRUPT",
+                  "NOT_FOUND",
+                  "ARTIFACT_UNREADABLE"
+                ]
+              },
+              "bytes": {
+                "type": "integer",
+                "minimum": 0
+              }
+            }
+          }
+        }
+      }
+    },
     "ContextEstimate": {
       "type": "object",
       "properties": {
@@ -3040,6 +3079,9 @@
           "const": true
         },
         "taskList": {
+          "const": true
+        },
+        "contextCheck": {
           "const": true
         }
       },

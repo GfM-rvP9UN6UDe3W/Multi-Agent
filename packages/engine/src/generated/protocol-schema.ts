@@ -1,4 +1,4 @@
-// Generated from schemas/protocol.schema.json; SHA-256 f8717c8ea9ef2402fe0efdb2ef256fa4df29367ec893dfe393419ae9efb05f13. Do not edit.
+// Generated from schemas/protocol.schema.json; SHA-256 1fe5197a0546b5f5a34bc3c07618e9ad77eb11405e4e7c5ae2b10ac857526bce. Do not edit.
 export const protocolSchema = {
   $schema: 'https://json-schema.org/draft/2020-12/schema',
   $id: 'urn:agent-orch:protocol:2.0',
@@ -1699,6 +1699,46 @@ export const protocolSchema = {
       required: ['currency', 'maxCost', 'reservePerDispatch'],
       additionalProperties: false,
     },
+    ContextRefCheck: {
+      type: 'object',
+      description:
+        'SPEC-0020 result of context.checkRefs: whether task admission would accept each context reference at the time of the call. It never contains the content.',
+      required: ['contextRefs'],
+      properties: {
+        contextRefs: {
+          type: 'array',
+          minItems: 1,
+          maxItems: 20,
+          items: {
+            type: 'object',
+            required: ['artifactRef', 'admissible'],
+            properties: {
+              artifactRef: {
+                type: 'string',
+                minLength: 1,
+                maxLength: 128,
+              },
+              admissible: {
+                type: 'boolean',
+              },
+              code: {
+                enum: [
+                  'ARTIFACT_TOO_LARGE',
+                  'ARTIFACT_HISTORY_EXPIRED',
+                  'ARTIFACT_CORRUPT',
+                  'NOT_FOUND',
+                  'ARTIFACT_UNREADABLE',
+                ],
+              },
+              bytes: {
+                type: 'integer',
+                minimum: 0,
+              },
+            },
+          },
+        },
+      },
+    },
     ContextEstimate: {
       type: 'object',
       properties: {
@@ -3041,6 +3081,9 @@ export const protocolSchema = {
           const: true,
         },
         taskList: {
+          const: true,
+        },
+        contextCheck: {
           const: true,
         },
       },

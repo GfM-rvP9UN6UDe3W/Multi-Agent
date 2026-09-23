@@ -1,6 +1,6 @@
 # SPEC-0019: Routing layer corrections
 
-Date: 2026-09-22. Status: requested by the owner after an external assessment of `370085f`, the source of the rc.12 candidate; implemented on branch `routing-corrections` for review; not merged and in no package. rc.12 still has these defects. Evidence: [TDD-0019](../tdd/0019-routing-corrections.md). It corrects [SPEC-0018](0018-routing-layer.md). There is no engine, wire, schema or storage change.
+Date: 2026-09-22. Status: requested by the owner after an external assessment of `370085f`, the source of the rc.12 candidate; merged into main as `e6bb1c6` (pull request #8) and packaged in the local rc.13 candidate. rc.12 still has these defects. Evidence: [TDD-0019](../tdd/0019-routing-corrections.md). It corrects [SPEC-0018](0018-routing-layer.md). There is no engine, wire, schema or storage change.
 
 ## Acceptance criteria
 
@@ -47,7 +47,7 @@ Date: 2026-09-22. Status: requested by the owner after an external assessment of
     - busy parallel work, which carries the busy agent's own result first;
     - fresh sessions.
   - Collected and damaged results:
-    - No read-only interface reports whether a result's content was collected or damaged. Collection happens at least 90 days after its task ended and reads as `ARTIFACT_HISTORY_EXPIRED`; damage reads as `ARTIFACT_CORRUPT`.
+    - No read-only interface reported whether a result's content was collected or damaged. Collection happens at least 90 days after its task ended and reads as `ARTIFACT_HISTORY_EXPIRED`; damage reads as `ARTIFACT_CORRUPT`. [SPEC-0020](0020-context-check.md) adds `context.checkRefs`, and the router uses it where the engine offers it.
     - The engine checks every reference again when the proposal is submitted. Such a result, whether it was collected or damaged before or after routing, fails the submission with the engine's error, and nothing is created.
     - The router neither retries nor rewrites the proposal.
   - Unchanged: the engine's limit, its reference checks, and the wire.
@@ -76,11 +76,11 @@ Date: 2026-09-22. Status: requested by the owner after an external assessment of
 ## Owner decisions (2026-09-22)
 
 - A result left out does not ask for confirmation. The omission is a fixed capacity limit, not an uncertain judgment, and `needsConfirmation` keeps meaning uncertainty. A host that wants a confirmation checks `reasons` for `CONTEXT_OMITTED`.
-- Detecting a collected or damaged result before submitting gets a read-only engine query, as a separate change whose design the owner reviews before any code. The engine collects hourly and keeps detail for at least 90 days after a task ends, so a group that lives longer will meet such results.
+- Detecting a collected or damaged result before submitting gets a read-only engine query, as a separate change whose design the owner reviews before any code. The engine collects hourly and keeps detail for at least 90 days after a task ends, so a group that lives longer will meet such results. It is [SPEC-0020](0020-context-check.md).
 
 ## Boundaries
 
-- Only a new read-only engine query could detect a collected or damaged result before submitting. None exists, and this change adds none.
+- Detecting a collected or damaged result before submitting needed a read-only engine query. This change added none; [SPEC-0020](0020-context-check.md) adds it.
 - Covered by tests: HTTP on loopback; a TLS handshake against a local server that does not speak TLS. Not exercised: HTTPS to a real server and requests through a proxy. They keep urllib's defaults: the proxy environment variables and a default TLS context. The judge builds its own opener, so an opener installed with `urllib.request.install_opener` no longer applies.
 - The default thresholds are still the small offline trials of SPEC-0018. No live Jev call was made.
 

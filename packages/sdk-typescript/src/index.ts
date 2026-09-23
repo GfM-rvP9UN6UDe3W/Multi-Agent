@@ -1,5 +1,6 @@
 export { validateWire } from '../../engine/src/wire.ts';
 export type * as WireTypes from '../../engine/src/generated/wire.ts';
+import type { ContextRefCheck } from '../../engine/src/generated/wire.ts';
 import { requestDigest, type RetryIdentity } from '../../engine/src/identity.ts';
 import { randomUUID } from 'node:crypto';
 import { createEngine } from '../../engine/src/index.ts';
@@ -29,6 +30,7 @@ import type {
   UsageRecord,
   VerificationRule,
   WorkflowFeature,
+  ContextPlan,
 } from '../../engine/src/types.ts';
 import { OrchestratorError, UnixRpcClient, type Caller, type RequestOptions } from './transport.ts';
 export { OrchestratorError } from './transport.ts';
@@ -513,6 +515,14 @@ export class Orchestrator {
         'pricing'
       > & { provider: string; model: string },
     ) => this.call('context.estimate', input),
+    /**
+     * What task admission would decide now for each context reference (SPEC-0020). Read-only; the
+     * content is never returned, and admission checks again when a task is submitted.
+     */
+    checkRefs: (contextRefs: ContextPlan['contextRefs'], options?: RequestOptions) => {
+      this.requireWorkflow('contextCheck');
+      return this.call<ContextRefCheck>('context.checkRefs', { contextRefs }, options);
+    },
   };
   readonly messages = {
     send: (spec: MessageSpec, options?: MutationOptions) =>
