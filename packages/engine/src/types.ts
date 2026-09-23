@@ -149,7 +149,9 @@ export type WorkflowFeature =
   | 'handoffs'
   | 'writePath'
   | 'runtimeRules'
-  | 'taskList';
+  | 'taskList'
+  /** SPEC-0020 `context.checkRefs`. */
+  | 'contextCheck';
 /** A model's request that the host hand work to a session outside its subtree (SPEC-0014 H). */
 export interface HandoffRequest {
   handoffId: string;

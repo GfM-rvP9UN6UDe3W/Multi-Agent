@@ -354,6 +354,7 @@ export type RouteReasonCode =
   | 'NO_CANDIDATES'
   | 'CONTEXT_CARRIED'
   | 'CONTEXT_OMITTED'
+  | 'CONTEXT_UNCHECKED'
   | 'MODEL_SMALL'
   | 'MODEL_LARGE'
   | 'RUNTIME_MISSING'
@@ -397,6 +398,13 @@ export interface RouteProposal {
 export const MAX_CONTEXT_REF_BYTES = 32768;
 /** The engine returns a task's complete result up to this size, and a marked preview beyond. */
 const COMPLETE_RESULT_BYTES = 64 * 1024;
+/** `CONTEXT_OMITTED` reasons for the codes `context.checkRefs` reports (SPEC-0020). */
+const OMISSION: Record<string, string> = {
+  ARTIFACT_TOO_LARGE: 'too_large',
+  ARTIFACT_HISTORY_EXPIRED: 'expired',
+  ARTIFACT_CORRUPT: 'corrupt',
+  NOT_FOUND: 'missing',
+};
 const encoder = new TextEncoder();
 export type RoutingErrorCode = 'ROUTING_ROOT_MISMATCH' | 'ROUTING_SOURCE_NOT_MEMBER';
 /** A request that would leave the router's group. It is refused before the judge is asked. */
@@ -698,6 +706,33 @@ export function createRouter(options: RouterOptions): Router {
               resultOf(candidate),
           )
           .sort((a, b) => relevance(b) - relevance(a));
+      const top = ranked[0];
+      const chosen = top && top.option !== 'fresh' ? byAlias.get(top.option) : undefined;
+      // SPEC-0020: the engine checks every result that could be carried, at most 20 per call. An
+      // engine without the check leaves them unchecked, and the proposal says so.
+      const checked =
+        (orch.info?.capabilities?.workflow as { contextCheck?: unknown } | undefined)
+          ?.contextCheck === true;
+      const verdicts = new Map<string, { admissible: boolean; code?: string; bytes?: number }>();
+      if (checked) {
+        const candidateRefs = [
+          ...new Set(
+            [...byRelevance(), ...(chosen ? [chosen] : [])]
+              .map(resultOf)
+              .filter((result) => result && result.bytes <= MAX_CONTEXT_REF_BYTES)
+              .map((result) => result!.artifactRef),
+          ),
+        ];
+        for (let start = 0; start < candidateRefs.length; start += 20) {
+          const { contextRefs } = await orch.context.checkRefs(
+            candidateRefs
+              .slice(start, start + 20)
+              .map((artifactRef) => ({ artifactRef, version: 1 as const })),
+            request.signal ? { signal: request.signal } : undefined,
+          );
+          for (const entry of contextRefs) verdicts.set(entry.artifactRef, entry);
+        }
+      }
       const omitted = new Set<string>();
       /**
        * The results of `sources` to carry, in order, at most `maxContextRefs`. The engine refuses a
@@ -710,12 +745,26 @@ export function createRouter(options: RouterOptions): Router {
           if (carried.length >= policy.maxContextRefs) break;
           const result = resultOf(candidate);
           if (!result || carried.includes(result.artifactRef)) continue;
-          if (result.bytes <= MAX_CONTEXT_REF_BYTES) {
+          const verdict = verdicts.get(result.artifactRef);
+          if (result.bytes <= MAX_CONTEXT_REF_BYTES && (!verdict || verdict.admissible)) {
             carried.push(result.artifactRef);
             continue;
           }
           if (omitted.has(result.artifactRef)) continue;
           omitted.add(result.artifactRef);
+          if (verdict && result.bytes <= MAX_CONTEXT_REF_BYTES) {
+            reasons.push({
+              code: 'CONTEXT_OMITTED',
+              detail: {
+                sessionId: candidate.session.id,
+                artifactRef: result.artifactRef,
+                reason: OMISSION[verdict.code ?? ''] ?? 'unreadable',
+                ...(verdict.code ? { code: verdict.code } : {}),
+                ...(verdict.bytes !== undefined ? { bytes: verdict.bytes } : {}),
+              },
+            });
+            continue;
+          }
           reasons.push({
             code: 'CONTEXT_OMITTED',
             detail: {
@@ -733,8 +782,6 @@ export function createRouter(options: RouterOptions): Router {
       const references = (refs: string[]) =>
         refs.map((artifactRef) => ({ artifactRef, version: 1 as const }));
 
-      const top = ranked[0];
-      const chosen = top && top.option !== 'fresh' ? byAlias.get(top.option) : undefined;
       const anyRelevant = eligible.some((candidate) => relevance(candidate) >= policy.relevantAt);
       let proposal: Pick<RouteProposal, 'spec' | 'decision'>;
       /** How sure the decision itself is, before the judge's own confidence applies. */
@@ -829,11 +876,17 @@ export function createRouter(options: RouterOptions): Router {
         }
         return runtime.model;
       }
-      if (proposal.spec.contextPlan.contextRefs.length)
+      if (proposal.spec.contextPlan.contextRefs.length) {
         reasons.push({
           code: 'CONTEXT_CARRIED',
           detail: { count: proposal.spec.contextPlan.contextRefs.length },
         });
+        if (!checked)
+          reasons.push({
+            code: 'CONTEXT_UNCHECKED',
+            detail: { count: proposal.spec.contextPlan.contextRefs.length },
+          });
+      }
       // A judge that reports low confidence in its own choice is unsure, however probable it made
       // that choice look.
       const judgeConfidence = best ? best.confidence : null;

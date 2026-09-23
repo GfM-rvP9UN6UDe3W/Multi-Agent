@@ -34,6 +34,22 @@ export function strings(value: unknown, name: string, min = 0, max = 100): strin
 }
 /** The longest queue wait a task or the host default may request (SPEC-0015 Q03). */
 export const MAX_QUEUE_WAIT_MS = 604800000;
+/** Context references as `contextPlan` and `context.checkRefs` accept them, `min` to 20 entries. */
+export function contextRefs(value: unknown, min = 0): ContextPlan['contextRefs'] {
+  if (!Array.isArray(value) || value.length < min || value.length > 20)
+    fail(
+      'VALIDATION_ERROR',
+      min
+        ? `contextRefs must contain ${min} to 20 artifact references`
+        : 'contextRefs must contain at most 20 artifact references',
+    );
+  return value.map((entry) => {
+    const ref = object(entry, 'contextRef');
+    fields(ref, ['artifactRef', 'version']);
+    if (ref.version !== 1) fail('UNSUPPORTED_CAPABILITY', 'Unsupported context reference version');
+    return { artifactRef: string(ref.artifactRef, 'artifactRef', 128), version: 1 as const };
+  });
+}
 export function contextPlan(value: unknown, defaultQueueWaitMs = 30000): ContextPlan {
   const p = object(value, 'contextPlan');
   fields(p, [
@@ -56,19 +72,12 @@ export function contextPlan(value: unknown, defaultQueueWaitMs = 30000): Context
     fallbackModes.includes(p.requestedMode as RoutingMode)
   )
     fail('VALIDATION_ERROR', 'Invalid fallbackModes');
-  if (!Array.isArray(p.contextRefs ?? []) || (p.contextRefs as unknown[] | undefined)?.length! > 20)
-    fail('VALIDATION_ERROR', 'contextRefs must contain at most 20 artifact references');
+  const refs = contextRefs(p.contextRefs ?? []);
   return {
     requestedMode: p.requestedMode as RoutingMode,
     independent: p.independent,
     dependencyTaskIds: strings(p.dependencyTaskIds ?? [], 'dependencyTaskIds'),
-    contextRefs: ((p.contextRefs ?? []) as unknown[]).map((value) => {
-      const ref = object(value, 'contextRef');
-      fields(ref, ['artifactRef', 'version']);
-      if (ref.version !== 1)
-        fail('UNSUPPORTED_CAPABILITY', 'Unsupported context reference version');
-      return { artifactRef: string(ref.artifactRef, 'artifactRef', 128), version: 1 };
-    }),
+    contextRefs: refs,
     ...(p.candidateSessionId !== undefined
       ? { candidateSessionId: string(p.candidateSessionId, 'candidateSessionId', 128) }
       : {}),

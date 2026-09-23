@@ -352,8 +352,8 @@ A judge is any object with `evaluate({ state, questions })` that answers with pr
   - `reasons` records why each proposal looks the way it does.
 - **A failing judge falls back.** If the judge fails or times out, the proposal becomes a fresh session without context, and it asks for confirmation by default. The Jev judge's timeout bounds the whole evaluation, including its retry.
 - **Findings stay in the group.** The source of a finding must be one of the members. With `scope: 'root'`, a `rootTaskId` other than the source's own root is refused before the judge is asked.
-- **Submitting can still fail.** The engine checks each carried result again on submit. A result collected after 90 days or damaged on disk fails the submission with the engine's error, and nothing is created.
-- **Corrections after rc.12.** The rules above on the judge's confidence, results over 32 KiB, findings and the Jev timeout come from [SPEC-0019](docs/specs/0019-routing-corrections.md), in the current source. The rc.12 candidate package predates them.
+- **Results the engine would refuse are left out.** The router asks the engine with `context.checkRefs` which results it would accept, and leaves out a result that was collected after 90 days or damaged on disk, with a `CONTEXT_OMITTED` reason. The engine still checks again on submit, so a result that changes in between fails the submission with the engine's error, and nothing is created. An engine without the check reports `CONTEXT_UNCHECKED`.
+- **Versions.** The rules above on the judge's confidence, results over 32 KiB, findings and the Jev timeout come from [SPEC-0019](docs/specs/0019-routing-corrections.md), which rc.13 includes. The check before submitting is [SPEC-0020](docs/specs/0020-context-check.md), in the current source after rc.13.
 - **What leaves the process.** Only the goal, one description per member and a finding's text are sent to the judge.
   - Agents appear under neutral aliases, never engine ids.
   - The default description is the latest task goal plus the first 600 characters of its result.

@@ -1,4 +1,4 @@
-"""Generated from schemas/protocol.schema.json; SHA-256 f8717c8ea9ef2402fe0efdb2ef256fa4df29367ec893dfe393419ae9efb05f13. Do not edit.
+"""Generated from schemas/protocol.schema.json; SHA-256 1fe5197a0546b5f5a34bc3c07618e9ad77eb11405e4e7c5ae2b10ac857526bce. Do not edit.
 Wire dictionaries use camelCase. Use the SDK dataclasses for snake_case requests.
 """
 from __future__ import annotations
@@ -369,6 +369,15 @@ class MoneyBudget(TypedDict):
     maxCost: str
     reservePerDispatch: str
 
+class ContextRefCheckContextRefsItem(TypedDict):
+    artifactRef: str
+    admissible: bool
+    code: NotRequired[Literal["ARTIFACT_TOO_LARGE", "ARTIFACT_HISTORY_EXPIRED", "ARTIFACT_CORRUPT", "NOT_FOUND", "ARTIFACT_UNREADABLE"]]
+    bytes: NotRequired[int]
+
+class ContextRefCheck(TypedDict):
+    contextRefs: list[ContextRefCheckContextRefsItem]
+
 class ContextEstimate(TypedDict):
     inputTokens: int
     outputReserveTokens: int
@@ -673,6 +682,7 @@ class WorkflowCapability(TypedDict):
     writePath: NotRequired[Literal[True]]
     runtimeRules: NotRequired[Literal[True]]
     taskList: NotRequired[Literal[True]]
+    contextCheck: NotRequired[Literal[True]]
 
 TaskStatus: TypeAlias = Literal["queued", "running", "waiting_approval", "paused", "blocked", "completed", "failed", "cancelled", "waiting_dependency", "verifying"]
 SessionStatus: TypeAlias = Literal["idle", "running", "pausing", "paused", "closed", "outcome_unknown"]

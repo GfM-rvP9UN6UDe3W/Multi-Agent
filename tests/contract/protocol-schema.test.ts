@@ -204,6 +204,24 @@ test(
     assert.equal(waiting.status, 'waiting_approval');
     const approval = await client.approvals.get(waiting.approvalId!);
     const session = await client.sessions.get(waiting.sessionId);
+    // SPEC-0020 K04: a socket client that is not the owner may check context references.
+    const refCheck = await client.context.checkRefs([
+      { artifactRef: waiting.artifactRefs[0], version: 1 },
+      { artifactRef: `sha256:${'f'.repeat(64)}`, version: 1 },
+    ]);
+    assert.deepEqual(
+      refCheck.contextRefs.map((entry) => [
+        entry.artifactRef,
+        entry.admissible,
+        entry.code ?? null,
+      ]),
+      [
+        [waiting.artifactRefs[0], true, null],
+        [`sha256:${'f'.repeat(64)}`, false, 'NOT_FOUND'],
+      ],
+    );
+    const workflow = client.info.capabilities.workflow as { contextCheck?: boolean } | undefined;
+    assert.equal(workflow?.contextCheck, true);
     await client.sessions.control(
       {
         sessionId: session.id,
@@ -257,6 +275,8 @@ test(
       SessionSnapshot: [session, currentSession],
       SchedulerSnapshot: [scheduler],
       EventEnvelope: page.events,
+      ContextRefCheck: [refCheck],
+      InitializeResult: [client.info],
     };
     for (const [name, values] of Object.entries(samples)) {
       await t.test(`${name} accepts actual host snapshots`, () => {
@@ -413,6 +433,23 @@ test(
         corrupt('OperationSnapshot', (value) => {
           value.lifecycle = { kind: 'reconcile' };
         });
+        const checked = (value: Record<string, unknown>) =>
+          value.contextRefs as Record<string, unknown>[];
+        corrupt('ContextRefCheck', (value) => {
+          delete checked(value)[0].admissible;
+        });
+        corrupt('ContextRefCheck', (value) => {
+          checked(value)[1].code = 'SOMETHING_ELSE';
+        });
+        corrupt('ContextRefCheck', (value) => {
+          checked(value)[0].bytes = -1;
+        });
+        corrupt('ContextRefCheck', (value) => {
+          value.contextRefs = [];
+        });
+        corrupt('ContextRefCheck', (value) => {
+          delete value.contextRefs;
+        });
         for (const [name, values] of Object.entries(samples))
           if (name !== 'EventEnvelope')
             validate(name, { ...(values[0] as object), futureExtension: { unknown: true } });
@@ -458,6 +495,9 @@ async def main():
         operation = await orch.operations.get(sys.argv[5])
         usage = await orch.usage.get(task.id)
         exact = await orch.usage.get_record(usage.records[0].id)
+        check = await orch.context.check_refs([{'artifact_ref': sys.argv[6], 'version': 1},
+                                               {'artifact_ref': 'sha256:' + 'f' * 64, 'version': 1}])
+        assert check.context_refs[0]['admissible'] is True and check.context_refs[1]['code'] == 'NOT_FOUND'
         assert exact.as_dict() == usage.records[0].as_dict()
         notifications = []
         async for event in orch.events(task_id=task.id):
@@ -480,7 +520,7 @@ async def main():
             'TaskSnapshot': task, 'ApprovalRequest': approval,
             'MessageSnapshot': message, 'OperationSnapshot': operation,
             'UsageRecord': usage.records,
-            'UsageRecordedData': notifications,
+            'UsageRecordedData': notifications, 'ContextRefCheck': check,
         }.items()}))
 asyncio.run(main())
 `,
@@ -489,6 +529,7 @@ asyncio.run(main())
             approval.approvalId,
             message.id,
             receipt.id,
+            waiting.artifactRefs[0],
           ],
           {
             env: { ...process.env, PYTHONPATH: join(process.cwd(), 'python/src') },
@@ -505,6 +546,7 @@ asyncio.run(main())
           UsageRecordedData: page.events
             .filter((event) => event.type === 'usage.recorded')
             .map((event) => event.data),
+          ContextRefCheck: refCheck,
         });
         for (const [name, value] of Object.entries(actual))
           for (const item of ['UsageRecord', 'UsageRecordedData'].includes(name)

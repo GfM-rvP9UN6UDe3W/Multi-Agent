@@ -1,6 +1,6 @@
 # TDD-0019: Routing layer corrections
 
-Date: 2026-09-22. Base: `370085f`, the source of the rc.12 candidate. Branch `routing-corrections`; nothing is merged, packaged or published. Specification: [SPEC-0019](../specs/0019-routing-corrections.md).
+Date: 2026-09-22. Base: `370085f`, the source of the rc.12 candidate. Branch `routing-corrections`, merged into main as `e6bb1c6` and packaged in the local rc.13 candidate; nothing is published. Specification: [SPEC-0019](../specs/0019-routing-corrections.md).
 
 ## Reproduction before the specification
 
