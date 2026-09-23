@@ -63,6 +63,7 @@ try {
 import {createOrchestrator} from '@orchvia/sdk';
 import {createFakeAdapter} from '@orchvia/engine/fake';
 const orch=await createOrchestrator({workspace:${JSON.stringify(join(base, 'work'))},stateDir:${JSON.stringify(join(base, 'state'))},adapters:[createFakeAdapter()],providers:{fake:{model:'fixture'}},allowCrossRootReuse:true});
+assert.equal(orch.info.engineVersion,${JSON.stringify(version)});
 const run=async(spec)=>{const task=await orch.tasks.create(spec);for await(const event of orch.events({taskId:task.id,signal:AbortSignal.timeout(10000)})){if(event.type!=='approval.requested')continue;const a=await orch.approvals.get(String(event.data.approvalId));await orch.approvals.decide(a.approvalId,{choice:'approve',expectedRevision:a.revision});break;}return task.wait({timeoutMs:10000});};
 try{const runtime={provider:'fake',model:'fixture'},acceptance={mode:'human',criteria:['reviewed']};
 const first=await run({goal:'first',runtime,acceptance});
@@ -85,6 +86,8 @@ console.log(JSON.stringify({mode:'npm-registry',status:second.status,reused:true
     ]),
   );
   const cli = join(base, 'node_modules/@orchvia/cli/dist/main.js');
+  // SPEC-0021 P09: the installed packages report the release version.
+  assert.equal(run(process.execPath, [cli, '--version']), `${version}\n`);
   await writeFile(
     join(base, 'python-config.json'),
     JSON.stringify({
@@ -97,9 +100,12 @@ console.log(JSON.stringify({mode:'npm-registry',status:second.status,reused:true
     join(base, 'roundtrip.py'),
     `import asyncio,json
 from orchvia import Orchestrator,TaskSpec,RuntimeSpec,AcceptanceSpec
+import orchvia,orchvia.client
+assert (orchvia.__version__,orchvia.client.SDK_VERSION)==(${JSON.stringify(pythonVersion)},)*2,(orchvia.__version__,orchvia.client.SDK_VERSION)
 async def main():
     client=await Orchestrator.local(engine_command=${JSON.stringify([process.execPath, cli, 'host', '--stdio', '--config', join(base, 'python-config.json')])},close_timeout=5)
     try:
+        assert client.info.engine_version==${JSON.stringify(version)},client.info.engine_version
         task=await client.tasks.create(TaskSpec(goal='registry Python check',runtime=RuntimeSpec('fake','fixture'),acceptance=AcceptanceSpec(criteria=['reviewed'])))
         async for event in client.events(task_id=task.id):
             if event.type=='approval.requested':

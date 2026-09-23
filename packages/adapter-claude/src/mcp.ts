@@ -1,4 +1,5 @@
 import type { RuntimeTools } from '../../engine/src/tools.ts';
+import { VERSION } from '../../engine/src/version.ts';
 
 export interface ClaudeMcpDependencies {
   sdk: Pick<typeof import('@anthropic-ai/claude-agent-sdk'), 'tool' | 'createSdkMcpServer'>;
@@ -31,7 +32,7 @@ export async function createClaudeMcpServer(
   const { sdk, zod: z } = loaded;
   return sdk.createSdkMcpServer({
     name: 'agent_orch',
-    version: '0.1.0',
+    version: VERSION,
     tools: tools.definitions.map((definition) =>
       sdk.tool(
         definition.name,

@@ -22,6 +22,9 @@ const versionIndex = process.argv.indexOf('--version');
 const releaseVersion = versionIndex < 0 ? undefined : process.argv[versionIndex + 1];
 if (versionIndex >= 0 && !/^\d+\.\d+\.\d+(?:-(?:alpha|beta|rc)\.\d+)?$/.test(releaseVersion ?? ''))
   throw new Error('--version requires an explicit release version, e.g. 0.1.0 or 0.2.0-rc.1');
+// SPEC-0021 P08: the root package.json holds the one version; --version replaces it in the build.
+const sourceVersion = JSON.parse(await readFile(join(root, 'package.json'), 'utf8')).version;
+const version = releaseVersion ?? sourceVersion;
 if (
   releaseVersion &&
   (await access(join(out, 'npm-manifest.json')).then(
@@ -145,11 +148,23 @@ try {
         );
         await writeFile(path, code);
       }
+    // SPEC-0021 P09: the built engine reports the build's version wherever code reads it.
+    if (directory === 'engine')
+      for (const file of ['version.js', 'version.d.ts']) {
+        const path = join(destination, file);
+        const code = await readFile(path, 'utf8');
+        if (code.match(/\bVERSION = (['"])[^'"]*\1/g)?.length !== 1)
+          throw new Error(`Expected one version in the engine's ${file}`);
+        await writeFile(path, code.replace(/(\bVERSION = )(['"])[^'"]*\2/, `$1$2${version}$2`));
+      }
     // The source manifests stay private so that nothing publishes from the workspace by mistake.
     const { private: _workspaceOnly, ...original } = JSON.parse(
       await readFile(join(root, 'packages', directory, 'package.json'), 'utf8'),
     );
-    const version = releaseVersion ?? original.version;
+    if (original.version !== sourceVersion)
+      throw new Error(
+        `packages/${directory}/package.json says ${original.version}, not ${sourceVersion}: use scripts/set-version.mjs`,
+      );
     const exported = {};
     for (const [key, value] of Object.entries(original.exports ?? {})) {
       const target = value.replace('./src/', './dist/').replace(/\.ts$/, '.js');

@@ -11,9 +11,9 @@ from .identity import request_digest
 from .errors import OrchestrationError, ShutdownIncomplete, unsupported
 from .transport import RpcTransport
 from .types import ReconcileEvidence, Snapshot, TaskSpec, snapshot, to_wire
+from ._version import VERSION as SDK_VERSION
 
 
-SDK_VERSION = "0.1.0"
 PROTOCOL_VERSION = "2.0"
 _TASK_TERMINAL = {"completed", "failed", "cancelled"}
 _OPERATION_TERMINAL = {"completed", "noop", "rejected", "failed", "outcome_unknown"}

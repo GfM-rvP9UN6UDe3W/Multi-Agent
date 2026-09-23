@@ -16,6 +16,7 @@ npm run typecheck              # tsc --noEmit
 npm run format:check           # prettier --check; use npx prettier --write <file> when needed
 npm test                       # node:test; engine and protocol contract suites
 npm run test:python            # unittest; Python SDK and actual local-host integration
+node scripts/set-version.mjs X.Y.Z  # The only way to change the version; writes every copy (SPEC-0021 P08)
 ```
 
 Run one file or one matching test:

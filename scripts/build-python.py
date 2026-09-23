@@ -19,7 +19,9 @@ if args.version and not re.fullmatch(r"\d+\.\d+\.\d+(?:-(?:alpha|beta|rc)\.\d+)?
     parser.error("--version must name an explicit release, for example 0.1.0 or 0.2.0-rc.1")
 if args.version and (output / "python-manifest.json").exists():
     raise SystemExit("Release already exists; choose a new version and output directory")
-release_version = args.version or "0.1.0"
+# SPEC-0021 P08: the root package.json holds the one version; --version replaces it in the build.
+source_version = json.loads((source.parent / "package.json").read_text())["version"]
+release_version = args.version or source_version
 # PEP 440 spells 0.2.0-rc.1 as 0.2.0rc1, and alpha and beta as a and b.
 python_version = release_version.replace("-alpha.", "a").replace("-beta.", "b").replace("-rc.", "rc")
 filenames = [f"orchvia-{python_version}-py3-none-any.whl", f"orchvia-{python_version}.tar.gz"]
@@ -29,14 +31,13 @@ output.mkdir(parents=True, exist_ok=True)
 with tempfile.TemporaryDirectory(prefix="orchvia-python-build-") as temporary:
     stage = Path(temporary) / "python"
     shutil.copytree(source, stage, ignore=shutil.ignore_patterns("__pycache__", "*.pyc", "*.egg-info", "build", "dist"))
-    for name, expression in [("pyproject.toml", r'(?m)^version = "[^"]+"$'),
-                             ("src/orchvia/__init__.py", r'(?m)^__version__ = "[^"]+"$')]:
+    source_python = source_version.replace("-alpha.", "a").replace("-beta.", "b").replace("-rc.", "rc")
+    for name, prefix in [("pyproject.toml", "version"), ("src/orchvia/_version.py", "VERSION")]:
         path = stage / name
-        prefix = "version" if name == "pyproject.toml" else "__version__"
-        content, count = re.subn(expression, f'{prefix} = "{python_version}"', path.read_text())
-        if count != 1:
-            raise SystemExit(f"Expected one version declaration in {name}")
-        path.write_text(content)
+        found = re.findall(rf'(?m)^{prefix} = "([^"]+)"$', path.read_text())
+        if found != [source_python]:
+            raise SystemExit(f"{name} says {found}, not {source_python}: use scripts/set-version.mjs")
+        path.write_text(re.sub(rf'(?m)^{prefix} = "[^"]+"$', f'{prefix} = "{python_version}"', path.read_text()))
     subprocess.run([sys.executable, "-m", "build", "--no-isolation", "--sdist", "--wheel", "--outdir", str(output), str(stage)], check=True)
 manifest = {"releaseVersion": release_version, "version": python_version, "files": []}
 for name in filenames:

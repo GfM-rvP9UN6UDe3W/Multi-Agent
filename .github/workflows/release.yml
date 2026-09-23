@@ -10,6 +10,9 @@ on:
       - 'scripts/build-python.py'
       - 'scripts/package-smoke.mjs'
       - 'scripts/registry-check.mjs'
+      - 'scripts/release-version.mjs'
+      - 'packages/engine/src/version.ts'
+      - 'python/src/orchvia/_version.py'
       - 'packages/*/package.json'
       - 'python/pyproject.toml'
       - 'python/README.md'
@@ -31,6 +34,9 @@ jobs:
       version: ${{ steps.version.outputs.version }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          # The Version step checks that a tag is on main.
+          fetch-depth: 0
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 24.14.0
@@ -43,15 +49,10 @@ jobs:
       - name: Version
         id: version
         shell: bash
+        # A tag must equal the version in package.json, have a changelog section and be on main
+        # (SPEC-0021 P09). Any other ref builds a throwaway version that is never published.
         run: |
-          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
-            version="${GITHUB_REF#refs/tags/v}"
-            # Every release has its own changelog section.
-            grep -q "^## \[${version}\]" CHANGELOG.md || { echo "CHANGELOG.md has no section for ${version}"; exit 1; }
-          else
-            # A throwaway version that is never published, so the dry run cannot collide with a release.
-            version="0.0.0-rc.${GITHUB_RUN_NUMBER}"
-          fi
+          version="$(node scripts/release-version.mjs)"
           echo "version=${version}" >> "$GITHUB_OUTPUT"
       - run: node scripts/build-packages.mjs out --version "${{ steps.version.outputs.version }}"
       - run: python scripts/build-python.py out --version "${{ steps.version.outputs.version }}"

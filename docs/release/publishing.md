@@ -4,15 +4,18 @@ This file is the only source for how Orchvia is released ([SPEC-0021](../specs/0
 
 ## How a release works
 
-1. The changelog gets a section `## [X.Y.Z] - date`, and that change is merged into `main`.
-2. A maintainer pushes the tag `vX.Y.Z` on that commit. A version with a suffix, such as `v0.2.0-rc.1`, is a pre-release: npm tag `next`, PyPI pre-release, GitHub pre-release.
+1. A release pull request sets the version and names it in the changelog, and is merged into `main`:
+   - `node scripts/set-version.mjs X.Y.Z` writes the version to every copy: the package manifests, `package-lock.json`, `packages/engine/src/version.ts`, `python/pyproject.toml` and `python/src/orchvia/_version.py`. Never edit a copy by hand; a test checks that all copies agree (SPEC-0021 P08).
+   - The changelog's `## [Unreleased]` becomes `## [X.Y.Z] - date`.
+   - Between releases, `main` keeps the latest released version, so a checkout reports it; the tag names the exact source.
+2. A maintainer pushes the tag `vX.Y.Z` on the merge commit. A version with a suffix, such as `v0.2.0-rc.1`, is a pre-release: npm tag `next`, PyPI pre-release, GitHub pre-release.
 3. The [release workflow](../../.github/workflows/release.yml) then runs, in this order:
    1. the full offline test matrix;
-   2. one build of every package from the tag, with recorded hashes, an offline installation of the archives, `npm publish --dry-run` for every version not yet on npm, and `twine check`;
+   2. one build of every package from the tag, with recorded hashes, an offline installation of the archives, `npm publish --dry-run` for every version not yet on npm, and `twine check`. It stops first unless the tag equals the version in `package.json`, the changelog has its section and the tagged commit is on `main` (P09). The installed archives must report the version: `orchvia --version`, the engine's `engineVersion`, and in Python `orchvia.__version__` and the SDK's version;
    3. npm publishing through trusted publishing, in dependency order: engine, the adapters, sdk, cli. A version already on the registry is skipped, so a rerun continues where a failed run stopped. The job waits until the owner approves the `npm` deployment in the workflow run;
    4. PyPI publishing through trusted publishing, after the owner approves the `pypi` deployment;
    5. the GitHub Release, with every archive and `SHA256SUMS`, created only after both registries have the version;
-   6. on fresh Linux and macOS runners, an installation from npm and PyPI into empty directories that runs a quickstart and a Python host. It also checks that each npm archive has the bytes the workflow built.
+   6. on fresh Linux and macOS runners, an installation from npm and PyPI into empty directories that runs a quickstart and a Python host. It also checks that each npm archive has the bytes the workflow built, and that the installed packages report the version.
 4. A release is announced only after step 6 has passed.
 
 Pull requests that touch packaging run step 2 without publishing. No token is stored in the repository or its settings.

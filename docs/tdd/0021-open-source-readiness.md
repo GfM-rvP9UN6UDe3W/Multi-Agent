@@ -120,7 +120,7 @@ Base: `702a3d7`. Branch `orchvia-rename`, merged as pull request #11 (`f331930`)
 ### Not verified yet
 
 - The release workflow's publishing jobs and `scripts/registry-check.mjs` run for the first time with a tag; only the build job runs on pull requests.
-- The `v0.1.0` tag's run ([35865838151](https://github.com/masonlee39/orchvia/actions/runs/35865838151)) passed the offline matrix and stopped in the build job's dry run: `npm error You cannot publish over the previously published versions: 0.1.0.` The npm job skips a version already on the registry, but the dry run did not, and 0.1.0 had been published by hand first (P06). Nothing was published. The same local script failed the same way on the published archives; the corrected step skips the five published versions and still dry-runs a new one (0.0.0-rc.999). By the owner's choice (D-rel-1), 0.1.1 is the first release on PyPI and GitHub Releases, and 0.1.0 stays on npm only.
+- The `v0.1.0` tag's run ([35865838151](https://github.com/masonlee39/orchvia/actions/runs/35865838151)) passed the offline matrix and stopped in the build job's dry run: `npm error You cannot publish over the previously published versions: 0.1.0.` The npm job skips a version already on the registry, but the dry run did not, and 0.1.0 had been published by hand first (P06). Nothing was published. The same local script failed the same way on the published archives; the corrected step skips the five published versions and still dry-runs a new one (0.0.0-rc.999). By the owner's choice (D-rel-1), 0.1.1 is the first release on PyPI and GitHub Releases, and 0.1.0 stays on npm only. Later, D-rel-2 stopped 0.1.1 before publishing (see "One version" below).
 
 ## Real-model evidence (E)
 
@@ -292,3 +292,59 @@ The test and the example were written together, as the TypeScript quickstart's w
 | No `allowCrossRootReuse` | caught |
 | Another goal for the second task | caught |
 | The result is read without waiting for the task to end | caught |
+
+## One version (P08, P09)
+
+Base: the last tree of the branch `community-12-13-14`. The owner chose D-rel-2 option 2 and D-ver-1 option 1 on 2026-09-23.
+
+### What was found
+
+A local build of 0.1.1 from its tag's commit `5d95079`, made as the release workflow makes it, showed that the builds rewrote only the package manifests, `pyproject.toml` and `orchvia.__version__`. Eight literals kept 0.1.0: the engine's `engineVersion`, the TypeScript SDK's `sdkVersion` in two places, the Python SDK's `SDK_VERSION`, the tool bridge's MCP `serverInfo`, the Claude adapter's MCP server version, and the Codex adapter's `clientInfo` in two places. The source manifests said 0.1.0 while 0.1.1 was tagged, and `build-python.py` fell back to a written `0.1.0`.
+
+### RED
+
+- `node --test tests/contract/version.test.ts` failed 4 of 5:
+  - `0021-P08 package source writes the version only in version.ts and _version.py` listed nine literals: the eight above and `__version__` in `orchvia/__init__.py`.
+  - `0021-P08 set-version writes the version to every copy and changes nothing else` failed against a stub that wrote nothing: every copy still said 0.1.0.
+  - `0021-P09 a release tag must equal the source version, have a changelog section and be on main` ran against the release workflow's Version step, moved unchanged into `scripts/release-version.mjs`. It accepted `v0.1.1` while `package.json` said 0.1.0, and a tag on a commit that is not on main.
+  - `0021-P08 every copy of the version is the root version, and the changelog has its section` failed only because `version.ts` and `_version.py` did not exist yet, which is not counted as a defect.
+  - `0021-P08 the engine reports the root version to the TypeScript SDK` passed: with every copy at 0.1.0, the written literal happened to agree. It guards the behavior.
+- Packages built as `0.2.0-rc.7` with the unchanged builds failed the package smoke's new check: `client.info.engineVersion` was `'0.1.0'` instead of `'0.2.0-rc.7'`.
+
+### Changes
+
+- `packages/engine/src/version.ts` and `python/src/orchvia/_version.py` hold the version, and the eight places and `orchvia.__version__` read it. The SDK and the adapters import it from the engine, which the build maps to `@orchvia/engine/internal/version`, so bundled hosts get it too.
+- `scripts/set-version.mjs X.Y.Z [--root DIR]` reads and checks every copy before writing any: the root and package manifests, the lockfile's seven entries, `version.ts`, `pyproject.toml` and `_version.py`. It writes JSON as npm does, so setting the old version again leaves each file byte for byte as it was.
+- `scripts/build-packages.mjs` and `scripts/build-python.py` take the root version by default and stop when a copy differs from it. With `--version` they also rewrite the built `version.js`, `version.d.ts` and `_version.py`.
+- `scripts/release-version.mjs` replaces the release workflow's Version step. The build job checks out the full history, so the script can check that the tagged commit is on main; any error of that check stops the release.
+- The package smoke and the registry check require `orchvia --version`, `engineVersion`, `orchvia.__version__` and the Python SDK's version to equal the release.
+- `docs/release/publishing.md` describes the release pull request. `CHANGELOG.md` lists 0.1.1's changes under the next version and marks 0.1.1 as not published. The guide no longer names a local candidate version, and `AGENTS.md` and `.claude/CLAUDE.md` name the script.
+
+### GREEN
+
+- `node --test tests/contract/version.test.ts`: 5 of 5.
+- A build as `0.2.0-rc.7` and the package smoke: all nine modes passed. The built `version.js` and `version.d.ts` say `0.2.0-rc.7`; the wheel's `_version.py` and metadata say `0.2.0rc7`.
+- Builds without `--version`, which use 0.1.0, and as `0.0.0-rc.999`, the kind of version a pull request's dry run uses: the smoke passed all nine modes for each.
+- `npm test`: 593 passed, 588 before plus the five version tests. `npm run test:python`: 81 passed. Typecheck, formatting, the generated-contract check and `git diff --check` passed.
+
+### Mutation checks
+
+| Mutation | Result |
+| --- | --- |
+| `engineVersion` written as a literal again | caught (P08 source) |
+| `SDK_VERSION` written as a literal again | caught (P08 source) |
+| A package manifest at another version | caught (P08 copies) |
+| A lockfile workspace entry at another version | caught (P08 copies) |
+| `_version.py` at another version | caught (P08 copies) |
+| No changelog section for the source version | caught (P08 copies) |
+| `set-version` skips the lockfile | caught (P08 set-version) |
+| `set-version` writes JSON with four spaces | caught (P08 set-version) |
+| The release check skips the tag comparison | caught (P09) |
+| The release check skips the check that the commit is on main | caught (P09) |
+| An error in that check lets the release through | caught (P09) |
+| The Python build leaves `_version.py` as it is | caught by the smoke of a `0.2.0-rc.7` build: `AssertionError: ('0.1.0', '0.1.0')` |
+
+### Not verified
+
+- The release workflow's new Version step and the registry check's new assertions run only with the next tag. The registry check's generated scripts were checked with `py_compile` and `node --check`.
+- D-rel-2 on GitHub was carried out on 2026-09-23: the deployments of the v0.1.1 run ([35868558191](https://github.com/masonlee39/orchvia/actions/runs/35868558191)) were rejected, so the run ended without publishing. npm lists only 0.1.0, and neither PyPI nor GitHub Releases has 0.1.1.

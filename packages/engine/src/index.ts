@@ -5,6 +5,7 @@ import { MUTATIONS, requestDigest, requestScope, type RetryIdentity } from './id
 const requestIdentity = new AsyncLocalStorage<RetryIdentity>();
 import { randomUUID } from 'node:crypto';
 import { Store } from './store.ts';
+import { VERSION } from './version.ts';
 import { OrchestrationError, fail } from './errors.ts';
 import {
   object,
@@ -2331,7 +2332,7 @@ class LocalEngine implements Engine {
         string(p.sdkVersion, 'sdkVersion', 128);
         return {
           protocolVersion: '2.0',
-          engineVersion: '0.1.0',
+          engineVersion: VERSION,
           schemaVersion: 3,
           instanceId: this.instanceId,
           storeId: this.storeId,
