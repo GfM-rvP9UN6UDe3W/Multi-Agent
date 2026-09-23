@@ -1,0 +1,51 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 370" role="img" aria-labelledby="title desc">
+  <title id="title">Orchvia orchestration overview</title>
+  <desc id="desc">An application sends work to the Orchvia engine. The engine stores durable state in SQLite and coordinates Claude Code and Codex sessions through a mailbox. A person reviews and approves each result.</desc>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#53657d" />
+    </marker>
+    <style>
+      .box { fill: #fff; stroke: #b8c8dc; stroke-width: 2; }
+      .title { fill: #172b4d; font: 700 20px system-ui, sans-serif; }
+      .label { fill: #334766; font: 16px system-ui, sans-serif; }
+      .small { fill: #53657d; font: 14px system-ui, sans-serif; }
+      .line { fill: none; stroke: #53657d; stroke-width: 2.5; marker-end: url(#arrow); }
+      .accent { fill: #eaf3ff; stroke: #6b9bd2; stroke-width: 2; }
+    </style>
+  </defs>
+  <rect width="1200" height="370" rx="18" fill="#f7f9fc" />
+
+  <rect class="box" x="35" y="118" width="190" height="112" rx="14" />
+  <text class="title" x="130" y="163" text-anchor="middle">Your application</text>
+  <text class="small" x="130" y="193" text-anchor="middle">TypeScript or Python</text>
+
+  <path class="line" d="M225 174 H278" />
+
+  <rect class="accent" x="285" y="78" width="285" height="192" rx="16" />
+  <text class="title" x="427" y="119" text-anchor="middle">Orchvia engine</text>
+  <rect class="box" x="320" y="145" width="215" height="46" rx="10" />
+  <text class="label" x="427" y="174" text-anchor="middle">Tasks and coordination</text>
+  <rect class="box" x="320" y="207" width="215" height="42" rx="10" />
+  <text class="label" x="427" y="234" text-anchor="middle">SQLite durable state</text>
+
+  <path class="line" d="M570 174 H625" />
+
+  <rect class="box" x="632" y="78" width="263" height="192" rx="16" />
+  <text class="title" x="763" y="119" text-anchor="middle">Agent sessions</text>
+  <rect class="box" x="665" y="145" width="197" height="46" rx="10" />
+  <text class="label" x="763" y="174" text-anchor="middle">Claude Code</text>
+  <rect class="box" x="665" y="207" width="197" height="42" rx="10" />
+  <text class="label" x="763" y="234" text-anchor="middle">Codex</text>
+
+  <path class="line" d="M895 174 H946" />
+
+  <rect class="accent" x="953" y="118" width="212" height="112" rx="14" />
+  <text class="title" x="1059" y="158" text-anchor="middle">Durable mailbox</text>
+  <text class="small" x="1059" y="188" text-anchor="middle">Messages and results</text>
+  <text class="small" x="1059" y="209" text-anchor="middle">remain available</text>
+
+  <path class="line" d="M1059 230 V310 H130 V238" />
+  <rect x="390" y="286" width="405" height="52" rx="13" fill="#173b63" />
+  <text x="592" y="319" text-anchor="middle" fill="#fff" font="700 18px system-ui, sans-serif">A person reviews and approves each result</text>
+</svg>
