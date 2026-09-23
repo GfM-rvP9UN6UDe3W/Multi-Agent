@@ -219,3 +219,7 @@ GREEN:
 - Cost: starting Node with the guard took 22.0 ms against 18.9 ms without it (means of 30 interleaved runs), about 3 ms for each of the roughly 300 Node processes in a suite run.
 
 Limits: a Python stdio test reports only `Engine connection ended before the next complete response`. The guard's message is in the host's stderr, which the Python client keeps in `stderr_tail` but does not add to that error. A single-file `node --test` run is checked only when it adds `--import ./tests/fixtures/reserve-guard.mjs`. The remote CI run is pending.
+
+### Temporary directories left by a failed startup
+
+The owner asked whether the tests remove their temporary files. None of the 847 reserve files written in the three measured runs remained. Listing the temporary directory before and after one run showed `npm test` leaving 12 directories, each holding an empty `workspace`. `setup()` in `tests/engine/host-workflow.test.ts` and in `tests/engine/fork-model.test.ts` creates its directory before `createEngine`; six cases in each file expect startup to fail, so `close()` never runs. Both helpers now remove their directory when startup fails; a directory the caller passed in stays. Running the two files left 12 new directories before the change and none after, **46/46**. A whole-suite run, logged to confirm that no other test process ran on the machine at the time, left no new entry; `npm run test:python` left none either.
