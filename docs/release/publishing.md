@@ -25,15 +25,21 @@ Done on 2026-09-23 by the owner.
 
 ### 2. The first npm publish (owner, about 3 minutes)
 
-npm allows trusted publishing and staged publishing only for packages that already exist, so the first version of each package is published once with the owner's npm login. A maintainer's session runs the commands; the owner only confirms in the browser.
+npm allows trusted publishing and staged publishing only for packages that already exist, so the first version of each package is published once with the owner's npm login. npm requires two-factor authentication on the account to publish, and it asks for it in an interactive terminal, so the owner runs the publishing command.
 
-1. The maintainer runs `npm login --auth-type=web` on the release machine and opens the link it prints in the owner's browser, where the owner is signed in to npmjs.com.
-   - Success: the page asks to confirm the login; after the owner confirms, `npm whoami` prints the owner's npm user name.
-   - Failure: if npm asks for a two-factor code, the owner enters it; nobody else may.
-2. The maintainer builds the tagged commit into an empty directory with `node scripts/build-packages.mjs <dir> --version 0.1.0`, then publishes the five archives in this order: engine, adapter-claude, adapter-codex, sdk, cli, each with `npm publish ./<archive> --access public`; a path that does not start with `./` or `/` is read as a GitHub repository.
-   - Success: `npm view @orchvia/cli version` prints `0.1.0`.
-   - Failure: if npm asks for a two-factor confirmation, the owner approves it in the browser. If one package fails, fix the cause and continue with it; never republish a version that exists.
-3. The maintainer runs `npm logout`.
+1. The owner turns on two-factor authentication on npmjs.com (Account, Two-Factor Authentication), then runs `npm login --auth-type=web` in a terminal on the release machine and confirms in the browser.
+   - Success: `npm whoami` prints the owner's npm user name.
+   - Failure: `E403 ... Two-factor authentication ... is required to publish packages` means two-factor authentication is still off.
+2. The maintainer builds the commit that will be tagged into an empty directory with `node scripts/build-packages.mjs <dir> --version 0.1.0`. The build is byte-identical on macOS and Linux, so the release workflow's registry check accepts these archives.
+3. The owner publishes the five archives in dependency order, stopping at the first failure; a path that does not start with `./` or `/` is read as a GitHub repository:
+
+   ```sh
+   cd <dir> && for p in engine adapter-claude adapter-codex sdk cli; do npm publish "./orchvia-$p-0.1.0.tgz" --access public || break; done
+   ```
+
+   - Success: five lines `+ @orchvia/<name>@0.1.0`, and `npm view @orchvia/cli version` prints `0.1.0`.
+   - Failure: npm asks for two-factor confirmation for a publish; the owner confirms in the browser or enters the code. A command that is not interactive fails with `EOTP`. If one package fails, fix the cause and continue from it; never republish a version that exists.
+4. The maintainer compares each package's `dist.integrity` on npm with the local archive, then runs `npm logout`.
 
 ### 3. npm trusted publishers (maintainer, in the owner's signed-in browser)
 

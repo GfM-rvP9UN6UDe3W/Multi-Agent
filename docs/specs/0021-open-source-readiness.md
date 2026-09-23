@@ -1,6 +1,6 @@
 # SPEC-0021: Open-source readiness
 
-Date: 2026-09-23. Status: approved by the owner on 2026-09-23, with D-oss-1 to D-oss-4 each set to option 1. G, R and C and the repository rename (N05) were merged in pull request #10. The rename (N), P01 to P03, P05, P06, R06, R10 and L03 are implemented on branch `orchvia-rename`; P04 runs with the first release; E, L01, L02 and L04 are not implemented yet. Evidence: [TDD-0021](../tdd/0021-open-source-readiness.md). The owner asked for one plan that answers an outside assessment of why the public repository draws little attention. The owner chose the name Orchvia (D-oss-5). The project's relationship to TypeSafe is still open. It supersedes no specification. It changes packaging ([SPEC-0010](0010-bundled-host-delivery.md), [SPEC-0011](0011-release-readiness.md)) and the documentation layout, not the engine.
+Date: 2026-09-23. Status: approved by the owner on 2026-09-23, with D-oss-1 to D-oss-4 each set to option 1. G, R and C and the repository rename (N05) were merged in pull request #10. The rename (N), P01 to P03, P05, P06, R06, R10 and L03 were merged in pull request #11 (`f331930`); P04 runs with the first release. E01, E03 and E04 are implemented on branch `bench-and-claude-quickstart`. E02, E05 and E06 are not run: on 2026-09-23 the owner decided against paid model runs for now. L01, L02 and L04 are not implemented yet. Evidence: [TDD-0021](../tdd/0021-open-source-readiness.md). The owner asked for one plan that answers an outside assessment of why the public repository draws little attention. The owner chose the name Orchvia (D-oss-5). The project has no relationship with TypeSafe. It supersedes no specification. It changes packaging ([SPEC-0010](0010-bundled-host-delivery.md), [SPEC-0011](0011-release-readiness.md)) and the documentation layout, not the engine.
 
 ## Why
 
@@ -104,18 +104,19 @@ The repository became public on 2026-09-19. A reader who arrives cannot tell wha
   - the PyPI pending publisher;
   - GitHub environment protection for the release workflow.
 
-### E: Real-model evidence (new code outside the engine; paid runs by the owner only)
+### E: Real-model evidence (new code outside the engine; paid runs only on the owner's account, within D-oss-11)
 
 - **E01** The real-Claude quickstart runs in CI against the real Claude Code binary and the existing scripted loopback gateway, with synthetic credentials and no model call.
-- **E02** The owner runs the same quickstart once with a real account, following an SOP. Its output, trimmed, becomes the README's sample output, with the date and model.
-- **E03** The owner reviews the benchmark design before any code. It fixes:
-  - tasks, each with an automatic pass or fail check;
-  - three arms: one Claude Code session; Claude Code with subagents; this engine;
-  - metrics: input, output and cache tokens; wall time; estimated cost at published prices; pass rate; human interventions;
-  - the number of repetitions, and pinned model and tool versions.
-- **E04** The harness lives in `bench/`. `npm test` runs every arm against the fake runtime, with no model call.
-- **E05** A pilot, with one repetition per arm and task, measures what a full run costs. The owner decides the size of the full run.
-- **E06** Raw results and the exact commands are committed, and the README's numbers link to them. Results are published whether or not they favor the engine.
+- **E02** The same quickstart runs once on the owner's machine with the owner's Claude Code account. Its output, trimmed, becomes the README's sample output, with the date and model.
+- **E03** The benchmark design, as approved with D-oss-10:
+  - one small JavaScript project and four related requests on two independent tracks, each request with a hidden automatic check that lives outside the agent's workspace, plus the track's own tests;
+  - three arms: one Claude session that does every request in order; a new Claude session for each request; Orchvia, with the two tracks at the same time and each follow-up on its track's warm session;
+  - every arm runs the same model, the same Claude Code build (the one bundled with the Agent SDK), the same tools, no user or project settings, and the operating-system sandbox of the engine's writable Claude profile;
+  - metrics: input, output, cache-read and cache-write tokens; wall time; estimated cost at list prices; pass rate. The harness is the reviewer, so no person intervenes;
+  - three repetitions per arm; each report records the model, the prices, the machine, and the Agent SDK and Claude Code versions.
+- **E04** The harness lives in `bench/`. `npm test` runs every arm without a model call: reference solutions stand in for the agent's edits, and a request whose solution is left out must fail its checks. CI also runs every arm with the real Claude Code binary against a scripted loopback model, which must pass every request.
+- **E05** A pilot, with one repetition per arm, measures what a full run costs, within D-oss-11's $10. The harness stops before the next request once its estimate reaches the limit.
+- **E06** The full run stays within D-oss-11's $50. Raw results and the exact commands are committed, and the README's numbers link to them. Results are published whether or not they favor the engine.
 - **E07** Until E06 exists, the README and the repository description say speed and cost can be measured, not that they are better.
 
 ### L: Launch (drafts only; the owner posts)
@@ -157,7 +158,7 @@ Each public action waits for the owner's explicit authorization: renaming, chang
   | npm packages | `@agent-orch/{sdk,engine,adapter-claude,adapter-codex,cli}` | `@orchvia/{sdk,engine,adapter-claude,adapter-codex,cli}` |
   | CLI command | `agent-orch` | `orchvia` |
   | PyPI project | `agent-orch` (never published) | `orchvia` |
-  | Python import | `agent_orch` | `orchvia`; `agent_orch` forwards through 0.1.x (N03) |
+  | Python import | `agent_orch` | `orchvia`, with no alias (N03) |
 
   The npm organization is registered before the repository is renamed, because the rename makes the name public ([owner steps](../release/publishing.md)).
 - **D-oss-2, internal names:** remove them from current files and keep history (option 1).
@@ -165,14 +166,16 @@ Each public action waits for the owner's explicit authorization: renaming, chang
 - **D-oss-4, evidence:** a pilot, then the full benchmark (option 1).
 - **Facts from the owner:** the project has no relationship with TypeSafe (R06); orchvia.com is not the owner's, so the homepage is the npm package page; the owner had no PyPI account.
 - **D-oss-10, the plan:** everything that can be done now is done now: no compatibility layer for the old names, protocol identifiers kept for good, and every step the maintainer may do is done by the maintainer. The owner does only what needs the owner's identity or money: npm and PyPI sign-in and two-factor confirmation, the PyPI account, the model budget, and forwarding the notice to the downstream host.
-- **D-oss-11, the model budget:** a pilot of at most $10 and a full run of at most $50, on the owner's local Claude Code account; the run stops and asks when a limit would be passed.
+- **D-oss-11, the model budget:** a pilot of at most $10 and a full run of at most $50, on the owner's local Claude Code account; the run stops and asks when a limit would be passed. On 2026-09-23 the owner decided against paid runs for now, so E02, E05 and E06 wait until the owner funds them.
+- **D-oss-12, the first npm publish:** now, before PyPI can be used (option 1). The npm pages become public before the PyPI release and the GitHub Release, and the package READMEs link to a PyPI page that does not exist yet.
+- **D-bench-1, the orchvia arm's stop proof:** option 1. The dispatch's own Claude process must have exited, and every process that still uses the shared workspace must descend from the harness; errors never prove a stop. The alternatives were a workspace per track, which is not how a team shares a repository, and running the tracks one after the other, which removes the parallelism the benchmark measures.
 
 ## Boundaries
 
 - No engine, protocol or storage behavior changes. The rename changes names only.
 - The Python package still needs Node and the CLI package. Bundling the host into the wheel is out of scope.
 - Git history is not rewritten unless D-oss-2 is 3. Under options 1 and 2, the internal names stay visible in old commits, old pull requests and the rc.14 release archive.
-- No paid model call is made except in the owner's own runs (E02, E05, E06).
+- No paid model call is made except the runs of E02, E05 and E06 on the owner's account, within D-oss-11's limits.
 
 ## Rollback
 
