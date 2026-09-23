@@ -4,7 +4,7 @@ Date: 2026-09-20. Base commit: `4aa2b44`. Scope: [host runtime contract and offl
 
 ## Order and observed RED
 
-1. Updated `AGENT_ORCHESTRATION_DESIGN.md` sections 7.3–7.6 and the integration guide before creating the specification. The design distinguishes the generic contract/offline slice from the later concrete host bridge, durable journal/projection, packaging, and capacity work.
+1. Updated the design document (now `docs/design.md`) sections 7.3–7.6 and the integration guide before creating the specification. The design distinguishes the generic contract/offline slice from the later concrete host bridge, durable journal/projection, packaging, and capacity work.
 2. Wrote SPEC-0006 with AC-H01–AC-H09 before implementation.
 3. Added capability behavior tests and a negative TypeScript fixture, then ran RED before changing engine code.
 
@@ -45,4 +45,4 @@ The original 231-test Node baseline and 44-test Python baseline remain green. Th
 
 ## Unverified boundaries
 
-No credentials, model calls, real Axion bridge, production host permissions, durable cross-store journal/projection, published packages, application bundle/hot update, multi-tenant isolation, or performance/long-running capacity acceptance were exercised. Fixture stop evidence describes only controlled offline work. Real application integration must run the suite through its own host boundary and obtain separate real-model acceptance.
+No credentials, model calls, real application bridge, production host permissions, durable cross-store journal/projection, published packages, application bundle/hot update, multi-tenant isolation, or performance/long-running capacity acceptance were exercised. Fixture stop evidence describes only controlled offline work. Real application integration must run the suite through its own host boundary and obtain separate real-model acceptance.

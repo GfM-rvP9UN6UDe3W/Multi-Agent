@@ -2,7 +2,7 @@
 
 Historical evidence: [SPEC-0008](../specs/0008-claude-interruption.md) subsequently implements Claude interruption. Counts and unsupported-interruption observations below describe the SPEC-0007 checkpoint.
 
-Date: 2026-09-20. Scope: [host policy injection and durable usage](../specs/0007-host-policy-and-usage.md), implemented only in Multi-Agent. No Axion source/configuration/documentation, credentials, real model calls, external ledger, package publication, commits, or pushes are part of this increment.
+Date: 2026-09-20. Scope: [host policy injection and durable usage](../specs/0007-host-policy-and-usage.md), implemented only in Multi-Agent. No other application's source, configuration or documentation, credentials, real model calls, external ledger, package publication, commits, or pushes are part of this increment.
 
 ## Order and observed RED
 
@@ -67,4 +67,4 @@ The earlier full run passed 320 Node / 44 Python cases. A final source review ad
 - These are protocol/guard/engine fixtures, not native Claude/Codex tool execution, platform sandbox enforcement, application UI, packaged Electron behavior, or real-model acceptance. Host native SDK types/options are version-coupled; the repository peer range does not prove all releases support every extension.
 - Custom/MCP tool authority and host-shared native objects remain the trusted application's responsibility. Native scratch directories, symlink races, hook precedence, and exhaustive per-request audit need actual host/runtime acceptance.
 - JSON CLI remains read-only. Native callbacks and expanded execution need an embedded host. Claude active interruption remains unsupported and explicitly rejected; task acceptance is separate from native tool confirmation.
-- Durable replay covers received observations only. Historical rows receive no backfilled notifications. Unreported crash-time usage remains unknown, and aggregate turn usage is not a record for every native model request. The example's destination supports idempotency; no distributed transaction or Work Nexus delivery has been established.
+- Durable replay covers received observations only. Historical rows receive no backfilled notifications. Unreported crash-time usage remains unknown, and aggregate turn usage is not a record for every native model request. The example's destination supports idempotency; no distributed transaction or external ledger delivery has been established.

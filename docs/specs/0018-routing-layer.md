@@ -1,6 +1,6 @@
 # SPEC-0018: Optional routing layer with pluggable judges
 
-Date: 2026-09-22. Status: approved by the owner (TypeScript and Python ship together; routing never crosses a group; a group is one engine, or one root task inside an engine); implemented on branch `routing-layer`. Evidence: [TDD-0018](../tdd/0018-routing-layer.md). [SPEC-0019](0019-routing-corrections.md) corrects four of its rules in the source after rc.12: the judge's own confidence, notifications across groups, oversized results and the Python Jev deadline. It is in rc.13; the rc.12 package predates it. [SPEC-0020](0020-context-check.md) lets the router ask the engine which results it would accept before submitting. It changes the product boundary in [AGENT_ORCHESTRATION_DESIGN.md](../../AGENT_ORCHESTRATION_DESIGN.md) §5.1.
+Date: 2026-09-22. Status: approved by the owner (TypeScript and Python ship together; routing never crosses a group; a group is one engine, or one root task inside an engine); implemented on branch `routing-layer`. Evidence: [TDD-0018](../tdd/0018-routing-layer.md). [SPEC-0019](0019-routing-corrections.md) corrects four of its rules in the source after rc.12: the judge's own confidence, notifications across groups, oversized results and the Python Jev deadline. It is in rc.13; the rc.12 package predates it. [SPEC-0020](0020-context-check.md) lets the router ask the engine which results it would accept before submitting. It changes the product boundary in [the design document](../design.md) §5.1.
 
 ## Why
 

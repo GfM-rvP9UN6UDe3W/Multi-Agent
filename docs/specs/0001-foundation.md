@@ -1,6 +1,6 @@
 # SPEC-0001: Bilingual orchestration foundation
 
-Date: 2026-09-19. Status: the first increment is implemented; see [verification evidence](../tdd/0001-evidence.md). Basis: sections 3, 4, 6, and 10 of `AGENT_ORCHESTRATION_DESIGN.md`. Method: TDD, with behavior tests written to the workspace and observed failing before implementation and recorded GREEN results. At the time of this increment, Git had not been initialized; that work did not publish or commit code.
+Date: 2026-09-19. Status: the first increment is implemented; see [verification evidence](../tdd/0001-evidence.md). Basis: sections 3, 4, 6, and 10 of the design document, now `docs/design.md`. Method: TDD, with behavior tests written to the workspace and observed failing before implementation and recorded GREEN results. At the time of this increment, Git had not been initialized; that work did not publish or commit code.
 
 [SPEC-0003-A](./0003-a-lifecycle.md) subsequently added durable deadlines, unknown-outcome isolation, and owner attestation on the same wire 1.0 protocol. This document preserves the foundation acceptance IDs; see the [0003-A evidence](../tdd/0003-a-evidence.md) for later results.
 

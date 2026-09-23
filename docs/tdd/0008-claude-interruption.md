@@ -1,6 +1,6 @@
 # SPEC-0008 verification evidence
 
-Date: 2026-09-20. Scope: [confirmed Claude interruption](../specs/0008-claude-interruption.md), implemented only in Multi-Agent. Existing SPEC-0007 changes were preserved. No Axion files, credentials, real model requests, commits, pushes, or deployments were changed or performed.
+Date: 2026-09-20. Scope: [confirmed Claude interruption](../specs/0008-claude-interruption.md), implemented only in Multi-Agent. Existing SPEC-0007 changes were preserved. No other application's files, credentials, real model requests, commits, pushes, or deployments were changed or performed.
 
 ## Order and RED
 
@@ -64,4 +64,4 @@ This is stronger than a query-factory mock, but it does not verify the native CL
 | `npm run format:check` | Passed |
 | `git diff --check` | Passed |
 
-Full logs: `/private/tmp/multi-agent-spec0008-node-final.log` and `/private/tmp/multi-agent-spec0008-python-final.log`. No real-provider acceptance or Axion integration is claimed.
+Full logs: `/private/tmp/multi-agent-spec0008-node-final.log` and `/private/tmp/multi-agent-spec0008-python-final.log`. No real-provider acceptance or application integration is claimed.

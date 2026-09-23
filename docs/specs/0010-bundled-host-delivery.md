@@ -2,9 +2,9 @@
 
 ## Problem and scope
 
-Axion embeds the SDK, engine and Claude adapter in a single CJS Electron main-process bundle. Its deployed directory has no node_modules. The host owns its pinned Claude SDK and native executable. A clean npm installation alone does not establish this delivery contract.
+A downstream Electron application embeds the SDK, engine and Claude adapter in a single CJS main-process bundle. Its deployed directory has no node_modules. The host owns its pinned Claude SDK and native executable. A clean npm installation alone does not establish this delivery contract.
 
-Keep the five modular packages, package-boundary mapSpecifier rewriting, SHA-256 manifest and mutually exclusive adapter installation checks. This increment changes distribution compatibility and host dependency selection, not scheduling or wire semantics. Preserve existing source changes. No Axion edits, paid models, public publication, Git commit or tag are authorized.
+Keep the five modular packages, package-boundary mapSpecifier rewriting, SHA-256 manifest and mutually exclusive adapter installation checks. This increment changes distribution compatibility and host dependency selection, not scheduling or wire semantics. Preserve existing source changes. No edits to another application, paid models, public publication, Git commit or tag are authorized.
 
 ## Acceptance criteria
 
@@ -21,4 +21,4 @@ Both ordinary package installations and node_modules-free bundles are required. 
 
 ## Completion
 
-D01–D06 are implemented and verified for the local RC. The final run passed 435 Node tests, 48 Python tests and nine package modes. The first concurrent Node run had one crash-fixture timeout; its isolated rerun and subsequent full run passed without changing its deadline or assertions. See [complete evidence](../tdd/0010-bundled-host-delivery.md). RC 0.1.0-rc.1 is local and unpublished; actual Axion/Electron acceptance remains pending.
+D01–D06 are implemented and verified for the local RC. The final run passed 435 Node tests, 48 Python tests and nine package modes. The first concurrent Node run had one crash-fixture timeout; its isolated rerun and subsequent full run passed without changing its deadline or assertions. See [complete evidence](../tdd/0010-bundled-host-delivery.md). RC 0.1.0-rc.1 is local and unpublished; actual acceptance inside an Electron application remains pending.

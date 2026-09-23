@@ -30,11 +30,11 @@ Focused regression: adapters, host usage, CLI shutdown, engine lifecycle and lif
 
 ## Application CLI inspection
 
-The user selected the existing Axion CLI and clarified that Claude/Codex identify SDK runtimes, not required model vendors. Read-only source inspection and CLI `/model` confirm Axion CLI 1.2.23 uses the GUI bridge and the ZT model catalog: `hqu-deepseek-v4.1-flash` (current default), `hqu-glm-5.3-flash`. No Axion source/configuration was modified, and no login credential was read. The CLI rejected `/private/tmp` as a system workspace; the separate accepted workspace is `dist/acceptance/axion-cli`.
+The user selected an existing downstream application's CLI and clarified that Claude/Codex identify SDK runtimes, not required model vendors. Read-only source inspection and CLI `/model` confirm that CLI 1.2.23 uses the application's own bridge and private model catalog. No source or configuration of that application was modified, and no login credential was read. The CLI rejected `/private/tmp` as a system workspace; the separate accepted workspace is an ignored directory under `dist/acceptance`.
 
-Ordinary Axion CLI prompts use its existing conversation pipeline; they do not invoke this repository's orchestration engine. A CLI success must therefore be recorded separately from engine task/approval/tool-bridge acceptance. Full engine tests can use SDK runtimes with compatible private gateways; official-vendor models are not a requirement.
+Ordinary prompts to that CLI use its existing conversation pipeline; they do not invoke this repository's orchestration engine. A CLI success must therefore be recorded separately from engine task/approval/tool-bridge acceptance. Full engine tests can use SDK runtimes with compatible private gateways; official-vendor models are not a requirement.
 
-The user-requested minimal CLI turn returned exactly `ORCH_AXION_CLI_ACCEPTANCE_OK` with no displayed tool calls. CLI displayed 13.1 seconds and 66K tokens; `/cost` reported 66K context/cumulative tokens, not a verified invoice amount. The runtime provider is not exposed by that CLI output, so this is not separate proof of both Claude and Codex runtime paths. Only one real turn was submitted; no Axion source was modified.
+The user-requested minimal CLI turn returned exactly the expected acceptance token with no displayed tool calls. CLI displayed 13.1 seconds and 66K tokens; `/cost` reported 66K context/cumulative tokens, not a verified invoice amount. The runtime provider is not exposed by that CLI output, so this is not separate proof of both Claude and Codex runtime paths. Only one real turn was submitted; no source of that application was modified.
 
 ## Real native binary findings and corrections
 
@@ -82,7 +82,7 @@ The first package run detected an obsolete missing-peer assertion still expectin
 
 ## Scope of completion
 
-R01–R03 and R08 are implemented with reproducible failure/behavior evidence. R04 workflow corrections are implemented; current-source remote execution remains pending. R05 documentation and the [remaining-gate ledger](../acceptance/readiness.md) separate local implementation from deployment claims. R06 adds bounded real-binary and 50k-history experiments; automatic economic routing remains disabled without real quality/cost evidence. R07 produces local MIT artifacts; publication is not authorized. The user-selected model may be behind Axion's private gateway; Claude/Codex denote runtime adapters, not a mandatory model vendor.
+R01–R03 and R08 are implemented with reproducible failure/behavior evidence. R04 workflow corrections are implemented; current-source remote execution remains pending. R05 documentation and the [remaining-gate ledger](../acceptance/readiness.md) separate local implementation from deployment claims. R06 adds bounded real-binary and 50k-history experiments; automatic economic routing remains disabled without real quality/cost evidence. R07 produces local MIT artifacts; publication is not authorized. The user-selected model may be behind the application's private gateway; Claude/Codex denote runtime adapters, not a mandatory model vendor.
 
 ## First current-source CI and R09 follow-up
 
@@ -102,7 +102,7 @@ Source **cf574c470077fdeb5974f3889d88854e88b48819** passed all **6/6** jobs in [
 
 The follow-up changes include the optional packaged conformance harness, so new immutable npm **0.1.0-rc.4** and Python **0.1.0rc4** archives were built from this clean committed source. All seven archives pass SHA-256, exact MIT license-file and version-metadata checks; local clean offline installation/bundle smoke again passes nine modes (`/private/tmp/agent-orch-0011-rc4-package.log`). Earlier rc.1–rc.3 artifacts are unchanged. The handoff is `dist/release/agent-orch-0.1.0-rc.4.zip` with an adjacent SHA-256 and inner source/release manifests.
 
-R01–R09 are complete within this repository's scope. The [readiness ledger](../acceptance/readiness.md) retains selected production gateway quality/billing, deployment sandbox, Axion integration, measured economic policy, production-scale capacity and publication gates; this CI result does not supply those deployment-specific observations.
+R01–R09 are complete within this repository's scope. The [readiness ledger](../acceptance/readiness.md) retains selected production gateway quality/billing, deployment sandbox, application integration, measured economic policy, production-scale capacity and publication gates; this CI result does not supply those deployment-specific observations.
 
 ## Subsequent clean-source rerun
 

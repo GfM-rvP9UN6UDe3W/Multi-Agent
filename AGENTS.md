@@ -2,14 +2,14 @@
 
 ## Project Structure & Module Organization
 
-This unpublished SDK uses one Node.js engine for scheduling and SQLite persistence; Python connects to that host rather than implementing another engine.
+Orchvia uses one Node.js engine for scheduling and SQLite persistence; Python connects to that host rather than implementing another engine.
 
 - `packages/engine/`: orchestration, storage, types, and deterministic fake runtime.
 - `packages/sdk-typescript/`, `packages/cli/`: TypeScript client and local host/CLI.
 - `packages/adapter-claude/`, `packages/adapter-codex/`: provider adapters.
 - `python/src/agent_orch/`: async Python SDK; `python/tests/`: Python tests.
 - `tests/engine/`, `tests/contract/`, `tests/fixtures/`: engine tests, integration/contract tests, and subprocess fixtures.
-- `schemas/`: wire schema; `examples/`: runnable examples; `docs/specs/` and `docs/tdd/`: acceptance contracts and verification evidence. Root PNGs illustrate architecture.
+- `schemas/`: wire schema; `examples/`: runnable examples; `docs/specs/` and `docs/tdd/`: acceptance contracts and verification evidence; `docs/`: guide, reference, concepts, design and status; `docs/images/`: diagrams.
 
 ## Build, Test, and Development Commands
 
@@ -23,7 +23,7 @@ Use Node.js 22.18+ and Python 3.11+. Run from the repository root:
 - `npm run cli -- --help`: inspect available CLI commands.
 - `PYTHONPATH=python/src python3 examples/python/fake_roundtrip.py`: run the offline Python-to-Node example.
 
-Source development executes erasable TypeScript directly. `npm run build:packages` emits locally installable JavaScript/declaration tarballs; `npm run check:generated` verifies the generated protocol contract. Python wheel/sdist and clean-install commands are documented in README.
+Source development executes erasable TypeScript directly. `npm run build:packages` emits locally installable JavaScript/declaration tarballs; `npm run check:generated` verifies the generated protocol contract. Python wheel/sdist and clean-install commands are documented in `docs/reference.md`.
 
 ## Coding Style & Naming Conventions
 
@@ -37,8 +37,8 @@ Test observable behavior and relevant failure paths. Wire or lifecycle changes r
 
 ## Commit & Pull Request Guidelines
 
-Remote: `git@github.com:masonlee39/Multi-Agent.git`. No commit history was available when this guide was created. Use concise, imperative, scoped messages, such as `engine: preserve dispatch deadlines`. Keep changes focused. PRs should describe behavior, link relevant specs/issues, report validation commands/results, and identify unverified boundaries.
+Use concise, imperative, scoped messages, such as `engine: preserve dispatch deadlines`. Keep changes focused. PRs should describe behavior, link relevant specs/issues, report validation commands/results, and identify unverified boundaries.
 
 ## Security & Configuration
 
-Keep private state outside the workspace. Never read login credentials or invoke paid models in ordinary tests. Preserve unknown outcomes without blind retries. Publishing packages and real-provider acceptance require separate authorization.
+Keep private state outside the workspace. Never read login credentials or invoke paid models in ordinary tests. Preserve unknown outcomes without blind retries. Publishing packages and real-provider acceptance require the maintainer's separate authorization.

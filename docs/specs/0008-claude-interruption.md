@@ -4,7 +4,7 @@ Date: 2026-09-20. Status: implemented; offline process, bilingual lifecycle, ins
 
 ## Problem and scope
 
-The original orchestration design includes Claude Query.interrupt and interrupt-mode pause/modify/cancel. The adapter currently advertises interruption as unsupported and uses a string prompt. Implement the intended capability in Multi-Agent only. Do not modify Axion, invoke paid models, read credentials, publish, commit, or push.
+The original orchestration design includes Claude Query.interrupt and interrupt-mode pause/modify/cancel. The adapter currently advertises interruption as unsupported and uses a string prompt. Implement the intended capability in Multi-Agent only. Do not modify another application, invoke paid models, read credentials, publish, commit, or push.
 
 This specification supersedes the Claude unsupported-interruption clauses in SPEC-0002 and SPEC-0007. Their stop-proof, permission, usage, and unknown-outcome requirements remain in force. Existing engine control operations, wire protocol, and persistence schema remain unchanged.
 

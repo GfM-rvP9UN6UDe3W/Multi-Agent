@@ -1,6 +1,6 @@
 # SPEC-0010 verification evidence
 
-The accepted scope is recorded in [SPEC-0010](../specs/0010-bundled-host-delivery.md). Existing SPEC-0009 work remains uncommitted and is preserved. Verification date: 2026-09-21, macOS arm64, Node 24.14.0, Python 3.14.6, esbuild 0.28.2, Claude SDK 0.3.274, Zod 4.6.5. No model requests, Axion edits, public publication, commit or tag.
+The accepted scope is recorded in [SPEC-0010](../specs/0010-bundled-host-delivery.md). Existing SPEC-0009 work remains uncommitted and is preserved. Verification date: 2026-09-21, macOS arm64, Node 24.14.0, Python 3.14.6, esbuild 0.28.2, Claude SDK 0.3.274, Zod 4.6.5. No model requests, edits to another application, public publication, commit or tag.
 
 ## RED evidence
 
@@ -57,7 +57,7 @@ Local raw logs and manifest snapshots are under `dist/verification/0010/`. Candi
 
 ## Boundaries
 
-The CJS build adapts `import.meta.url` only in the third-party native SDK 0.3.274 file. Agent-orch code gets no such rewrite. The native executable in these tests is an owned protocol fixture; actual platform binaries, model execution and Axion's Vite/Electron 43.2.0 / Node 24.18 remain unverified. CI configuration now runs the expanded package smoke, but remote CI was not executed in this task. Package exports remain ESM-only. Codex/CLI standalone resource loading remains covered by installed-package tests, with no claim of arbitrary single-file bundling.
+The CJS build adapts `import.meta.url` only in the third-party native SDK 0.3.274 file. Agent-orch code gets no such rewrite. The native executable in these tests is an owned protocol fixture; actual platform binaries, model execution and an application's Vite/Electron 43.2.0 / Node 24.18 build remain unverified. CI configuration now runs the expanded package smoke, but remote CI was not executed in this task. Package exports remain ESM-only. Codex/CLI standalone resource loading remains covered by installed-package tests, with no claim of arbitrary single-file bundling.
 
 ## Subsequent MIT license decision
 

@@ -2,7 +2,7 @@
 
 Date: 2026-09-20. Status: implemented and verified with offline contracts and actual subprocess/Unix-socket integration. See [TDD evidence](../tdd/0006-host-runtime-contract.md). Concrete application integration and real-model acceptance remain unverified.
 
-Design authority: [adapter extension and host integration](../../AGENT_ORCHESTRATION_DESIGN.md#73-current-application-adapter-extension-point), updated before this specification. This is delivery slice 1 in design section 7.5. A2 remains authoritative for execution leases, evidence, quarantine, deadlines, and owner reconciliation; this increment does not weaken those rules.
+Design authority: [adapter extension and host integration](../design.md#73-current-application-adapter-extension-point), updated before this specification. This is delivery slice 1 in design section 7.5. A2 remains authoritative for execution leases, evidence, quarantine, deadlines, and owner reconciliation; this increment does not weaken those rules.
 
 ## Problem and target behavior
 
@@ -14,7 +14,7 @@ Make the supported adapter contract explicit and validate it before task admissi
 
 In scope: capability types/validation, required engine-input preflight for host adapters, the shared conformance suite, an offline host fixture/example, real-process crash/restart and Python interoperability, and corresponding documentation.
 
-Out of scope: a production Axion adapter, host authentication or durable dispatch journal, cross-store projection implementation, new task/wire fields, MCP/model delegation tools, a custom CLI module loader, session fork/compact, workspace sandboxing, storage GC, worker/process relocation, npm/PyPI publication, application packaging/hot update, and real-model calls. The example's in-memory host map is deliberately not restart recovery; engine restart must remain conservative when it disappears.
+Out of scope: a production adapter for a specific application, host authentication or durable dispatch journal, cross-store projection implementation, new task/wire fields, MCP/model delegation tools, a custom CLI module loader, session fork/compact, workspace sandboxing, storage GC, worker/process relocation, npm/PyPI publication, application packaging/hot update, and real-model calls. The example's in-memory host map is deliberately not restart recovery; engine restart must remain conservative when it disappears.
 
 Wire protocol stays 1.0; storage schema stays 2; event schemaVersion stays 1. No new runtime dependencies, automatic retries, credentials, model calls, or external network listeners.
 
@@ -55,7 +55,7 @@ The controlled host records the engine dispatch identity; its queued receipt nev
 - **AC-H06 Background and late evidence:** A main-turn result with retained host resources cannot release the slot or complete the task. Mismatched generation/dispatch evidence cannot release it. Later correct full-execution evidence may release only execution; the task remains blocked until explicit owner reconciliation. Resume after reconciled completed output requests human task acceptance without resubmitting the host turn.
 - **AC-H07 Result acceptance and usage:** A clean terminal result and complete resource proof release execution and request human task acceptance, not automatic task completion. Usage emitted twice with the same usageId is recorded once; missing fields remain null. Host tool confirmation cannot satisfy task acceptance. Explicit approval completes the task without a second dispatch.
 - **AC-H08 Process and language boundary:** Crash a real owned fixture host process after a persisted dispatch, restart against the same stateDir with no in-memory host mapping, and observe blocked/outcome_unknown with no automatic resubmission. A real Python client subprocess reads the same recovered task/session, capabilities, and scheduler state. Ordinary socket clients remain unable to reconcile owner state.
-- **AC-H09 Runnable example and scoped claims:** The documented offline host example executes from source, reaches waiting_approval, uses a clearly identified simulated approval, completes, and closes. Tests/source contain no Axion paths, login reads, paid-model calls, or claims of real permission/packaging acceptance. Documentation marks the concrete host bridge, journal/projection, package distribution, and performance work as later slices.
+- **AC-H09 Runnable example and scoped claims:** The documented offline host example executes from source, reaches waiting_approval, uses a clearly identified simulated approval, completes, and closes. Tests/source contain no paths of another application, login reads, paid-model calls, or claims of real permission/packaging acceptance. Documentation marks the concrete host bridge, journal/projection, package distribution, and performance work as later slices.
 
 ## Verification order
 
