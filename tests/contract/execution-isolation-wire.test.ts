@@ -51,6 +51,7 @@ test(
         providers: { fake: { model: 'fake-model', delayMs: 200, result: 'late fixture result' } },
         limits: { maxActiveSessions: 1, maxQuarantinedDispatches: 1 },
         timeouts: { acceptanceMs: 1000, turnMs: 40 },
+        storage: { emergencyBytes: 4096 },
       }),
     );
     const host = spawn(

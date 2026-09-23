@@ -23,6 +23,7 @@ async function fixture(t: any, delayMs = 0, adapter?: RuntimeAdapter) {
     stateDir,
     adapters: [adapter ?? createFakeAdapter({ delayMs })],
     providers: { fake: { model: 'fake-model' } },
+    storage: { emergencyBytes: 4096 },
   });
   t.after(async () => {
     await orch.close({ mode: 'interrupt', timeoutMs: 2000 }).catch(() => {});

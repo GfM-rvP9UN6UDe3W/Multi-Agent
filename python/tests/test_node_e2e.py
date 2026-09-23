@@ -31,7 +31,8 @@ class NodeHostTests(unittest.IsolatedAsyncioTestCase):
         self.config.write_text(json.dumps({"configVersion": 1, "workspace": str(self.workspace),
             "stateDir": str(self.state), "providers": {"fake": {"model": "fake-model",
             "delayMs": delay_ms, "result": "verified fake fixture", "permissionProfile": "read-only"}},
-            "limits": {"maxActiveSessions": 2}, "shutdown": {"timeoutMs": 1000}}), encoding="utf-8")
+            "limits": {"maxActiveSessions": 2}, "shutdown": {"timeoutMs": 1000},
+            "storage": {"emergencyBytes": 4096}}), encoding="utf-8")
 
     def local(self):
         return Orchestrator.local(engine_command=[NODE, str(CLI), "host", "--stdio", "--config", str(self.config)],

@@ -49,6 +49,7 @@ async function engine() {
       'fake-write': { models: ['w-default'], permissionProfile: 'workspace-write' },
     },
     limits: { maxActiveSessions: 8 },
+    storage: { emergencyBytes: 4096 },
     clock,
   });
   return {

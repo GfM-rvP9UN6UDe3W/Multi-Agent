@@ -28,7 +28,8 @@ class ForkModelTests(unittest.IsolatedAsyncioTestCase):
         self.config = self.directory / "config.json"
         self.config.write_text(json.dumps({"configVersion": 1, "workspace": str(workspace),
             "stateDir": str(state), "providers": {"fake": {"models": ["alpha", "beta"],
-            "permissionProfile": "read-only"}}, "shutdown": {"timeoutMs": 1000}}), encoding="utf-8")
+            "permissionProfile": "read-only"}}, "shutdown": {"timeoutMs": 1000},
+            "storage": {"emergencyBytes": 4096}}), encoding="utf-8")
 
     def local(self):
         return Orchestrator.local(engine_command=[NODE, str(CLI), "host", "--stdio", "--config", str(self.config)],

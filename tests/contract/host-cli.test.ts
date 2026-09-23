@@ -30,6 +30,7 @@ async function fixture(t: any) {
     workspace: join(root, 'workspace'),
     stateDir: join(root, 'state'),
     providers: { fake: { model: 'fake-model', result: 'Protocol fixture result' } },
+    storage: { emergencyBytes: 4096 },
   };
   const configPath = join(root, 'config.json');
   await writeFile(configPath, JSON.stringify(config));

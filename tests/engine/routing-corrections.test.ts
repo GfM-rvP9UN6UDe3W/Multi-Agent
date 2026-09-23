@@ -44,6 +44,7 @@ async function engine(options: { allowCrossRootReuse?: boolean; clock?: EngineCl
       'fake-write': { models: ['w-default'], permissionProfile: 'workspace-write' },
     },
     limits: { maxActiveSessions: 8 },
+    storage: { emergencyBytes: 4096 },
     ...(options.allowCrossRootReuse ? { allowCrossRootReuse: true } : {}),
     ...(options.clock ? { clock: options.clock } : {}),
   });

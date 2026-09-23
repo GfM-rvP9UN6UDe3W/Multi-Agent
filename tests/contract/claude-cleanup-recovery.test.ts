@@ -580,6 +580,7 @@ test('AC-R04.4 the embedded TypeScript SDK reconciles an unknown record and clos
     workspace: join(dir, 'workspace'),
     stateDir: join(dir, 'state'),
     adapters: [adapter],
+    storage: { emergencyBytes: 4096 },
   });
   t.after(async () => {
     adapter.close = async () => {};

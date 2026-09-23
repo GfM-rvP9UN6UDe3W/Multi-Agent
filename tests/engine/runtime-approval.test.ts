@@ -68,6 +68,7 @@ for (const mode of ['approve', 'deny', 'expire', 'cancel'])
         },
       ],
       runtimeApprovals: { enabled: true, ttlMs: PERMISSION_TTL_MS },
+      storage: { emergencyBytes: 4096 },
       clock: expiry.clock,
     });
     try {

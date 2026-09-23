@@ -132,6 +132,7 @@ async function fixture(t: TestContext, mode: 'stdio' | 'unix') {
       workspace: join(root, 'workspace'),
       stateDir: join(root, 'state'),
       providers: { fake: { model: 'fake-model', delayMs: 450, result: evidence.result } },
+      storage: { emergencyBytes: 4096 },
       timeouts: {
         acceptanceMs: 1000,
         turnMs: 3000,
@@ -429,6 +430,7 @@ for (const stalledAt of ['initialize', 'turn-start']) {
               closeTimeoutMs: 40,
             },
           },
+          storage: { emergencyBytes: 4096 },
           timeouts: { acceptanceMs: 10000, turnMs: 20000, interruptMs: 10000 },
         }),
       );
