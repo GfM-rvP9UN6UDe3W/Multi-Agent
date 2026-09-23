@@ -151,7 +151,7 @@ test('0003-A CLI validates lifecycle timeout bounds and passes every configured 
   await assert.rejects(loadConfig(path), { code: 'INVALID_CONFIG' });
 });
 
-test('0003-A owner EOF uses the 30-second bounded emergency close and reports incomplete cleanup', async () => {
+test('0003-A 0022-C05 owner EOF uses the 30-second bounded emergency close without the interrupt wait and reports incomplete cleanup', async () => {
   const calls: unknown[] = [],
     logs: string[] = [];
   const engine = {
@@ -172,7 +172,7 @@ test('0003-A owner EOF uses the 30-second bounded emergency close and reports in
   });
   input.end();
   await connection.closed;
-  assert.deepEqual(calls, [{ mode: 'interrupt', timeoutMs: 30000 }]);
+  assert.deepEqual(calls, [{ mode: 'interrupt', timeoutMs: 30000, interruptWaitMs: 0 }]);
   assert.equal(logs.length, 1);
   assert.match(logs[0], /SHUTDOWN_INCOMPLETE/);
   assert.doesNotMatch(logs[0], /status.*closed/);

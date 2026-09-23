@@ -604,6 +604,15 @@ export interface CloseOptions {
   timeoutMs?: number;
   operationId?: string;
 }
+/** Engine-level close options; `host.shutdown` and the SDKs accept only CloseOptions. */
+export interface EngineCloseOptions extends CloseOptions {
+  /**
+   * How long an interrupting close waits for running dispatches to end before it closes the
+   * adapters. Defaults to the smaller of `timeouts.interruptMs` and half of `timeoutMs`
+   * (SPEC-0022 C02); the stdio host passes 0 after its owner disconnects (C05).
+   */
+  interruptWaitMs?: number;
+}
 export interface CallContext {
   owner?: boolean;
   signal?: AbortSignal;
@@ -621,5 +630,5 @@ export interface Engine {
   readonly instanceId: string;
   readonly storeId: string;
   call(method: string, params?: Record<string, unknown>, context?: CallContext): Promise<unknown>;
-  close(options?: CloseOptions): Promise<{ status: 'closed'; operationId: string }>;
+  close(options?: EngineCloseOptions): Promise<{ status: 'closed'; operationId: string }>;
 }

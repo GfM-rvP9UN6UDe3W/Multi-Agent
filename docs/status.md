@@ -71,6 +71,7 @@ Each specification has a matching TDD record of observed failures before the cha
 | [SPEC-0019](specs/0019-routing-corrections.md) | Routing layer corrections |
 | [SPEC-0020](specs/0020-context-check.md) | Checking context references before submitting |
 | [SPEC-0021](specs/0021-open-source-readiness.md) | Open-source readiness |
+| [SPEC-0022](specs/0022-close-interrupt-and-verification-feedback.md) | Interrupting close and verification feedback |
 
 ## Claude and Codex baselines
 

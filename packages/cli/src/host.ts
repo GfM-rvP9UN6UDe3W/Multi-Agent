@@ -102,7 +102,9 @@ function connectRpc(
     input.destroy();
     const cleanup =
       owner && !shutdownSucceeded
-        ? engine.close({ mode: 'interrupt', timeoutMs: OWNER_EOF_TIMEOUT_MS })
+        ? // The owner is gone: release resources at once, so that a restarted owner can take the
+          // state lock (SPEC-0003-A). Running turns stay unknown here (SPEC-0022 C05).
+          engine.close({ mode: 'interrupt', timeoutMs: OWNER_EOF_TIMEOUT_MS, interruptWaitMs: 0 })
         : Promise.resolve();
     cleanup
       .catch((error) => log(`Owner disconnect cleanup: ${errorData(error).code}`))

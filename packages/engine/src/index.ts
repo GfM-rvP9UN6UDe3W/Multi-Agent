@@ -30,6 +30,7 @@ import {
   workspacePath,
 } from './verification.ts';
 import type { VerificationEvidence } from './verification.ts';
+import { ruleSummary, verificationFeedback } from './verification-feedback.ts';
 import { ORCHESTRATION_TOOLS, TOOL_NAMES } from './tools.ts';
 import { CostLedger } from './cost-ledger.ts';
 import { estimateContext, moneyUnits, moneyString } from './accounting.ts';
@@ -38,6 +39,7 @@ import type {
   EngineConfig,
   CallContext,
   CloseOptions,
+  EngineCloseOptions,
   TaskSnapshot,
   SessionSnapshot,
   OperationSnapshot,
@@ -650,6 +652,25 @@ class LocalEngine implements Engine {
         this.config.providers?.[runtime.provider]?.permissionProfile ?? 'read-only',
       writePaths,
     };
+  }
+  /**
+   * Why the latest verification failed, for the retry prompt (SPEC-0022 V01-V03). The engine writes
+   * that verification's evidence last among the task's artifacts; its size is bounded by the task's
+   * frozen rules, whose output escapes to at most six bytes per captured byte.
+   */
+  private verificationFeedback(task: TaskSnapshot): string {
+    const evidenceRef = task.artifactRefs.at(-1);
+    const limit = (task.verificationRules ?? []).reduce(
+      (sum, rule) => sum + (rule.maxOutputBytes ?? 65536) * 6 + 65536,
+      65536,
+    );
+    let evidence: string | null = null;
+    try {
+      if (evidenceRef) evidence = this.store.artifactText(evidenceRef, limit);
+    } catch {
+      evidence = null;
+    }
+    return verificationFeedback(task.id, evidence, task.artifactRefs);
   }
   /**
    * Reads one context reference as admission, the prompt and `context.checkRefs` do (SPEC-0020). A
@@ -4293,11 +4314,7 @@ class LocalEngine implements Engine {
           `\nUntrusted versioned context ${JSON.stringify(ref)}:\n${JSON.stringify(this.contextRefText(ref.artifactRef))}`,
       ),
       ...dependencyBlocks,
-      ...((task.verificationAttempts ?? 0) > 0
-        ? [
-            `Previous verification failed. Inspect these immutable evidence artifacts before repairing: ${JSON.stringify(task.artifactRefs)}`,
-          ]
-        : []),
+      ...((task.verificationAttempts ?? 0) > 0 ? [this.verificationFeedback(task)] : []),
       ...(task.revisionRequest
         ? [
             `\nReviewer revision request (approval ${task.revisionRequest.approvalId}):\n${JSON.stringify(task.revisionRequest.comment)}`,
@@ -4617,7 +4634,7 @@ class LocalEngine implements Engine {
             );
             this.store.event(
               'verification.completed',
-              { passed: !!passed, evidenceRef },
+              { passed: !!passed, evidenceRef, rules: (verification ?? []).map(ruleSummary) },
               { taskId: task.id, sessionId: current.id },
             );
             this.taskEvent(task);
@@ -4737,7 +4754,9 @@ class LocalEngine implements Engine {
     }
   }
 
-  async close(options: CloseOptions = {}): Promise<{ status: 'closed'; operationId: string }> {
+  async close(
+    options: EngineCloseOptions = {},
+  ): Promise<{ status: 'closed'; operationId: string }> {
     if (this.store.isClosed && this.controlPlane?.switching) {
       if (this.storageTimer) clearInterval(this.storageTimer);
       this.controlPlane.close();
@@ -4748,6 +4767,10 @@ class LocalEngine implements Engine {
     const mode = options.mode ?? 'drain';
     if (!['drain', 'interrupt'].includes(mode)) fail('VALIDATION_ERROR', 'Unknown close mode');
     const timeout = integer(options.timeoutMs ?? 30000, 'timeoutMs', 0, 3600000);
+    const interruptWait =
+      options.interruptWaitMs === undefined
+        ? Math.min(this.timeouts.interruptMs, timeout / 2)
+        : Math.min(integer(options.interruptWaitMs, 'interruptWaitMs', 0, 3600000), timeout);
     if (options.operationId !== undefined && options.operationId !== this.shutdownId)
       fail('STALE_TARGET', 'Unknown shutdown operation');
     if (this.closed) return { status: 'closed', operationId: this.shutdownId! };
@@ -4796,16 +4819,22 @@ class LocalEngine implements Engine {
         { operationId: op.id },
       );
     });
+    const deadline = performance.now() + timeout;
     if (mode === 'interrupt') {
       for (const flight of this.flights.values()) {
         if (!flight.intent) flight.intent = 'shutdown';
         flight.controller.abort();
       }
+      // Each runtime may still report its interrupted terminal and stop proof (SPEC-0022 C01, C02):
+      // wait for the flights, by default at most interruptMs and half of the budget, before
+      // closing the adapters.
+      const settled = performance.now() + interruptWait;
+      while (this.flights.size && performance.now() < settled)
+        await sleep(Math.min(10, Math.max(1, settled - performance.now())));
       // The owner requested resource shutdown. Adapter cleanup may unblock a stalled iterator;
-      // it is not evidence that a remote business action was cancelled.
+      // it is not evidence that a remote business action was cancelled (SPEC-0022 C03).
       this.beginAdapterClose();
     }
-    const deadline = performance.now() + timeout;
     while (this.flights.size) {
       if (performance.now() >= deadline) throw this.shutdownIncomplete();
       await sleep(Math.min(10, Math.max(1, deadline - performance.now())));
