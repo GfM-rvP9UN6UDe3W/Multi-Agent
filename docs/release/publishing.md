@@ -8,7 +8,7 @@ This file is the only source for how Orchvia is released ([SPEC-0021](../specs/0
 2. A maintainer pushes the tag `vX.Y.Z` on that commit. A version with a suffix, such as `v0.2.0-rc.1`, is a pre-release: npm tag `next`, PyPI pre-release, GitHub pre-release.
 3. The [release workflow](../../.github/workflows/release.yml) then runs, in this order:
    1. the full offline test matrix;
-   2. one build of every package from the tag, with recorded hashes, an offline installation of the archives, `npm publish --dry-run` and `twine check`;
+   2. one build of every package from the tag, with recorded hashes, an offline installation of the archives, `npm publish --dry-run` for every version not yet on npm, and `twine check`;
    3. npm publishing through trusted publishing, in dependency order: engine, the adapters, sdk, cli. A version already on the registry is skipped, so a rerun continues where a failed run stopped. The job waits until the owner approves the `npm` deployment in the workflow run;
    4. PyPI publishing through trusted publishing, after the owner approves the `pypi` deployment;
    5. the GitHub Release, with every archive and `SHA256SUMS`, created only after both registries have the version;

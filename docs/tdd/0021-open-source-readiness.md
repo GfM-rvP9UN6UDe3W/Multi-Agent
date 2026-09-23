@@ -119,7 +119,8 @@ Base: `702a3d7`. Branch `orchvia-rename`, merged as pull request #11 (`f331930`)
 
 ### Not verified yet
 
-- The release workflow's publishing jobs and `scripts/registry-check.mjs` run for the first time with the 0.1.0 tag; only the build job runs on pull requests.
+- The release workflow's publishing jobs and `scripts/registry-check.mjs` run for the first time with a tag; only the build job runs on pull requests.
+- The `v0.1.0` tag's run ([35865838151](https://github.com/masonlee39/orchvia/actions/runs/35865838151)) passed the offline matrix and stopped in the build job's dry run: `npm error You cannot publish over the previously published versions: 0.1.0.` The npm job skips a version already on the registry, but the dry run did not, and 0.1.0 had been published by hand first (P06). Nothing was published. The same local script failed the same way on the published archives; the corrected step skips the five published versions and still dry-runs a new one (0.0.0-rc.999). By the owner's choice (D-rel-1), 0.1.1 is the first release on PyPI and GitHub Releases, and 0.1.0 stays on npm only.
 
 ## Real-model evidence (E)
 

@@ -2,7 +2,9 @@
 
 All notable changes to Orchvia are recorded here. Versions follow [Semantic Versioning](https://semver.org/); before 1.0, a minor version may change the API.
 
-## [Unreleased]
+## [0.1.1] - 2026-09-23
+
+The first release on PyPI and on GitHub Releases.
 
 ### Fixed
 
@@ -12,9 +14,13 @@ All notable changes to Orchvia are recorded here. Versions follow [Semantic Vers
 
 - A task dispatched again after a failed check sees the failed rule's command, exit status and the end of its output, and `verification.completed` summarizes every rule that ran (SPEC-0022 V).
 
+### Release process
+
+- The release workflow's dry run skips a version that is already on npm, as its npm job does. The tagged release of 0.1.0 had stopped there, because its npm packages had been published by hand first.
+
 ## [0.1.0] - 2026-09-23
 
-First public release, on npm as `@orchvia/*` and on PyPI as `orchvia`.
+First public release, on npm as `@orchvia/*`. Its tagged release stopped before PyPI and GitHub Releases (see 0.1.1), so `orchvia` starts on PyPI at 0.1.1.
 
 ### Added
 
