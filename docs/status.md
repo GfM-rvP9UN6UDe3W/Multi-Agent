@@ -17,7 +17,7 @@ Last recorded on 2026-09-23 at source `7af317c`, the merge of pull request #9.
   - integration inside an external application;
   - economic benefit: speed and cost compared with other ways of running agents;
   - Windows.
-- **Not published:** nothing is on npm or PyPI yet.
+- **Published:** 0.1.0 of the five npm packages on 2026-09-23 (`@orchvia/engine`, `sdk`, `adapter-claude`, `adapter-codex`, `cli`). The owner published archives built at `f331930`; each registry archive is byte-identical to that build, and a Linux CI build of the same source produces the same bytes. Later npm releases go through the release workflow with trusted publishing, after the owner approves them in GitHub. The Python package is not on PyPI yet.
 
 The [remaining-gate ledger](acceptance/readiness.md) lists every open gate and what would close it.
 
