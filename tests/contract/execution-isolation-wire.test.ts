@@ -118,8 +118,8 @@ test(
     );
 
     const script = `import asyncio, json, sys
-from agent_orch import Orchestrator
-from agent_orch.types import to_wire
+from orchvia import Orchestrator
+from orchvia.types import to_wire
 async def main():
     async with Orchestrator.connect(socket_path=sys.argv[1]) as client:
         print(json.dumps({"scheduler": to_wire(await client.scheduler.get()), "session": to_wire(await client.sessions.get(sys.argv[2]))}))

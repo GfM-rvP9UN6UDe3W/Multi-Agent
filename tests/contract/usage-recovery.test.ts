@@ -88,7 +88,7 @@ test(
             '-c',
             `
 import asyncio, json, sys
-from agent_orch import Orchestrator, OrchestrationError
+from orchvia import Orchestrator, OrchestrationError
 async def main():
     async with Orchestrator.connect(socket_path=sys.argv[1]) as client:
         async for event in client.events(after_cursor=sys.argv[2], store_id=sys.argv[3]):

@@ -1,0 +1,189 @@
+# SPEC-0021 P02-P04. A version tag publishes; pull requests that touch packaging run everything except publishing.
+name: Release
+on:
+  push:
+    tags: ['v[0-9]+.[0-9]+.[0-9]+', 'v[0-9]+.[0-9]+.[0-9]+-*']
+  pull_request:
+    paths:
+      - '.github/workflows/release.yml'
+      - 'scripts/build-packages.mjs'
+      - 'scripts/build-python.py'
+      - 'scripts/package-smoke.mjs'
+      - 'scripts/registry-check.mjs'
+      - 'packages/*/package.json'
+      - 'python/pyproject.toml'
+      - 'python/README.md'
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  test:
+    if: startsWith(github.ref, 'refs/tags/v')
+    uses: ./.github/workflows/offline.yml
+
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 24.14.0
+          cache: npm
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: 3.14.6
+      - run: npm ci --ignore-scripts
+      - run: python -m pip install setuptools==80.9.0 wheel==0.45.1 build==1.2.2.post1 packaging==25.0 pyproject_hooks==1.2.0 twine==6.1.0
+      - name: Version
+        id: version
+        shell: bash
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            version="${GITHUB_REF#refs/tags/v}"
+            # Every release has its own changelog section.
+            grep -q "^## \[${version}\]" CHANGELOG.md || { echo "CHANGELOG.md has no section for ${version}"; exit 1; }
+          else
+            # A throwaway version that is never published, so the dry run cannot collide with a release.
+            version="0.0.0-rc.${GITHUB_RUN_NUMBER}"
+          fi
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+      - run: node scripts/build-packages.mjs out --version "${{ steps.version.outputs.version }}"
+      - run: python scripts/build-python.py out --version "${{ steps.version.outputs.version }}"
+      - name: Install and run the archives offline
+        run: PACKAGE_BUILD_PYTHON="$(command -v python)" node scripts/package-smoke.mjs out
+      - name: Check publishing metadata without publishing
+        shell: bash
+        run: |
+          # A path must start with ./ or npm reads it as a GitHub repository.
+          # npm requires a tag for a pre-release version, such as the throwaway version of a pull request.
+          for archive in ./out/*.tgz; do npm publish "$archive" --dry-run --ignore-scripts --tag next; done
+          python -m twine check --strict out/*.whl out/*.tar.gz
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: release
+          path: out/
+          if-no-files-found: error
+
+  npm:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [test, build]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    environment: npm
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 24.14.0
+          registry-url: https://registry.npmjs.org
+      # Trusted publishing needs npm 11.5.1 or later.
+      - run: npm install --global npm@11.9.0
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: release
+          path: out
+      - name: Publish in dependency order
+        shell: bash
+        env:
+          VERSION: ${{ needs.build.outputs.version }}
+        run: |
+          set -euo pipefail
+          tag=latest
+          [[ "$VERSION" == *-* ]] && tag=next
+          for name in engine adapter-claude adapter-codex sdk cli; do
+            # A version on the registry is never rebuilt or overwritten; a rerun continues after it.
+            if npm view "@orchvia/${name}@${VERSION}" version >/dev/null 2>&1; then
+              echo "@orchvia/${name}@${VERSION} is already published"
+              continue
+            fi
+            npm publish "./out/orchvia-${name}-${VERSION}.tgz" --access public --tag "$tag"
+          done
+
+  pypi:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [test, build]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    environment: pypi
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: release
+          path: out
+      - run: mkdir python-dist && cp out/*.whl out/*.tar.gz python-dist/
+      - uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # v1.14.2
+        with:
+          packages-dir: python-dist/
+          skip-existing: true
+
+  github-release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [build, npm, pypi]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: release
+          path: out
+      - name: Create the release last
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.build.outputs.version }}
+        run: |
+          set -euo pipefail
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            echo "Release $GITHUB_REF_NAME exists; its files are never replaced"
+            exit 0
+          fi
+          awk -v v="$VERSION" '$0 ~ "^## \\[" v "\\]" {on=1; next} /^## \[/ {on=0} on' CHANGELOG.md > notes.md
+          (cd out && sha256sum * > SHA256SUMS)
+          prerelease=()
+          [[ "$VERSION" == *-* ]] && prerelease=(--prerelease)
+          gh release create "$GITHUB_REF_NAME" out/* --verify-tag --title "Orchvia $VERSION" --notes-file notes.md "${prerelease[@]}"
+
+  registry:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [build, github-release]
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            node: 22.18.0
+            python: 3.11.13
+          - os: macos-14
+            node: 24.14.0
+            python: 3.14.6
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: ${{ matrix.node }}
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: ${{ matrix.python }}
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: release
+          path: out
+      - name: Install from npm and PyPI into empty directories and run
+        env:
+          REGISTRY_CHECK_PYTHON: python
+        run: node scripts/registry-check.mjs "${{ needs.build.outputs.version }}" out

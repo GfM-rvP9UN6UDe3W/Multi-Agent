@@ -477,8 +477,8 @@ test(
             '-c',
             `
 import asyncio, json, sys
-from agent_orch import Orchestrator
-from agent_orch.types import Snapshot, to_wire
+from orchvia import Orchestrator
+from orchvia.types import Snapshot, to_wire
 
 def export(value):
     if isinstance(value, Snapshot):

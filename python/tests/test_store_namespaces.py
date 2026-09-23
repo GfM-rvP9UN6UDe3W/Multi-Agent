@@ -6,9 +6,9 @@ import shutil
 import tempfile
 import unittest
 
-from agent_orch import Orchestrator, OrchestrationError
-from agent_orch.types import to_wire
-from agent_orch.identity import request_digest
+from orchvia import Orchestrator, OrchestrationError
+from orchvia.types import to_wire
+from orchvia.identity import request_digest
 
 ROOT = Path(__file__).resolve().parents[2]
 CLI = ROOT / 'packages/cli/src/main.ts'

@@ -3,17 +3,34 @@ requires = ["setuptools>=77.0.3"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "agent-orch"
+name = "orchvia"
 version = "0.1.0"
-description = "Async Python client for the local agent orchestration engine"
+description = "Python SDK for Orchvia: run Claude Code and Codex agents as a team"
 requires-python = ">=3.11"
 dependencies = []
 readme = "README.md"
 license = "MIT"
 license-files = ["LICENSE"]
+keywords = ["orchvia", "multi-agent", "claude-code", "codex", "orchestration", "agents"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Operating System :: MacOS",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Topic :: Software Development :: Libraries",
+    "Typing :: Typed",
+]
+
+[project.urls]
+Homepage = "https://github.com/masonlee39/orchvia"
+Documentation = "https://github.com/masonlee39/orchvia/tree/main/docs"
+Repository = "https://github.com/masonlee39/orchvia"
+Issues = "https://github.com/masonlee39/orchvia/issues"
 
 [tool.setuptools.packages.find]
 where = ["src"]
 
 [tool.setuptools.package-data]
-agent_orch = ["py.typed", "protocol.schema.json"]
+orchvia = ["py.typed", "protocol.schema.json"]

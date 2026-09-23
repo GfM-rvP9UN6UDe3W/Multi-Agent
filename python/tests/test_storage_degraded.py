@@ -4,7 +4,7 @@ import tempfile
 from pathlib import Path
 import unittest
 
-from agent_orch import Orchestrator, OrchestrationError
+from orchvia import Orchestrator, OrchestrationError
 
 ROOT = Path(__file__).resolve().parents[2]
 

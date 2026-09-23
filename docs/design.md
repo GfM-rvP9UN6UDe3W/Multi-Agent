@@ -163,13 +163,13 @@ Wait cancellation is separate from work cancellation. Python coroutine cancellat
 
 ### 3.3 Equivalent language examples
 
-These are interface-review sketches. Proposed package names @agent-orch/* and agent-orch are unpublished and availability is unverified; do not treat them as installation instructions. The caller supplies model/path variables. Human acceptance requires a separately authorized approval.requested consumer.
+These are interface-review sketches. Proposed package names @orchvia/* and orchvia are unpublished and availability is unverified; do not treat them as installation instructions. The caller supplies model/path variables. Human acceptance requires a separately authorized approval.requested consumer.
 
 Embedded TypeScript:
 
 ```ts
-import { createOrchestrator } from "@agent-orch/sdk";
-import { createClaudeAdapter } from "@agent-orch/adapter-claude";
+import { createOrchestrator } from "@orchvia/sdk";
+import { createClaudeAdapter } from "@orchvia/adapter-claude";
 
 const orch = await createOrchestrator({
   workspace: projectPath,
@@ -195,7 +195,7 @@ try {
 Local Python:
 
 ```python
-from agent_orch import Orchestrator, TaskSpec, RuntimeSpec, AcceptanceSpec
+from orchvia import Orchestrator, TaskSpec, RuntimeSpec, AcceptanceSpec
 
 # Inside the caller's existing async function; no additional sync wrapper in v1.
 async with Orchestrator.local(
@@ -806,7 +806,7 @@ packages/
   cli/                  # run / host / submit / status / attach / control / doctor / tool-bridge
 python/
   pyproject.toml        # Python packaging/minimum version
-  src/agent_orch/       # Async API/types, stdio/socket, host lifecycle
+  src/orchvia/       # Async API/types, stdio/socket, host lifecycle
   tests/                # Python/protocol contracts
 examples/
   typescript/           # Tasks, messaging, approval, pause/resume
@@ -827,11 +827,11 @@ The implemented source tree and five modular local packages follow these boundar
 
 | Artifact | Local package name | Responsibility |
 | --- | --- | --- |
-| TS SDK | @agent-orch/sdk | Public API, embedded engine, local client |
-| Python SDK | PyPI agent-orch; import agent_orch | Equivalent async API, transport, host management |
-| Claude adapter | @agent-orch/adapter-claude | Optional provider dependency/capabilities |
-| Codex adapter | @agent-orch/adapter-codex | Optional App Server integration/version support |
-| CLI/host | @agent-orch/cli | Command consumer and shared-engine process entry |
+| TS SDK | @orchvia/sdk | Public API, embedded engine, local client |
+| Python SDK | PyPI orchvia; import orchvia | Equivalent async API, transport, host management |
+| Claude adapter | @orchvia/adapter-claude | Optional provider dependency/capabilities |
+| Codex adapter | @orchvia/adapter-codex | Optional App Server integration/version support |
+| CLI/host | @orchvia/cli | Command consumer and shared-engine process entry |
 
 Use one repository/release version. npm/PyPI publication is not atomic; mark a release usable only once all required artifacts exist and clean installs pass. Python binds a compatible engine protocol range; host binds tested adapter/runtime combinations. Shared-schema generation now provides TypeScript/Python wire types and validation artifacts. Ergonomic handles, async behavior and exceptions remain handwritten and checked with shared fixtures.
 

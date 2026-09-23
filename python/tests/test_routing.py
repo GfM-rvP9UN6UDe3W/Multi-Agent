@@ -8,8 +8,8 @@ import tempfile
 import threading
 import unittest
 
-from agent_orch import AcceptanceSpec, OrchestrationError, Orchestrator, RuntimeSpec, TaskSpec
-from agent_orch.routing import JevJudge, JudgeError, Router, RouteRuntime, RoutingPolicy
+from orchvia import AcceptanceSpec, OrchestrationError, Orchestrator, RuntimeSpec, TaskSpec
+from orchvia.routing import JevJudge, JudgeError, Router, RouteRuntime, RoutingPolicy
 
 
 ROOT = Path(__file__).resolve().parents[2]

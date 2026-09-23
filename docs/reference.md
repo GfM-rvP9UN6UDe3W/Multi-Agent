@@ -8,11 +8,11 @@ Choose packages for the process that will own or connect to the engine:
 
 | Package | Role | When needed |
 | --- | --- | --- |
-| `@agent-orch/sdk` | TypeScript application API | TypeScript consumers |
-| `@agent-orch/engine` | Shared scheduler, storage and runtime contracts | Engine owners; also an SDK dependency |
-| `@agent-orch/adapter-claude` | Claude runtime adapter | Claude execution |
-| `@agent-orch/adapter-codex` | Codex App Server adapter | Codex execution |
-| `@agent-orch/cli` | Standalone/managed Node host and commands | CLI or Python-owned host operation |
+| `@orchvia/sdk` | TypeScript application API | TypeScript consumers |
+| `@orchvia/engine` | Shared scheduler, storage and runtime contracts | Engine owners; also an SDK dependency |
+| `@orchvia/adapter-claude` | Claude runtime adapter | Claude execution |
+| `@orchvia/adapter-codex` | Codex App Server adapter | Codex execution |
+| `@orchvia/cli` | Standalone/managed Node host and commands | CLI or Python-owned host operation |
 
 The packages are not on npm or PyPI yet. Build them from source into a fresh directory:
 
@@ -25,9 +25,9 @@ npm run build:packages -- /absolute/out
 The builds write five npm tarballs, a Python wheel and sdist, and SHA-256 manifests. Verify the hashes, then install the three Claude packages together in the consuming project:
 
 ```sh
-npm install /absolute/out/agent-orch-sdk-0.1.0.tgz \
-  /absolute/out/agent-orch-engine-0.1.0.tgz \
-  /absolute/out/agent-orch-adapter-claude-0.1.0.tgz
+npm install /absolute/out/orchvia-sdk-0.1.0.tgz \
+  /absolute/out/orchvia-engine-0.1.0.tgz \
+  /absolute/out/orchvia-adapter-claude-0.1.0.tgz
 ```
 
 Keep the generated npm lockfile. Install the Codex adapter instead for Codex execution; add the CLI when running a separate Node host. Python installs its wheel separately and connects to that Node host; the Python package does not bundle or download an engine. Earlier candidate builds are listed in [status](status.md#candidate-builds).
@@ -56,7 +56,7 @@ Package exports are ESM-only. The package smoke verifies CJS and ESM single-file
 | Local protocol | Wire 2.0, immutable expectedStoreId on mutations, JSON-RPC 2.0, 1 MiB frames; per-connection and host-wide resource limits |
 | CLI | host, doctor, submit, run, attach, status, approve, control; private tool-bridge |
 | Delivery | Five local npm tarballs, Python wheel/sdist, clean-install smoke script, configured macOS/Linux version matrix |
-| Routing layer | Optional SDK layer, `@agent-orch/sdk/routing` and `agent_orch.routing`: a judge you choose, such as the built-in TypeSafe Jev adapter, proposes which agent in a group takes a request and which results it carries; the engine validates and executes the declaration |
+| Routing layer | Optional SDK layer, `@orchvia/sdk/routing` and `orchvia.routing`: a judge you choose, such as the built-in TypeSafe Jev adapter, proposes which agent in a group takes a request and which results it carries; the engine validates and executes the declaration |
 
 The owner enables model tools with `tools: { enabled: true }` and runtime permission requests with `runtimeApprovals: { enabled: true }`. Defaults preserve the smaller tool surface. The engine does not infer task independence from prose or select an economic routing strategy automatically; the optional [routing layer](#routing-layer-optional) can propose declarations with a judge the application chooses. `contextPlan` declares fresh/reuse/fork or in-turn continuation intent. Fork preparation returns a logical receipt; native forking happens on first use and must produce a distinct native ID. Checks execute trusted owner-registered commands and detect changed baselines; this is not an OS isolation boundary for arbitrary executables.
 
@@ -118,7 +118,7 @@ Python has no third-party runtime dependencies. See the [Python README](../pytho
 Create separate temporary directories, then run the interactive example:
 
 ```sh
-DEMO_ROOT="$(python3 -c 'import pathlib,tempfile; print(pathlib.Path(tempfile.mkdtemp(prefix="agent-orch-demo-")).resolve())')"
+DEMO_ROOT="$(python3 -c 'import pathlib,tempfile; print(pathlib.Path(tempfile.mkdtemp(prefix="orchvia-demo-")).resolve())')"
 mkdir -p "$DEMO_ROOT/workspace" "$DEMO_ROOT/state"
 node examples/typescript/local.ts "$DEMO_ROOT/workspace" "$DEMO_ROOT/state"
 ```
@@ -126,8 +126,8 @@ node examples/typescript/local.ts "$DEMO_ROOT/workspace" "$DEMO_ROOT/state"
 Enter `approve` or `deny` after inspecting the fixture result. Other input leaves the task pending. The example preserves the supplied state directory so you can inspect restart behavior; decide whether to retain it after the engine stops. Applications using installed packages import their public entry points:
 
 ```ts
-import { createOrchestrator } from '@agent-orch/sdk';
-import { createFakeAdapter } from '@agent-orch/engine/fake';
+import { createOrchestrator } from '@orchvia/sdk';
+import { createFakeAdapter } from '@orchvia/engine/fake';
 
 const orch = await createOrchestrator({
   workspace: '/absolute/existing/workspace',
@@ -190,7 +190,7 @@ node packages/cli/src/main.ts host --config /absolute/orchestrator.json
 Client examples:
 
 ```ts
-import { connectOrchestrator } from '@agent-orch/sdk';
+import { connectOrchestrator } from '@orchvia/sdk';
 const orch = await connectOrchestrator({
   socketPath: '/absolute/private-state/host.sock',
   requestTimeoutMs: 30_000,
@@ -200,7 +200,7 @@ const orch = await connectOrchestrator({
 Ordinary TypeScript Unix RPC requests default to 30 seconds, matching Python's default request wait; configure this with `requestTimeoutMs`. The connection option `timeoutMs` only controls connection establishment, and initialize has a separate five-second limit. Read/mutation options `{timeoutMs, signal}` override one request, for example `orch.tasks.get(taskId, {timeoutMs: 5000})`. Connection/default/request limits are integer milliseconds in 1..2147483647. Mutation timeouts retain the complete immutable retry identity for receipt lookup. Timeout does not cancel a remote task or close a healthy connection. Explicit task.wait total budgets remain independent; owner close allows its shutdown budget plus 1000ms for the RPC receipt.
 
 ```python
-from agent_orch import Orchestrator
+from orchvia import Orchestrator
 
 async with Orchestrator.connect(socket_path="/absolute/private-state/host.sock") as orch:
     current = await orch.tasks.get(task_id)
@@ -280,10 +280,10 @@ A judge is any object with `evaluate({ state, questions })` that answers with pr
 
 ### TypeSafe Jev, a hosted judge (optional)
 
-[Jev](https://typesafe.ai) is TypeSafe's fast judgment model. It answers choice, yes/no and score questions with calibrated probabilities and never generates text. Each routing decision costs one Jev call. It is a paid third-party service and needs your own API key. The adapter was checked against a local mock of its API; see [SPEC-0018](specs/0018-routing-layer.md).
+Orchvia is not affiliated with TypeSafe. [Jev](https://typesafe.ai) is TypeSafe's fast judgment model. It answers choice, yes/no and score questions with calibrated probabilities and never generates text. Each routing decision costs one Jev call. It is a paid third-party service and needs your own API key. The adapter was checked against a local mock of its API; see [SPEC-0018](specs/0018-routing-layer.md).
 
 ```ts
-import { createJevJudge, createRouter } from '@agent-orch/sdk/routing';
+import { createJevJudge, createRouter } from '@orchvia/sdk/routing';
 
 const router = createRouter({
   orchestrator: orch,
@@ -305,7 +305,7 @@ await router.notify(plan); // plan.confirm and plan.followUp are left to the hos
 ```
 
 ```python
-from agent_orch.routing import JevJudge, RouteRuntime, Router
+from orchvia.routing import JevJudge, RouteRuntime, Router
 
 router = Router(orch, JevJudge(os.environ["JEV_API_KEY"]), scope="engine",
                 read_only=RouteRuntime("claude-read", "default-model", small="small-model"),

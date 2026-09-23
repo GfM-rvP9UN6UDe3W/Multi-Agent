@@ -1,5 +1,5 @@
 {
-  "name": "@agent-orch/adapter-claude",
+  "name": "@orchvia/adapter-claude",
   "version": "0.1.0",
   "private": true,
   "license": "MIT",

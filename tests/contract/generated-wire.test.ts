@@ -63,7 +63,7 @@ test('AC-F15 generated wire models validate equivalent namespace, routing, nulla
     if (valid) validateWire(name, value);
     else assert.throws(() => validateWire(name, value));
   }
-  const script = `import sys,json\nfrom agent_orch.wire import validate_wire\nfrom agent_orch import wire_types\nresults=[]\nfor name,value,expected in json.load(sys.stdin):\n try: validate_wire(name,value); results.append(True)\n except Exception: results.append(False)\nprint(json.dumps(results))\n`;
+  const script = `import sys,json\nfrom orchvia.wire import validate_wire\nfrom orchvia import wire_types\nresults=[]\nfor name,value,expected in json.load(sys.stdin):\n try: validate_wire(name,value); results.append(True)\n except Exception: results.append(False)\nprint(json.dumps(results))\n`;
   const result = spawnSync('python3', ['-c', script], {
     input: JSON.stringify(cases),
     encoding: 'utf8',

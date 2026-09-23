@@ -8,7 +8,7 @@ import sqlite3
 import tempfile
 import unittest
 
-from agent_orch import Orchestrator, OrchestrationError, ReconcileEvidence, ShutdownIncomplete
+from orchvia import Orchestrator, OrchestrationError, ReconcileEvidence, ShutdownIncomplete
 
 
 ROOT = Path(__file__).resolve().parents[2]

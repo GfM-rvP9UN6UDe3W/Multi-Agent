@@ -7,9 +7,9 @@ import shutil
 import tempfile
 import unittest
 
-from agent_orch import (AcceptanceSpec, LifecycleTimeouts, OrchestrationError, Orchestrator,
+from orchvia import (AcceptanceSpec, LifecycleTimeouts, OrchestrationError, Orchestrator,
                         ReconcileEvidence, RuntimeSpec, TaskSpec)
-from agent_orch.types import to_wire
+from orchvia.types import to_wire
 
 
 ROOT = Path(__file__).resolve().parents[2]

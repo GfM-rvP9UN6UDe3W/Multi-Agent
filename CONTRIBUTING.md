@@ -1,4 +1,22 @@
-# Contribution guidelines
+# Contributing
+
+Thank you for helping. Bug reports and pull requests are welcome; for a larger change, open an issue first so the design can be agreed before code.
+
+## Set up
+
+You need Node.js 22.18 or later and Python 3.11 or later, on macOS or Linux.
+
+```sh
+git clone https://github.com/masonlee39/orchvia.git
+cd orchvia
+npm ci --ignore-scripts
+npm test
+npm run test:python
+```
+
+`npm run typecheck` and `npm run format:check` must pass too. Unix-socket tests need permission to create local sockets; a skipped test is not a pass.
+
+## How changes are made
 
 This project uses TDD. Start from the accepted design and acceptance criteria in `docs/specs/`: define observable behavior, run failing tests, then implement it. Distinguish compilation failures, passing test doubles, and interface responses from production acceptance.
 
@@ -19,4 +37,4 @@ Node executes TypeScript source through type stripping, and tests use `node:test
 
 Write repository documentation, examples, and source comments in English. Preserve intentional multilingual test data where it verifies Unicode behavior.
 
-The project is licensed under MIT. Third-party dependencies retain their own licenses. No npm/PyPI package is published; publication requires separate authorization and is not part of ordinary development tasks.
+The project is licensed under MIT, and contributions are accepted under the same license. Third-party dependencies retain their own licenses. Releases are published by the maintainer through the release workflow; see [docs/release/publishing.md](docs/release/publishing.md).

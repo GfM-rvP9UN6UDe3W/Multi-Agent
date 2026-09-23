@@ -3,9 +3,9 @@ from pathlib import Path
 import sys
 import unittest
 
-import agent_orch
-from agent_orch import OperationHandle, Orchestrator, OrchestrationError
-from agent_orch.types import to_wire
+import orchvia
+from orchvia import OperationHandle, Orchestrator, OrchestrationError
+from orchvia.types import to_wire
 
 
 FIXTURE = Path(__file__).with_name("fake_protocol_server.py")
@@ -33,7 +33,7 @@ class ReconcileContractTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_a_typed_reconcile_exact_wire_fields_and_operation_handle(self):
         async with self.local() as orch:
-            evidence = agent_orch.ReconcileEvidence(**EVIDENCE)
+            evidence = orchvia.ReconcileEvidence(**EVIDENCE)
             op = await orch.sessions.reconcile(TARGET, evidence, idempotency_key="owner-review")
             self.assertIsInstance(op, OperationHandle)
             self.assertEqual(orch.info.capabilities.lifecycle.version, 1)
@@ -88,11 +88,11 @@ class ReconcileContractTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual((await orch.capabilities(provider="fake"))["reconcileCalls"], 1)
 
     def test_a_public_types_use_snake_case_and_wire_milliseconds(self):
-        defaults = agent_orch.LifecycleTimeouts()
+        defaults = orchvia.LifecycleTimeouts()
         self.assertEqual(to_wire(defaults), {"acceptanceMs": 30000, "turnMs": 1800000,
             "drainMs": 300000, "interruptMs": 30000, "reconcileMs": 60000})
-        self.assertEqual(to_wire(agent_orch.LifecycleTimeouts(turn_ms=1200))["turnMs"], 1200)
-        evidence = agent_orch.ReconcileEvidence(source="owner_attestation", summary="No dispatch occurred",
+        self.assertEqual(to_wire(orchvia.LifecycleTimeouts(turn_ms=1200))["turnMs"], 1200)
+        evidence = orchvia.ReconcileEvidence(source="owner_attestation", summary="No dispatch occurred",
             local_resources="stopped", remote_execution="stopped", side_effects="resolved", outcome="not_executed")
         self.assertNotIn("result", to_wire(evidence))
 

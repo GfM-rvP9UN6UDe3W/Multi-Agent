@@ -11,25 +11,26 @@ import tempfile
 
 parser = argparse.ArgumentParser()
 parser.add_argument("output", type=Path)
-parser.add_argument("--version", help="Immutable npm-style candidate, for example 0.1.0-rc.3")
+parser.add_argument("--version", help="npm-style release version, for example 0.1.0 or 0.2.0-rc.1")
 args = parser.parse_args()
 source = Path(__file__).resolve().parent.parent / "python"
 output = args.output.resolve()
-if args.version and not re.fullmatch(r"\d+\.\d+\.\d+-rc\.\d+", args.version):
-    parser.error("--version must name an explicit release candidate")
+if args.version and not re.fullmatch(r"\d+\.\d+\.\d+(?:-(?:alpha|beta|rc)\.\d+)?", args.version):
+    parser.error("--version must name an explicit release, for example 0.1.0 or 0.2.0-rc.1")
 if args.version and (output / "python-manifest.json").exists():
-    raise SystemExit("Candidate already exists; choose a new version and output directory")
+    raise SystemExit("Release already exists; choose a new version and output directory")
 release_version = args.version or "0.1.0"
-python_version = release_version.replace("-rc.", "rc")
-filenames = [f"agent_orch-{python_version}-py3-none-any.whl", f"agent_orch-{python_version}.tar.gz"]
+# PEP 440 spells 0.2.0-rc.1 as 0.2.0rc1, and alpha and beta as a and b.
+python_version = release_version.replace("-alpha.", "a").replace("-beta.", "b").replace("-rc.", "rc")
+filenames = [f"orchvia-{python_version}-py3-none-any.whl", f"orchvia-{python_version}.tar.gz"]
 if args.version and any((output / name).exists() for name in filenames):
-    raise SystemExit("Candidate archive already exists; never overwrite it")
+    raise SystemExit("Release archive already exists; never overwrite it")
 output.mkdir(parents=True, exist_ok=True)
-with tempfile.TemporaryDirectory(prefix="agent-orch-python-build-") as temporary:
+with tempfile.TemporaryDirectory(prefix="orchvia-python-build-") as temporary:
     stage = Path(temporary) / "python"
     shutil.copytree(source, stage, ignore=shutil.ignore_patterns("__pycache__", "*.pyc", "*.egg-info", "build", "dist"))
     for name, expression in [("pyproject.toml", r'(?m)^version = "[^"]+"$'),
-                             ("src/agent_orch/__init__.py", r'(?m)^__version__ = "[^"]+"$')]:
+                             ("src/orchvia/__init__.py", r'(?m)^__version__ = "[^"]+"$')]:
         path = stage / name
         prefix = "version" if name == "pyproject.toml" else "__version__"
         content, count = re.subn(expression, f'{prefix} = "{python_version}"', path.read_text())

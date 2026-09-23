@@ -140,7 +140,7 @@ test(
         '-c',
         `
 import asyncio, json, sys
-from agent_orch import Orchestrator
+from orchvia import Orchestrator
 async def main():
     async with Orchestrator.connect(socket_path=sys.argv[1]) as client:
         task = await client.tasks.get(sys.argv[2])

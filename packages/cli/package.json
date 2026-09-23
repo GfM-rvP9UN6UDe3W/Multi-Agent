@@ -1,11 +1,11 @@
 {
-  "name": "@agent-orch/cli",
+  "name": "@orchvia/cli",
   "version": "0.1.0",
   "private": true,
   "license": "MIT",
   "type": "module",
   "bin": {
-    "agent-orch": "./src/main.ts"
+    "orchvia": "./src/main.ts"
   },
   "exports": {
     "./host": "./src/host.ts"

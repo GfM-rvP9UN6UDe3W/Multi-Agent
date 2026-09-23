@@ -1,17 +1,15 @@
-# Python SDK — wire 2.0
+# orchvia: Python SDK
 
-This source package implements the async Python side of [SPEC-0001](../docs/specs/0001-foundation.md)
-and the later completion surface in [SPEC-0009](../docs/specs/0009-complete-design.md), building on
-[SPEC-0003-A](../docs/specs/0003-a-lifecycle.md) and
-[SPEC-0003-A2](../docs/specs/0003-a2-execution-isolation.md).
-It uses only the Python standard library at runtime and supports Python 3.11+.
-The Node engine requires Node.js 22.18+. No package has been published.
+The Python SDK for [Orchvia](https://github.com/masonlee39/orchvia), which runs Claude Code and Codex agents as a team from your own application: warm sessions that keep their history, a durable mailbox, human approval of results, and per-task token records.
 
-Python does not implement another scheduler, open the SQLite database, or call model APIs.
-Only the Node host owns those operations. The tested end-to-end runtime is the explicit
-`fake` provider; these results are not Claude/Codex model acceptance.
-A2 has passed offline protocol and real Node stdio/Unix fixture integration; see the
-[A2 wiring evidence](../docs/tdd/0003-a2-wiring.md).
+```sh
+pip install orchvia
+npm install @orchvia/cli @orchvia/engine @orchvia/adapter-claude
+```
+
+The SDK uses only the Python standard library and supports Python 3.11+. It talks to one Node host (Node.js 22.18+ from `@orchvia/cli`), which owns the scheduler, the SQLite state and the agent runtimes; Python starts that host as a child process or connects to a running one. Python does not implement another scheduler, open the database, or call model APIs.
+
+With the npm packages installed in the current directory, the host program is `node_modules/@orchvia/cli/dist/main.js`; pass it as `cli_source` below. Orchvia is alpha software: see its [status](https://github.com/masonlee39/orchvia/blob/main/docs/status.md) for what is and is not verified. The tests below use the explicit `fake` provider; they are not acceptance with real models.
 
 ## Run from this checkout
 
@@ -47,7 +45,7 @@ Use the real absolute workspace/state paths and an explicit provider in the host
 The current local entry point accepts an argument array containing the CLI configuration:
 
 ```python
-from agent_orch import Orchestrator
+from orchvia import Orchestrator
 
 async with Orchestrator.local(
     engine_command=[node_executable, cli_source, "host", "--stdio", "--config", config_file],
@@ -67,7 +65,7 @@ does not accept a `timeouts` option or rewrite `engine_command`. The optional `t
 object uses `acceptanceMs=30000`, `turnMs=1800000`, `drainMs=300000`,
 `interruptMs=30000`, and `reconcileMs=60000` by default. Each override must be an integer
 from 1 through 86400000 milliseconds. `LifecycleTimeouts` exposes snake_case fields;
-`agent_orch.types.to_wire(LifecycleTimeouts(...))` produces that JSON object. These
+`orchvia.types.to_wire(LifecycleTimeouts(...))` produces that JSON object. These
 deadlines are independent of local SDK wait timeouts and do not reset on retry/restart.
 `LifecycleTimeouts().turn_ms` is therefore 1800000. This total budget starts at dispatch
 and includes adapter startup, initialization and acceptance waiting. Acceptance and
@@ -84,7 +82,7 @@ Changing a limit requires a host restart; existing records and deadlines are ret
 An owner closes via `host.shutdown`. `ShutdownIncomplete` leaves the connection alive:
 
 ```python
-from agent_orch import ShutdownIncomplete
+from orchvia import ShutdownIncomplete
 
 try:
     await orch.close(timeout=30)
@@ -119,7 +117,7 @@ connections; `resolve_conflict` is owner-only and also returns `UNAUTHORIZED`.
 ## Tasks, approvals, handles and events
 
 ```python
-from agent_orch import AcceptanceSpec, RuntimeSpec, TaskSpec
+from orchvia import AcceptanceSpec, RuntimeSpec, TaskSpec
 
 task = await orch.tasks.create(
     TaskSpec(
@@ -310,9 +308,9 @@ allows explicit requeueing; `failed`/`interrupted` make the original task failed
 The earlier unknown operation retains its status and gains a `resolution` reference.
 Keep a stable business key and use `operations.lookup` after a lost receipt instead of
 submitting a new key. The complete
-[TS/Python examples](../docs/guide.md#114-implemented-owner-attestation)
-show the target and evidence mapping. [Python TDD evidence](../docs/tdd/0003-a-python.md)
-and [increment evidence](../docs/tdd/0003-a-evidence.md) distinguish fixture verification
+[TS/Python examples](https://github.com/masonlee39/orchvia/blob/main/docs/guide.md#114-implemented-owner-attestation)
+show the target and evidence mapping. [Python TDD evidence](https://github.com/masonlee39/orchvia/blob/main/docs/tdd/0003-a-python.md)
+and [increment evidence](https://github.com/masonlee39/orchvia/blob/main/docs/tdd/0003-a-evidence.md) distinguish fixture verification
 from unperformed real-model acceptance.
 
 ## Host upgrade and adapter compatibility
@@ -341,7 +339,7 @@ after_cursor=saved_cursor)`, read `event.data.usage_record_id` and
 outbox/ledger before advancing the checkpoint; deduplicate by `(event.store_id, record.id)`.
 Raw usage retains its provider keys. Missing record IDs return `NOT_FOUND`; malformed
 IDs return `VALIDATION_ERROR`. Historical usage rows are not backfilled into events.
-See the [offline durable forwarding example](../examples/typescript/usage-forwarding.ts).
+See the [offline durable forwarding example](https://github.com/masonlee39/orchvia/blob/main/examples/typescript/usage-forwarding.ts).
 
 Python can consume usage from an embedded TypeScript host over the existing socket.
 It cannot serialize Claude native callbacks or `observeExecutionStop` into JSON configuration.
@@ -352,6 +350,6 @@ Implemented namespaces include tasks, session open/fork/compact/rotate/stop/insp
 
 `TaskSpec` accepts dependencies, `context_plan`, `write_scope`, budgets and context estimates; `CheckAcceptanceSpec` selects owner-registered verification rules. Task acceptance and runtime permission approval have different `purpose` values. Consumers must inspect the purpose and exact target before deciding. Provider options, native callbacks and permissions remain host configuration.
 
-Generated `agent_orch.wire_types` uses camelCase wire field names. Public dataclasses/methods use snake_case. `validate_wire(definition, payload)` validates raw wire JSON against the shipped audited schema subset. Operation results, cost reports and raw native observations intentionally preserve their wire JSON keys.
+Generated `orchvia.wire_types` uses camelCase wire field names. Public dataclasses/methods use snake_case. `validate_wire(definition, payload)` validates raw wire JSON against the shipped audited schema subset. Operation results, cost reports and raw native observations intentionally preserve their wire JSON keys.
 
-Build a wheel/sdist with the root README commands and install a local wheel using `python -m pip install --no-index --no-deps /absolute/path/agent_orch-0.1.0-py3-none-any.whl`. A local owner additionally needs the Node host and selected adapter; the Python package never downloads or implements an engine. See the [current wiring guide](../docs/guide.md), [completion matrix](../docs/specs/0009-complete-design.md#completion-matrix), and [native acceptance boundary](../docs/acceptance/README.md).
+Build a wheel/sdist with the root README commands and install a local wheel using `python -m pip install --no-index --no-deps /absolute/path/orchvia-0.1.0-py3-none-any.whl`. A local owner additionally needs the Node host and selected adapter; the Python package never downloads or implements an engine. See the [current wiring guide](https://github.com/masonlee39/orchvia/blob/main/docs/guide.md), [completion matrix](https://github.com/masonlee39/orchvia/blob/main/docs/specs/0009-complete-design.md#completion-matrix), and [native acceptance boundary](https://github.com/masonlee39/orchvia/blob/main/docs/acceptance/README.md).

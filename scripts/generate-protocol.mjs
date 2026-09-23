@@ -91,8 +91,8 @@ const outputs = {
     { parser: 'typescript', singleQuote: true, printWidth: 100, trailingComma: 'all' },
   ),
   'packages/engine/src/generated/protocol.schema.json': raw,
-  'python/src/agent_orch/wire_types.py': pyTypes,
-  'python/src/agent_orch/protocol.schema.json': raw,
+  'python/src/orchvia/wire_types.py': pyTypes,
+  'python/src/orchvia/protocol.schema.json': raw,
 };
 let stale = false;
 for (const [name, content] of Object.entries(outputs)) {

@@ -3,8 +3,8 @@ from pathlib import Path
 import sys
 import unittest
 
-from agent_orch import LifecycleTimeouts, OperationHandle, Orchestrator, OrchestrationError, ReconcileEvidence
-from agent_orch.types import to_wire
+from orchvia import LifecycleTimeouts, OperationHandle, Orchestrator, OrchestrationError, ReconcileEvidence
+from orchvia.types import to_wire
 
 
 FIXTURE = Path(__file__).with_name("fake_protocol_server.py")
