@@ -111,3 +111,49 @@ Documentation-only commit `292c692` left packaged code, tests and workflow ident
 The functional fixture now allows three seconds for native interruption and engine settlement and five seconds for the client's wait, with operation/task diagnostics on failure and an explicit assertion that resume reached running. Production timeout defaults are unchanged. The separate late-terminal scenario retains its 35 ms engine deadline, one-second adapter allowance and outcome_unknown/resource-release assertions. These test-only files are not present in the rc.4 package payloads; the immutable package source remains `cf574c4`.
 
 Local validation after the adjustment: all three actual subprocess lifecycle cases pass, including TypeScript, Python and the deliberately expired pause; exact Node 22.18.0 full regression passes **438/438**, zero skips, 28.43 s (`/private/tmp/agent-orch-0011-interrupt-node22.log`). Strict TypeScript and diff checks pass. The next remote run must validate this committed fixture change; its result is linked with the final delivery rather than rewriting earlier run evidence.
+
+## CI flake in 0011-R03 (push run 35832001307)
+
+The push run of the documentation-only commit `6315492` failed one job: contracts on Ubuntu 24.04 with Node 24.14.0 ([run 35832001307](https://github.com/masonlee39/orchvia/actions/runs/35832001307), job 107086545009). `0011-R03 delayed stdio startup does not consume the configured shutdown deadline` threw `Fixture condition did not become true before its deadline` from `waitForExit`: the stdio host had not exited 3,000 ms after SIGTERM. The test took 6,421 ms. The pull-request run of the same commit passed 7 of 7, and so did the rerun. The log cannot show the host's stderr, because the fixture's timeout error did not include it.
+
+Where the exit time goes, measured in the host child with a preload that times each fsync and SQLite COMMIT after SIGTERM (macOS arm64, Node 24.14.0, `702a3d7`, which has the same engine, CLI and test as `6315492`):
+
+- Between SIGTERM and exit the host makes 7 SQLite commits (one with nothing to write) and 8 fsyncs, then closes both databases; closing the store checkpoints its WAL. The 8 fsyncs write two durable artifacts, the runtime-terminal evidence and the lease-release certificate. Each artifact writes a commit journal and the artifact file, and fsyncs each file and its directory.
+- Everything else on the path takes a few milliseconds. SIGTERM to exit:
+
+| Condition | Exit after SIGTERM | Slowest fsync |
+| --- | --- | --- |
+| R03 alone | 36 ms | 3.8 ms |
+| Whole suite | 38 ms | 3.8 ms |
+| Whole suite, 36 CPU-bound processes (2 per core), 2 runs | 100 / 84 ms | 29 ms |
+| Whole suite, 4 processes each writing and fsyncing 256 MiB files, 2 runs | 399 / 300 ms | 100 ms |
+| Whole suite, both loads, 2 runs | 281 / 363 ms | 45 ms |
+
+Cause: the fixture assumed the exit takes less than 3 s, but the exit time is the sum of those 17 durable calls, which the shutdown budget does not bound.
+
+- `close()` checks its deadline only while a flight remains, between event-loop turns. The aborted fake turn records its terminal, releases its lease and leaves `flights` in one chain of microtasks. So slow durable writes delay the exit but never make the shutdown incomplete. With 80 ms added to each fsync after SIGTERM, the host exited 682 ms after SIGTERM, with code 0 and a 500 ms budget. This matches SPEC-0001 AC07 and SPEC-0004 AC-R02: the budget bounds the wait for owned work.
+- A 3 s exit holds only while the 17 calls average under about 175 ms. Under load, one committed call has taken 85–384 ms before ([TDD-0014](0014-host-workflow-controls.md#remote-ci), 24 parallel local runs). Ubuntu runners are slower than macOS here: the Ubuntu Node 24 test step took 79–97 s in the last four runs, against 38–54 s on macOS with the same Node. The macOS disk above never came close to 175 ms, and no Linux machine was available locally.
+- The suite loads the disk itself. One whole-suite run wrote and fsynced 48 emergency reserves of the default 256 MiB, 12 GiB in total: 10 from `engine/routing-layer`, 9 from `engine/routing-corrections`, 6 from `engine/context-check`, 4 from `engine/runtime-approval`, 3 each from `contract/sdk` and `contract/store-namespaces`, 9 from CLI hosts whose configuration sets no `storage`, and 4 from other tests and examples. The CLI shutdown fixtures and `tests/fixtures/engine.ts` use a 4 KiB reserve.
+
+RED: `tests/fixtures/slow-durable-sync.ts` makes each durable sync point take 250 ms once the host receives SIGTERM: each fsync, each SQLite COMMIT and each database close. It changes no data and no order. The new test `0011-R09 slow durable writes after SIGTERM do not fail a successful stdio shutdown` uses it with the R03 shutdown configuration. With the original harness it failed in 3,534 ms with the CI message, from `until` in `waitForExit`.
+
+Fix, in the test harness only:
+
+- `waitForExit` waits up to 30 s. That is a watchdog: the behavior under test is the exit code, the persisted wait and the task state, not how fast the disk is. Its error now includes the host's stderr, so a hang or a `SHUTDOWN_INCOMPLETE` would be visible in the CI log.
+- R03 keeps all its assertions, including the persisted wait of 500 ms. No engine, CLI or production timeout changed.
+- The 14 other signal tests in the file no longer have a 6 s per-test limit. Like R03 and R09, each of their waits has its own bound: 10 s for each RPC, 3 s for state polls and 30 s for the exit. The suite's 120 s timeout remains the outer bound. A 6 s limit counts from startup, so it would expire before the exit watchdog and report no stderr.
+- Every fixture RPC now waits up to 10 s, as `initialize` and `host.shutdown*` already did; ordinary requests had 2 s. A host answers only between its synchronous writes. After an incomplete drain it stays up while the fake turn finishes and persists its result, and `operations.get` waits behind that work.
+
+Timing invariant: the host exits with code 0 before the watchdog whenever those 17 calls average under about 1.7 s.
+
+GREEN:
+
+- R09 passes. On an idle machine the host exited 4.36–4.38 s after SIGTERM in three runs, 17 × 250 ms of injected latency plus about 0.1 s. It exited with code 0, the task paused with `runtime_interrupted`, one persisted wait of 500 ms and no `SHUTDOWN_INCOMPLETE`.
+- The 6 s limits, with the slow-sync preload loaded twice into every host of the file through `NODE_OPTIONS` (500 ms per durable call after SIGTERM): before their removal, 6 SIGTERM tests failed with `test timed out after 6000ms`; after it, they pass in 8.8–10.9 s. At 250 ms per call the drain tests had already taken 5.73 and 5.86 s against their 6 s limit.
+- The whole file passes 16/16 on Node 24.14.0 and Node 22.18.0. 12 parallel runs of the whole file under 36 CPU-bound processes passed 192/192.
+- The RPC limit, under the same preload: with 2 s, both `incomplete drain keeps the host` tests failed with `Fixture RPC timed out: operations.get` at 250 and at 500 ms per call. With 10 s, the whole file passes 16/16 at both; those two tests take about 6 s and 11.9 s.
+- Whole suite with the final change: **565/565**, zero skips, on Node 24.14.0 (47.7 s) and Node 22.18.0 (51.5 s). The three loaded whole-suite runs in the table that included the exit watchdog also passed 565/565.
+- 24 parallel runs of R03 and R09 under 36 CPU-bound processes: 0 failures of 48; R03 took up to 3.7 s and R09 up to 5.3 s.
+- Mutation: when `close()` reports `SHUTDOWN_INCOMPLETE` once persistence has passed the budget, R03 still passes and R09 fails at the watchdog after 30.1 s. The failure message shows the host's stderr, with its `SHUTDOWN_INCOMPLETE` line.
+
+Not verified: the Ubuntu disk latency during the failed run is inferred, not measured. The fix covers any cause that only delays a successful exit. A cause that keeps the host alive would still fail, now with the host's stderr in the message.
