@@ -76,6 +76,27 @@ test('0021-R01 the offline quickstart runs two tasks on one warm session', () =>
   assert.match(run.stdout, /reused the first agent's session: true/);
 });
 
+test('0021-R12 the Python quickstart runs the same two tasks on one warm session', () => {
+  // The host that the example starts runs packages/cli/src/main.ts, not a file under examples/, so
+  // the reserve guard of SPEC-0011 R10 applies to it: the test asks for the 4 KiB reserve.
+  const args = ['--node', process.execPath, '--emergency-bytes', '4096'];
+  const run = spawnSync('python3', ['examples/python/quickstart.py', ...args], {
+    cwd: root,
+    encoding: 'utf8',
+    timeout: 60_000,
+    env: { ...process.env, PYTHONPATH: join(root, 'python/src') },
+  });
+  assert.equal(run.status, 0, run.stderr);
+  const lines = run.stdout.trimEnd().split('\n');
+  const first = /^1\. "Draft the release notes": completed, session (\S+)$/.exec(lines[0] ?? '');
+  const second = /^2\. "Tighten the draft you just wrote": completed, session (\S+)$/.exec(
+    lines[1] ?? '',
+  );
+  assert.ok(first && second && lines.length === 3, run.stdout);
+  assert.equal(second[1], first[1]);
+  assert.equal(lines[2], "The second task reused the first agent's session: true");
+});
+
 test('0021-R02 0021-R06 0021-R08 the README carries no release evidence, price or paid judge, and stays within 15 KB', () => {
   const text = readme();
   assert.ok(Buffer.byteLength(text) <= 15 * 1024, `${Buffer.byteLength(text)} bytes`);

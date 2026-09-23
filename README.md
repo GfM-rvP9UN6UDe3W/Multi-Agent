@@ -27,16 +27,16 @@ The example uses a fake runtime, so it needs no account and calls no model. It r
 The second task reused the first agent's session: true
 ```
 
+From Python 3.11 or later, the same quickstart runs through a Node host that Python starts, and prints the same three lines:
+
+```sh
+PYTHONPATH=python/src python3 examples/python/quickstart.py
+```
+
 With real Claude, the same two tasks run on one Claude Code session. You need Claude Code signed in (`claude auth login`); the example makes two small model calls:
 
 ```sh
 node examples/typescript/quickstart-claude.ts
-```
-
-From Python, the same kind of task runs through a Node host that Python starts:
-
-```sh
-PYTHONPATH=python/src python3 examples/python/fake_roundtrip.py
 ```
 
 To use Orchvia in your own project, install it from npm (Node.js 22.18 or later):

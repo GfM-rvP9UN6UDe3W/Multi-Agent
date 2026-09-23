@@ -267,3 +267,28 @@ Two corrections concern the drawing and the layout, so a rendering checks them r
 | The version is written into the code as `0.1.0` | not caught by the source test, whose manifest also says 0.1.0; caught by the smoke of the build as `0.2.0-rc.7` (`'0.1.0\n'` instead of `'0.2.0-rc.7\n'`). The release workflow runs that smoke with the tag's version, and with `0.0.0-rc.N` on pull requests that touch packaging. |
 
 The check that `-v` stays an unknown command was added after its mutation first went unnoticed. It covers behavior that was already right, so it has no failing run of its own.
+
+### R12: the Python quickstart (issue #13)
+
+#### RED
+
+The test and the example were written together, as the TypeScript quickstart's were. A missing example file would only have shown that the file did not exist, so it is not counted as a failure of behavior.
+
+- The first run of `node --test --test-name-pattern 0021-R12 tests/contract/docs.test.ts` failed while the client initialized the host: `orchvia.errors.OrchestrationError: Engine connection ended before the next complete response`. The host had stopped on the reserve guard of SPEC-0011 R10, which `npm test` loads into every Node process through `NODE_OPTIONS`. Started by hand under the guard with the same configuration, it printed ``{"code":"TEST_RESERVE_GUARD","message":"…/state/emergency.reserve would grow past 4096 bytes in `node …/packages/cli/src/main.ts host --stdio --config …`. …"}``. The guard lets the engine's 256 MiB default through only for Node processes started from a file under `examples/`, and the host that the Python example starts runs from `packages/cli/`. The Python client keeps the host's error output in `stderr_tail` and does not repeat it in the exception.
+- Run as a reader runs it, without the guard, the example printed the three lines and exited with 0.
+
+#### Changes
+
+- `examples/python/quickstart.py`, the Python version of `examples/typescript/quickstart.ts`. It writes a host configuration with the fake provider and `allowCrossRootReuse`, starts `packages/cli/src/main.ts host --stdio` with `Orchestrator.local`, approves each result as the TypeScript example does, and gives the second task a `ContextPlan`, with its camelCase keys, that asks to reuse the first task's session. `--node` names the Node executable, as in `fake_roundtrip.py`. `--emergency-bytes` sets the host's emergency reserve, which is otherwise the engine's 256 MiB.
+- The test passes its own Node with `--node`, and `--emergency-bytes 4096`. The guard's rules are unchanged.
+- The README gives the Python command after the offline quickstart's output. It replaces the mention of `fake_roundtrip.py`, which the reference and the guide still document. The README is 5,949 bytes.
+
+#### Mutation checks
+
+| Mutation | Result |
+| --- | --- |
+| The second task starts a new session | caught |
+| The last line prints Python's `True` | caught |
+| No `allowCrossRootReuse` | caught |
+| Another goal for the second task | caught |
+| The result is read without waiting for the task to end | caught |
