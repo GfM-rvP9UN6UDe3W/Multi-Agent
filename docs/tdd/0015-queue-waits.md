@@ -1,6 +1,6 @@
 # TDD-0015: Queue waits
 
-Date: 2026-09-21. Base: `42e2c6f` (the rc.8 review corrections on branch `axion-rc9`). Nothing has been published.
+Date: 2026-09-21. Base: `42e2c6f` (the rc.8 review corrections on the branch of pull request #3). Nothing has been published.
 
 ## Reproduction before the specification
 

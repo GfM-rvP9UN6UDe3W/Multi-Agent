@@ -1,6 +1,6 @@
 # SPEC-0017: Audit corrections for rc.10
 
-Date: 2026-09-22. Status: approved by the owner; implemented on branch `axion-rc11` for rc.11. Evidence: [TDD-0017](../tdd/0017-audit-corrections.md). Origin: a self-audit of the code added since rc.7 (`2d50e3e..fbf9bdf`) found four defects. Three were reproduced offline; the fourth was found by reading the code. A05 closes an older defect of the same kind as A03; the owner approved its design after the audit report.
+Date: 2026-09-22. Status: approved by the owner; implemented for rc.11 in pull request #5. Evidence: [TDD-0017](../tdd/0017-audit-corrections.md). Origin: a self-audit of the code added since rc.7 (`2d50e3e..fbf9bdf`) found four defects. Three were reproduced offline; the fourth was found by reading the code. A05 closes an older defect of the same kind as A03; the owner approved its design after the audit report.
 
 ## Acceptance criteria
 

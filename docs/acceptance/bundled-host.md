@@ -61,7 +61,7 @@ npm install /absolute/rc/agent-orch-sdk-0.1.0-rc.7.tgz \
 
 Verify each file against `npm-manifest.json` before installation. npm additionally records local tarball SHA-512 integrity in the consumer lockfile. The smoke verifies the SHA-256 manifest, lockfile integrity, adapter isolation, installed native MCP, and separate CJS/ESM bundles after deleting their entire temporary node_modules. Both bundles execute fake and Claude protocol-fixture tasks through human approval to completion, four real engine MCP operations, and an injected history reader. No model requests are made.
 
-This is Node-based package evidence. Electron 43.2.0 / Node 24.18, Axion's Vite configuration, platform-binary distribution and real model execution require acceptance inside the host. Merely setting an Electron version marker in a fixture is only a regression check against an accidental runtime-brand gate.
+This is Node-based package evidence. Electron 43.2.0 / Node 24.18, the application's Vite configuration, platform-binary distribution and real model execution require acceptance inside the host. Merely setting an Electron version marker in a fixture is only a regression check against an accidental runtime-brand gate.
 
 ## Release policy
 

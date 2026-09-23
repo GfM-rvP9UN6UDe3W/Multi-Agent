@@ -122,6 +122,6 @@ Final full runs after the storage-degraded client/host fix:
 | `PACKAGE_BUILD_PYTHON=... npm run test:packages` | All six clean offline installation/runtime modes passed on the final rebuilt packages |
 | `git diff --check` | Passed |
 
-Local artifacts are under `dist/release`; final logs and source/artifact identities are under `dist/verification`. These ignored build outputs are not committed. The source changes remain uncommitted on local main based on f18906b. All edits are confined to this repository/task-owned temporary files; the installed native SDK was read from another project for the explicit offline transport check, without modifying Axion.
+Local artifacts are under `dist/release`; final logs and source/artifact identities are under `dist/verification`. These ignored build outputs are not committed. The source changes remain uncommitted on local main based on f18906b. All edits are confined to this repository/task-owned temporary files; the installed native SDK was read from another project for the explicit offline transport check, without modifying that project.
 
 Prepared CI is not executed CI. Prepared native acceptance is not a model run. Economic automatic selection remains disabled. No production-readiness, real native sandbox, complete real-model safety, measured savings or publication claim follows from these checks.

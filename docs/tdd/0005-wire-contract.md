@@ -33,7 +33,7 @@ format uses draft 2020-12 default annotation semantics without date-format asser
 
 ## Documentation corrections
 
-The authoritative A2 specification, SDK_USAGE_AND_WIRING.md, and python/README.md now include RESOURCE_CLEANUP_PENDING. They distinguish database A/Q/R from host-memory closing/pending state and require clients to tolerate future reason strings. README/CLAUDE.md explain the same boundary.
+The authoritative A2 specification, the integration guide (now `docs/guide.md`), and python/README.md now include RESOURCE_CLEANUP_PENDING. They distinguish database A/Q/R from host-memory closing/pending state and require clients to tolerate future reason strings. README/CLAUDE.md explain the same boundary.
 
 Both language guides document RESOURCE_CLEANUP_INCOMPLETE operationId/auditCommitted, camelCase result fields, and optional resourceCleanup. Save the first target/evidence/key and explicitly retry reconcile on the same owner to advance cleanup. get/lookup/wait are read-only. Losing the finalizer after restart remains outcome_unknown; a disappearing blocker or wait returning unknown does not prove completion. No string-matching tests were added for low-risk prose; behavior is grounded in existing R04 actual stdio/SQLite regression.
 

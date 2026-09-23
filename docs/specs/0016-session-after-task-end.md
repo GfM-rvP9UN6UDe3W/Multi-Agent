@@ -1,6 +1,6 @@
 # SPEC-0016: Sessions after their task ends
 
-Date: 2026-09-21. Status: approved by the owner; implemented on branch `axion-rc10` for rc.10. Evidence: [TDD-0016](../tdd/0016-session-after-task-end.md). Origin: an embedding host found that a session could not be used again after its interrupted dispatch was reconciled. The host also asked how closing or losing the host affects running work.
+Date: 2026-09-21. Status: approved by the owner; implemented for rc.10 in pull request #4. Evidence: [TDD-0016](../tdd/0016-session-after-task-end.md). Origin: an embedding host found that a session could not be used again after its interrupted dispatch was reconciled. The host also asked how closing or losing the host affects running work.
 
 ## Problem
 

@@ -310,7 +310,7 @@ allows explicit requeueing; `failed`/`interrupted` make the original task failed
 The earlier unknown operation retains its status and gains a `resolution` reference.
 Keep a stable business key and use `operations.lookup` after a lost receipt instead of
 submitting a new key. The complete
-[TS/Python examples](../SDK_USAGE_AND_WIRING.md#114-implemented-owner-attestation)
+[TS/Python examples](../docs/guide.md#114-implemented-owner-attestation)
 show the target and evidence mapping. [Python TDD evidence](../docs/tdd/0003-a-python.md)
 and [increment evidence](../docs/tdd/0003-a-evidence.md) distinguish fixture verification
 from unperformed real-model acceptance.
@@ -354,4 +354,4 @@ Implemented namespaces include tasks, session open/fork/compact/rotate/stop/insp
 
 Generated `agent_orch.wire_types` uses camelCase wire field names. Public dataclasses/methods use snake_case. `validate_wire(definition, payload)` validates raw wire JSON against the shipped audited schema subset. Operation results, cost reports and raw native observations intentionally preserve their wire JSON keys.
 
-Build a wheel/sdist with the root README commands and install a local wheel using `python -m pip install --no-index --no-deps /absolute/path/agent_orch-0.1.0-py3-none-any.whl`. A local owner additionally needs the Node host and selected adapter; the Python package never downloads or implements an engine. See the [current wiring guide](../SDK_USAGE_AND_WIRING.md), [completion matrix](../docs/specs/0009-complete-design.md#completion-matrix), and [native acceptance boundary](../docs/acceptance/README.md).
+Build a wheel/sdist with the root README commands and install a local wheel using `python -m pip install --no-index --no-deps /absolute/path/agent_orch-0.1.0-py3-none-any.whl`. A local owner additionally needs the Node host and selected adapter; the Python package never downloads or implements an engine. See the [current wiring guide](../docs/guide.md), [completion matrix](../docs/specs/0009-complete-design.md#completion-matrix), and [native acceptance boundary](../docs/acceptance/README.md).

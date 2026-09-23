@@ -28,4 +28,4 @@ Date: 2026-09-21. Implementation source: `9ce65e4`, with bounded test-harness fo
 
 ## Remaining boundary
 
-SPEC-0012 is implemented and remotely verified, but CI uses scripted gateways and bounded fixture data. The [readiness ledger](../acceptance/readiness.md) still retains actual gateway/model, OS sandbox, Axion application, economics, deployment-capacity and publication gates. The evidence-complete committed-source handoff uses immutable `0.1.0-rc.7`; rc.5 and rc.6 remain unchanged historical candidates.
+SPEC-0012 is implemented and remotely verified, but CI uses scripted gateways and bounded fixture data. The [readiness ledger](../acceptance/readiness.md) still retains actual gateway/model, OS sandbox, downstream application, economics, deployment-capacity and publication gates. The evidence-complete committed-source handoff uses immutable `0.1.0-rc.7`; rc.5 and rc.6 remain unchanged historical candidates.

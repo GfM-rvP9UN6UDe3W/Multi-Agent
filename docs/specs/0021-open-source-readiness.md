@@ -1,0 +1,180 @@
+# SPEC-0021: Open-source readiness
+
+Date: 2026-09-23. Status: approved by the owner on 2026-09-23, with D-oss-1 to D-oss-4 each set to option 1. G, R, C and the repository rename (N05) are implemented on branch `oss-launch`; the package rename, P, E and L are not. Evidence: [TDD-0021](../tdd/0021-open-source-readiness.md). The owner asked for one plan that answers an outside assessment of why the public repository draws little attention. The owner chose the name Orchvia (D-oss-5). The project's relationship to TypeSafe is still open. It supersedes no specification. It changes packaging ([SPEC-0010](0010-bundled-host-delivery.md), [SPEC-0011](0011-release-readiness.md)) and the documentation layout, not the engine.
+
+## Why
+
+The repository became public on 2026-09-19. A reader who arrives cannot tell what it is, and cannot install it.
+
+- **Nothing is published.**
+  - `@agent-orch/sdk` does not exist on npm. Installing means building tarballs and installing them by absolute path.
+  - `scripts/build-packages.mjs` marks every generated package `private: true`, so npm would refuse to publish the packages as built.
+- **The first screen of the README is release evidence.**
+  - It shows license terms, the ESM-only notice, "not published", test counts, CI run ids, commit hashes and SPEC numbers.
+  - Some of it is stale: it cites 442 Node and 49 Python tests (557 and 79 today) and names rc.7 as the current handoff (rc.14 exists).
+  - It states no problem it solves, embeds neither diagram, and every example uses the fake runtime.
+- **It never says why to choose it.**
+  - Nothing compares it with LLM orchestration frameworks or with running several coding-agent sessions by hand.
+  - The repository description says speed and cost are "measured, not assumed", while the README lists economic benefit and real-model acceptance as unverified.
+- **Three names.**
+  - The repository is `Multi-Agent`, the title "Agent Orchestration SDK" and the packages `@agent-orch/*`.
+  - The unscoped npm package `agent-orch` belongs to an unrelated multi-agent CLI orchestrator (0.5.45). It installs a command named `agent-orch`, the same command our CLI package installs.
+  - An npm organization or user named `agent-orch` already exists, so the `@agent-orch` scope cannot be registered unless it is the owner's.
+  - No topics or homepage are set.
+- **Size and vocabulary.**
+  - The root holds a 46 KB README, a 104 KB design document, a 77 KB wiring guide, two diagrams of 2.6 MB together, and agent instruction files.
+  - Internal terms appear unexplained: A/Q/R, quarantine, `outcome_unknown`, owner attestation.
+- **Internal names.** The names of a downstream product and of its ledger appear in 23 tracked Markdown files; no source or test file contains them. They also appear in 4 commit messages, 4 remote branch names and the public rc.14 release archive.
+- **A paid default.** The routing example's default judge is a paid external service, shown with its price.
+
+## Environments
+
+- Documentation: GitHub's Markdown renderer, and the npm and PyPI package pages.
+- Packages: the npm registry and PyPI. Platforms as in the existing CI matrix: macOS on Apple silicon and Intel, and Linux; Node 22.18 and 24.14; Python 3.11 to 3.14. Windows stays unverified and is stated as such.
+- Real-model runs happen only on the owner's machine, with the owner's accounts.
+
+## Acceptance criteria
+
+### G: Repository page (no code)
+
+- **G01** The repository description says what the project does and makes no claim that has not been measured. It changes only with the owner's authorization.
+- **G02** Topics: `multi-agent`, `claude-code`, `codex`, `orchestration`, `mcp`, `agents`. A homepage is set once a package page or documentation site exists.
+
+### R: README and documentation (documentation only)
+
+- **R01** The README opens with, in this order:
+  1. one sentence: what it is, and for whom;
+  2. three reasons to use it;
+  3. one diagram;
+  4. a quickstart, in two variants: offline with the fake runtime (no account needed) and with real Claude (E01, E02);
+  5. the comparison (R07);
+  6. a status paragraph: alpha, the supported platforms, and what is and is not verified, linking to R02.
+- **R02** Test counts, CI run ids, commit hashes, SPEC coverage and candidate history move to `docs/status.md`. A test checks that the README matches no test-count, run-id or candidate-version pattern.
+- **R03** `docs/concepts.md` explains every internal term that the README or the guide uses, in plain words first. The README uses none without explanation.
+- **R04** The design document, the wiring guide and the diagrams move under `docs/`. A test checks that every relative link in tracked Markdown resolves.
+- **R05** One diagram is embedded in the README. Each embedded image is at most 400 KB and legible at 900 px wide.
+- **R06** The README names no paid service and no price. The guide documents Jev as one optional judge, next to writing your own, and states the project's relationship to its vendor, which the owner confirms.
+- **R07** The comparison covers two groups:
+  - LLM orchestration frameworks: LangGraph, CrewAI, OpenAI Agents SDK, and AutoGen or Microsoft Agent Framework;
+  - ways to run several coding agents: Claude Code subagents, and several sessions by hand or with a session manager.
+  - Each cell cites the other project's own documentation, checked on the day it is written. No cell judges quality.
+- **R08** The README is at most 15 KB, checked by the R02 test.
+- **R09** Internal names follow D-oss-2. With option 1, no tracked file contains them, checked by a test that stores only hashes of the names. Git history is not rewritten.
+- **R10** The README that each generated npm package carries, and the PyPI description, describe the published package, link to the repository, and no longer say "unpublished".
+
+### C: Agent instruction files (D-oss-2)
+
+- **C01** With D-oss-2 option 1:
+  - `CLAUDE.md` is rewritten for outside contributors. It moves to `.claude/CLAUDE.md` only if Claude Code is verified to load it from there; otherwise it stays at the root.
+  - `AGENTS.md` stays at the root, where Codex and other tools look for it, and is cleaned the same way.
+
+### N: One name (D-oss-1)
+
+- **N01** The repository, the README title, the npm scope or names, the PyPI project, the Python import name and the CLI command use one name.
+- **N02** No existing npm package has that name, and the CLI command is not `agent-orch`. Both are checked against the registry when the name is chosen.
+- **N03** With option 1 only:
+  - the old Python import `agent_orch` keeps working through the 0.1.x line: it re-exports the new module and warns once with `DeprecationWarning`;
+  - the old npm names were never published, so they get no alias. A migration table maps each old name to the new one, for existing consumers such as the downstream host.
+- **N04** Behavior does not change. The full Node and Python suites and the nine package modes pass before and after the rename, with the same test counts.
+- **N05** The GitHub rename keeps the old URL redirecting, and the local remotes are updated.
+
+### P: Publishing (packaging code; the design is reviewed before any code)
+
+- **P01** The build produces publishable packages:
+  - not `private`, and scoped packages publish with public access;
+  - `repository`, `homepage` and `bugs` point at the repository under its N01 name;
+  - the CLI's `bin` uses the N01 name.
+  - A test inspects the generated `package.json` files.
+- **P02** A release workflow runs only on a version tag:
+  1. the full offline suite on the CI matrix;
+  2. one build of every package from the tag, with the hashes recorded;
+  3. npm publishing with provenance, in dependency order: engine, then the adapters and sdk, then cli. A version that already exists on the registry is skipped;
+  4. PyPI publishing through trusted publishing;
+  5. a GitHub Release with the archives and their hashes.
+  - No token is stored in the repository.
+- **P03** Every pull request that touches packaging runs the same workflow without publishing: `npm publish --dry-run` for each package, and a metadata check of the wheel and sdist.
+- **P04** After publishing, a job on fresh macOS and Linux runners installs the packages from the registries, with no repository checkout. It runs the offline quickstart and the Python managed-host example. If either fails, the release is not announced.
+- **P05** Versions follow D-oss-3:
+  - public releases follow semver from 0.1.0;
+  - pre-releases go to npm's `next` tag and to PyPI as pre-releases;
+  - `CHANGELOG.md` records every public version;
+  - the local rc series ends.
+- **P06** The owner's one-time account steps are an SOP in `docs/release/publishing.md`, pasted to the owner in full:
+  - the npm organization or user, with two-factor authentication;
+  - a first manual publish, if the registry requires a package to exist before trusted publishing can be configured;
+  - the PyPI pending publisher;
+  - GitHub environment protection for the release workflow.
+
+### E: Real-model evidence (new code outside the engine; paid runs by the owner only)
+
+- **E01** The real-Claude quickstart runs in CI against the real Claude Code binary and the existing scripted loopback gateway, with synthetic credentials and no model call.
+- **E02** The owner runs the same quickstart once with a real account, following an SOP. Its output, trimmed, becomes the README's sample output, with the date and model.
+- **E03** The owner reviews the benchmark design before any code. It fixes:
+  - tasks, each with an automatic pass or fail check;
+  - three arms: one Claude Code session; Claude Code with subagents; this engine;
+  - metrics: input, output and cache tokens; wall time; estimated cost at published prices; pass rate; human interventions;
+  - the number of repetitions, and pinned model and tool versions.
+- **E04** The harness lives in `bench/`. `npm test` runs every arm against the fake runtime, with no model call.
+- **E05** A pilot, with one repetition per arm and task, measures what a full run costs. The owner decides the size of the full run.
+- **E06** Raw results and the exact commands are committed, and the README's numbers link to them. Results are published whether or not they favor the engine.
+- **E07** Until E06 exists, the README and the repository description say speed and cost can be measured, not that they are better.
+
+### L: Launch (drafts only; the owner posts)
+
+- **L01** Launch starts only after P04 has passed and E06 exists, unless the owner decides to launch without E06.
+- **L02** Drafts:
+  - a Show HN post;
+  - posts for r/ClaudeAI and r/ChatGPTCoding;
+  - one article built on the benchmark.
+  - Communities about local models are not targeted: the engine runs no local model.
+- **L03** Community files: issue and pull request templates, `SECURITY.md`, a `CONTRIBUTING.md` updated for outside contributors, and three "good first issue" items.
+- **L04** A social preview image and a short terminal recording of the quickstart.
+
+## Timing invariants
+
+- The release pipeline builds each version once. A retry publishes the recorded bytes. A version already on a registry is never rebuilt or overwritten.
+- npm packages publish in dependency order, so no published version depends on a version that is missing. A failure part-way leaves the earlier packages published, and the rerun continues from the first missing one.
+- The GitHub Release is created last, after both registries have the version.
+
+## Order
+
+1. G.
+2. R and C.
+3. N and P.
+4. E. The harness may be written during step 3.
+5. L.
+
+Each public action waits for the owner's explicit authorization: renaming, changing settings, publishing and posting.
+
+## Owner decisions (2026-09-23)
+
+- **D-oss-1, the name:** a new name everywhere (option 1).
+- **D-oss-5, which name:** Orchvia. On 2026-09-23 `orchvia` was free on npm (unscoped and as a scope), on PyPI and as a GitHub user or organization, and no npm package installs an `orchvia` command. The domain orchvia.com was registered on 2026-08-22 by an unknown holder. A web search for the name returns OrchVis, a 2025 research paper on multi-agent orchestration with human oversight. The names:
+
+  | Use | Before | After |
+  | --- | --- | --- |
+  | Repository | `masonlee39/Multi-Agent` | `masonlee39/orchvia` |
+  | README title | Agent Orchestration SDK | Orchvia |
+  | npm packages | `@agent-orch/{sdk,engine,adapter-claude,adapter-codex,cli}` | `@orchvia/{sdk,engine,adapter-claude,adapter-codex,cli}` |
+  | CLI command | `agent-orch` | `orchvia` |
+  | PyPI project | `agent-orch` (never published) | `orchvia` |
+  | Python import | `agent_orch` | `orchvia`; `agent_orch` forwards through 0.1.x (N03) |
+
+  The npm organization is registered before the repository is renamed, because the rename makes the name public ([owner steps](../release/publishing.md)).
+- **D-oss-2, internal names:** remove them from current files and keep history (option 1).
+- **D-oss-3, versions:** publish 0.1.0 as `latest` (option 1).
+- **D-oss-4, evidence:** a pilot, then the full benchmark (option 1).
+- Still open: the project's relationship to TypeSafe, the vendor of Jev, for R06.
+
+## Boundaries
+
+- No engine, protocol or storage behavior changes. The rename changes names only.
+- The Python package still needs Node and the CLI package. Bundling the host into the wheel is out of scope.
+- Git history is not rewritten unless D-oss-2 is 3. Under options 1 and 2, the internal names stay visible in old commits, old pull requests and the rc.14 release archive.
+- No paid model call is made except in the owner's own runs (E02, E05, E06).
+
+## Rollback
+
+- Documentation changes are reverted as commits.
+- A repository rename can be undone in the settings, and GitHub keeps redirecting the old URL.
+- A published version number can never be reused. npm allows unpublishing only under narrow conditions, for example within 72 hours; otherwise a version can only be deprecated. A PyPI release can be yanked. So the P03 dry runs and the P04 check come before the first real publish.
