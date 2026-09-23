@@ -1,6 +1,6 @@
 # SPEC-0011: Finish release-readiness engineering
 
-Date: 2026-09-21. Status: R01–R09 complete, including six successful remote CI jobs for source `cf574c4` and immutable MIT candidate rc.4. Deployment/model gates remain explicit in the readiness ledger.
+Date: 2026-09-21. Status: R01–R09 complete, including six successful remote CI jobs for source `cf574c4` and immutable MIT candidate rc.4. Deployment/model gates remain explicit in the readiness ledger. R10, added on 2026-09-23, is implemented and verified locally; its remote CI run is pending.
 
 ## Problem and scope
 
@@ -19,6 +19,7 @@ Complete reproducible cross-environment verification, correct proven defects, up
 - **R07 — MIT candidate:** Build a fresh immutable version of all five npm packages and Python wheel/sdist with MIT metadata and license files, coherent release identities, hashes and clean-install/bundle evidence. Preserve existing artifacts and the mapSpecifier/provider-isolation checks.
 - **R08 — Native runtime behavior:** Run the installed binaries through the engine against a bounded loopback gateway with synthetic credentials. Verify the four orchestration tools reach the native model-facing inventory, a bound tool returns real engine state, task approval completes after resource release, and retained native history is inspectable. Treat deferred tool discovery and runtime-created helper files as native behavior, without relaxing archive/path isolation or claiming model-quality acceptance.
 - **R09 — Remote fixture portability:** Python Unix-socket fixtures use an existing canonical short temporary root on both supported operating systems. Control terminal delivery explicitly when testing an incomplete drain, start short rollback windows after their native boundary, and separate transport/cleanup watchdogs from the behavior under test. The reusable adapter contract allocates a small test reserve; its deliberately unsafe bridge must still fail for missing background-resource retention.
+- **R10 — Test storage footprint:** Test engines use a 4 KiB emergency reserve, not the 256 MiB production default. `npm test` and `npm run test:python` load `tests/fixtures/reserve-guard.mjs`, which passes itself to every Node process the tests start through `NODE_OPTIONS`. A test process that would write more than 4 KiB to `emergency.reserve` fails before that write with `TEST_RESERVE_GUARD`, whose message names the process and the fix: an in-process engine rejects with it, and a CLI host prints it to stderr and exits 1. The runnable examples under `examples/` keep the production default, so the tests that run them still exercise it. Production defaults, the engine and the examples do not change.
 
 ## Verification
 

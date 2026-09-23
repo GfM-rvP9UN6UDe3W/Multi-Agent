@@ -201,3 +201,21 @@ After, on the same machine with the same command:
 Python suite, measured the same way with its own command: 39 reserves, **11 of 256 MiB** (2,816 MiB), from the CLI hosts started by `test_node_e2e` (4), `test_node_execution_isolation` (3), `test_node_reconcile` (3) and `test_fork_model` (1). The owner chose to fix these in the same change. Their configurations now set `"storage": {"emergencyBytes": 4096}`, as `test_store_namespaces` already did; none of the four checks storage. After: 39 reserves of 4 KiB, 156 KiB in total. Four interleaved pairs, each **79/79**: before 18.9–20.7 s (mean **19.6 s**), after 17.4–18.9 s (mean **18.0 s**), faster in each pair. Bytes written by all disks during a run: before 3.0–3.1 GiB, after 0.3–0.6 GiB.
 
 Not verified: the time saved on the Ubuntu runner, where the Node 24 test step took 79–97 s against 38–54 s on macOS; that needs a CI run.
+
+### R10: the reserve guard
+
+Three new test files brought back 25 of the 48 reserves within a week, so the owner chose a check that runs in both test commands, locally and in CI. [SPEC-0011](../specs/0011-release-readiness.md) R10 states it.
+
+`tests/fixtures/reserve-guard.mjs` wraps `fs.openSync`, `writeSync` and `closeSync` and calls `syncBuiltinESMExports()`. When a write would take a file named `emergency.reserve` past 4,096 bytes, it throws `TEST_RESERVE_GUARD` before writing, unless the process's entry script is under `examples/`. It adds its absolute, quoted path to `NODE_OPTIONS`, so the CLI hosts, fixtures and examples that tests start load it too. A child started with its own environment and no `NODE_OPTIONS` is not checked; today those are only runtime stubs. `npm test` loads the guard with `node --import`, and `npm run test:python` sets `NODE_OPTIONS` for Python, which passes it to the hosts it starts. The chain through npm, sh, Python and Node works on Node 22.18.0 and 24.14.0, including a path with a space.
+
+RED: `tests/contract/reserve-guard.test.ts` starts a Node process that loads only the guard, as a test file does, and that process starts a stdio CLI host. With an empty guard module, `0011-R10 a CLI host started by a test cannot write the 256 MiB default reserve` failed: the host exited 0 after writing a 268,435,456-byte reserve. `0011-R10 a 4 KiB test reserve passes the guard` passed, which is regression coverage.
+
+GREEN:
+
+- Both R10 tests pass on Node 24.14.0 and 22.18.0. The host exits 1 with `{"code":"TEST_RESERVE_GUARD","message":"<stateDir>/emergency.reserve would grow past 4096 bytes in …/main.ts host --config … --stdio. Test engines use storage: { emergencyBytes: 4096 }; …"}` on stderr, and its reserve file has 0 bytes. An in-process `createOrchestrator` rejects with the same code.
+- With this change's fixture edits reverted and the guard on, `npm test` failed 43 tests, all in the eleven files above, and `npm run test:python` failed 11, all in the four Python files. With the edits, both pass.
+- With the examples exception removed from the guard, exactly the three example tests failed with `TEST_RESERVE_GUARD`. The examples run under the guard and keep their default only through that exception.
+- Guarded `npm test`: **566/566** on Node 24.14.0 in three runs (43.5, 64.2 and 45.4 s; during the 64.2 s run other work on the machine held the load average near 8–11, and the same tests were slower across the board) and on Node 22.18.0 (44.7 s). Guarded `npm run test:python`: **79/79** on both.
+- Cost: starting Node with the guard took 22.0 ms against 18.9 ms without it (means of 30 interleaved runs), about 3 ms for each of the roughly 300 Node processes in a suite run.
+
+Limits: a Python stdio test reports only `Engine connection ended before the next complete response`. The guard's message is in the host's stderr, which the Python client keeps in `stderr_tail` but does not add to that error. A single-file `node --test` run is checked only when it adds `--import ./tests/fixtures/reserve-guard.mjs`. The remote CI run is pending.

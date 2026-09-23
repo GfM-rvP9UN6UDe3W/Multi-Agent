@@ -33,7 +33,7 @@ Follow `.prettierrc.json`: two-space indentation, single quotes, semicolons, tra
 
 Follow `CONTRIBUTING.md`: define numbered spec acceptance criteria, record meaningful RED/GREEN evidence, implement, and update documentation. Use `node:test` with `*.test.ts` and Python `unittest` with `test_*.py`. No numerical coverage threshold is configured.
 
-Test observable behavior and relevant failure paths. Wire or lifecycle changes require both suites and actual subprocess integration. Use temporary workspaces/state directories and explicit fake providers. Unix-socket tests require local IPC permissions; skipped tests are not passes. Offline fixtures do not establish real-model acceptance.
+Test observable behavior and relevant failure paths. Wire or lifecycle changes require both suites and actual subprocess integration. Use temporary workspaces/state directories and explicit fake providers. Give each test engine a 4 KiB emergency reserve (`storage: { emergencyBytes: 4096 }`); `npm test` and `npm run test:python` fail any process that would write a larger one, except the runnable examples. Unix-socket tests require local IPC permissions; skipped tests are not passes. Offline fixtures do not establish real-model acceptance.
 
 ## Commit & Pull Request Guidelines
 

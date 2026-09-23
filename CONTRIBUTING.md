@@ -29,7 +29,7 @@ Complete each increment in this order:
 5. Run relevant tests and `npm run typecheck`. Shared wire or lifecycle changes require both `npm test` and `npm run test:python`.
 6. Update the specification, runnable README examples, and verification evidence. Distinguish future interfaces from implemented behavior.
 
-Ordinary tests use temporary workspace/stateDir directories and a deterministic fake runtime, without login credentials or paid model requests. Real Claude/Codex acceptance must separately record versions, identity sources, task budgets, and model results; fake fixtures cannot prove it.
+Ordinary tests use temporary workspace/stateDir directories and a deterministic fake runtime, without login credentials or paid model requests. A test engine uses a 4 KiB emergency reserve (`storage: { emergencyBytes: 4096 }`); the test commands fail any other process that would write a larger one, except the runnable examples. Real Claude/Codex acceptance must separately record versions, identity sources, task budgets, and model results; fake fixtures cannot prove it.
 
 The foundation assumes a trusted local boundary under one OS user. Contributions must not silently expand network listeners, tool permissions, directory access, or automatic recovery. Preserve unknown external outcomes without blind retries. Generated idempotency keys must remain available for recovery after a lost receipt.
 
