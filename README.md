@@ -6,7 +6,7 @@ Orchvia runs Claude Code and Codex agents as a team from your own application: o
 - **Nothing is lost or silently repeated.** Tasks, messages, approvals and token usage are stored in SQLite before anything runs. After a crash, work whose outcome is unknown waits for you instead of being retried.
 - **You stay in charge.** Your code and the limits you configure decide what runs next, not a manager model. A result counts as done only after a person or a check you registered accepts it.
 
-![An application sends work to the Orchvia engine, which stores state in SQLite and coordinates Claude Code and Codex sessions through a durable mailbox. A person reviews and approves each result.](docs/images/orchestration-overview.svg)
+![Your application sends tasks to the Orchvia engine, which keeps its state and a mailbox in SQLite and runs Claude Code and Codex sessions that message each other through the mailbox. A person or a registered check accepts each result.](docs/images/orchestration-overview.svg)
 
 ## Quickstart
 

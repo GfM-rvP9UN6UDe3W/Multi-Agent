@@ -10,12 +10,6 @@ The project began with documents and diagrams. It now includes the engine, both 
 
 Companion: [SDK usage and detailed wiring](./guide.md), covering three operating modes, connection protocol, both language examples, MCP callbacks, model gateways, shutdown/recovery, and layered acceptance.
 
-## Orchestration flow
-
-The README uses a simplified overview for orientation. This detailed diagram retains the request lifecycle, parallel session work, durable mailbox, lifecycle controls, and recovery paths described by the design:
-
-![Detailed orchestration flow showing persisted requests, session selection, parallel agent work, durable mailbox, lifecycle control, and recovery](images/orchestration-flow.jpg)
-
 The 2026-09-19 design review clarified routing responsibility, per-request cost estimates, cost ownership, failed-assumption branches, retention, and transition deadlines. [SPEC-0003](./specs/0003-policy-retention-deadlines.md) A implements durable deadlines, unknown isolation, and owner attestation; see [evidence](./tdd/0003-a-evidence.md). B/C GC, routing and accounting are implemented under SPEC-0009 with offline evidence. Design targets and offline tests are not real-model acceptance.
 
 The second review's N1 is implemented in A2 with offline verification: separate execution/outcome accounting and a shared engine/adapter total budget, default 1800 seconds for new turns. N2 archive rollover is implemented under [B](./specs/0003-b-archive.md). N3 retains the joint dual-runtime first-release commitment while allowing independent provider development, acceptance, and readiness tracking.
@@ -75,6 +69,10 @@ Official documentation distinguishes programmatic [Codex SDK](https://developers
 The design does not depend on a future five-million-token window. Use actual model capacity; larger future windows can extend continuous execution under the same policy.
 
 ## 3. Architecture
+
+The README uses a simplified overview for orientation. This detailed diagram retains the request lifecycle, parallel session work, durable mailbox, lifecycle controls, and recovery paths described in this document:
+
+![Detailed orchestration flow showing persisted requests, session selection, parallel agent work, durable mailbox, lifecycle control, and recovery](images/orchestration-flow.jpg)
 
 ```mermaid
 flowchart TD

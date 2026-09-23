@@ -1,6 +1,6 @@
 # SPEC-0021: Open-source readiness
 
-Date: 2026-09-23. Status: approved by the owner on 2026-09-23, with D-oss-1 to D-oss-4 each set to option 1. G, R and C and the repository rename (N05) were merged in pull request #10. The rename (N), P01 to P03, P05, P06, R06, R10 and L03 were merged in pull request #11 (`f331930`); P04 runs with the first release. E01, E03 and E04 were merged in pull request #17 (`0b36181`). E02, E05 and E06 are not run: on 2026-09-23 the owner decided against paid model runs for now. On 2026-09-23 the owner published the five npm packages as 0.1.0, and npm trusted publishing and approval of releases in GitHub were set up (D-oss-13); The tagged release of 0.1.0 stopped in its dry run, before publishing anything; with the dry run corrected, 0.1.1 is the first release on PyPI and GitHub Releases, where P04 runs (D-rel-1). L01, L02 and L04 are not implemented yet. Evidence: [TDD-0021](../tdd/0021-open-source-readiness.md). The owner asked for one plan that answers an outside assessment of why the public repository draws little attention. The owner chose the name Orchvia (D-oss-5). The project has no relationship with TypeSafe. It supersedes no specification. It changes packaging ([SPEC-0010](0010-bundled-host-delivery.md), [SPEC-0011](0011-release-readiness.md)) and the documentation layout, not the engine.
+Date: 2026-09-23. Status: approved by the owner on 2026-09-23, with D-oss-1 to D-oss-4 each set to option 1. G, R and C and the repository rename (N05) were merged in pull request #10. The rename (N), P01 to P03, P05, P06, R06, R10 and L03 were merged in pull request #11 (`f331930`); P04 runs with the first release. E01, E03 and E04 were merged in pull request #17 (`0b36181`). E02, E05 and E06 are not run: on 2026-09-23 the owner decided against paid model runs for now. On 2026-09-23 the owner published the five npm packages as 0.1.0, and npm trusted publishing and approval of releases in GitHub were set up (D-oss-13); The tagged release of 0.1.0 stopped in its dry run, before publishing anything; with the dry run corrected, 0.1.1 is the first release on PyPI and GitHub Releases, where P04 runs (D-rel-1). L01, L02 and L04 are not implemented yet. L03's good first issue #14 was implemented by the maintainer as R11, keeping the outside contributor's commit. Evidence: [TDD-0021](../tdd/0021-open-source-readiness.md). The owner asked for one plan that answers an outside assessment of why the public repository draws little attention. The owner chose the name Orchvia (D-oss-5). The project has no relationship with TypeSafe. It supersedes no specification. It changes packaging ([SPEC-0010](0010-bundled-host-delivery.md), [SPEC-0011](0011-release-readiness.md)) and the documentation layout, not the engine.
 
 ## Why
 
@@ -61,6 +61,12 @@ The repository became public on 2026-09-19. A reader who arrives cannot tell wha
 - **R08** The README is at most 15 KB, checked by the R02 test.
 - **R09** Internal names follow D-oss-2. With option 1, no tracked file contains them, checked by a test that stores only hashes of the names. Git history is not rewritten.
 - **R10** The README that each generated npm package carries, and the PyPI description, describe the published package, link to the repository, and no longer say "unpublished".
+- **R11** The README's diagram is a simple overview for a first-time reader (issue #14): the application, the engine with its SQLite state, the Claude Code and Codex sessions, and the acceptance of each result. The detailed diagram stays in the design document, at the start of its architecture section.
+  - Every text takes its font from a CSS class or from the `font-family`, `font-size` and `font-weight` attributes. SVG has no `font` attribute, and browsers ignore it.
+  - No text is smaller than 16 px, and the viewBox is at most 1,200 wide, so the smallest text is at least 12 px when the image is shown 900 px wide (R05).
+  - The mailbox is drawn inside the engine, as part of its SQLite state, and the sessions message each other through it. Results leave the sessions, not the mailbox.
+  - The banner, the SVG's description and the README's alternative text say that a person or a registered check accepts each result, as the README's third reason does.
+  - A test checks the fonts, the sizes and the wording; the drawing is checked by eye on a rendering.
 
 ### C: Agent instruction files (D-oss-2)
 
@@ -127,7 +133,7 @@ The repository became public on 2026-09-19. A reader who arrives cannot tell wha
   - posts for r/ClaudeAI and r/ChatGPTCoding;
   - one article built on the benchmark.
   - Communities about local models are not targeted: the engine runs no local model.
-- **L03** Community files: issue and pull request templates, `SECURITY.md`, a `CONTRIBUTING.md` updated for outside contributors, and three "good first issue" items.
+- **L03** Community files: issue and pull request templates, `SECURITY.md`, a `CONTRIBUTING.md` updated for outside contributors, and three "good first issue" items. The maintainer implemented #14 as R11. It keeps the outside contributor's commit from pull request #15, merged unchanged; the corrections follow in a separate commit.
 - **L04** A social preview image and a short terminal recording of the quickstart.
 
 ## Timing invariants

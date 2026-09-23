@@ -189,3 +189,49 @@ Timing invariants, as approved:
 - The scripted gateway only reads and writes files, so the agent running the project's tests through sandboxed Bash is exercised only by a real run.
 - The stop proof cannot see a leftover process that left the workspace directory and holds no file in it.
 - The CI step runs for the first time with the pull request that adds it.
+
+## Good first issues (L03)
+
+Base: `5d95079`. Branch `community-12-13-14`. The maintainer implemented L03's three good first issues on one branch. Issue #14 keeps the outside contributor's commit: the head of pull request #15, `29fab73` by Gambit-Checkmate, is merged unchanged, and the corrections follow in a separate commit.
+
+### R11: the overview diagram (issue #14, pull request #15)
+
+#### RED
+
+`node --test --test-name-pattern 0021-R11 tests/contract/docs.test.ts`, run after merging `29fab73` and before any correction, failed with eight problems:
+
+- `a font attribute, which SVG does not have: <text x="592" y="319" text-anchor="middle" fill="#fff" font="700 18px system-ui, sans-serif">`. Browsers ignore the attribute, so the banner was drawn in a serif 16 px regular.
+- `"TypeScript or Python"`, `"Messages and results"` and `"remain available"` were 14 px, about 10.5 px when the image is shown 900 px wide.
+- `"A person reviews and approves each result": no font family, no px`.
+- The description, the banner and the README's alternative text named only a person, not a registered check.
+
+Two corrections concern the drawing and the layout, so a rendering checks them rather than the test: the mailbox stood outside the engine and the results passed through it, and the heading "Orchestration flow" that the pull request added to the design document put the three paragraphs about the design reviews under it.
+
+#### Changes
+
+- `docs/images/orchestration-overview.svg`, redrawn. Fonts come from CSS rules (`font-family`, `font-size`, `font-weight`); the smallest text is 16 px in a viewBox 1,200 wide. The engine holds the scheduler and its SQLite state, and the mailbox is part of that state; each session exchanges messages with the mailbox. Results leave the sessions and reach the application through the banner "A person or a registered check accepts each result". Connectors are drawn after the boxes, so no box covers an arrow. The file is 3.7 KB. As in the pull request, it sets no `width` or `height`, so a browser sizes it to the README's column; with them, Quick Look rendered only the left half.
+- The README's alternative text and the SVG's description say the same.
+- `docs/design.md`: the heading is removed, and the detailed diagram with its sentence opens section 3, Architecture.
+- The test reads the SVG's style rules, attributes and inline styles. It understands the CSS `font` shorthand, so it read the contributor's classes with their real sizes.
+
+#### GREEN
+
+- `node --test tests/contract/docs.test.ts tests/contract/naming.test.ts`: 11 of 11.
+- Rendered with Quick Look at 1,600 px, and with headless Chrome in a 900 px column as on GitHub: the text is sans-serif, the titles are bold, and the smallest text is 12 px.
+
+#### Mutation checks
+
+| Mutation | Result |
+| --- | --- |
+| The banner uses the `font` attribute again | caught |
+| Notes at 14 px | caught |
+| No font family | caught |
+| The description names only a person | caught |
+| The banner names only a person | caught |
+| The README's alternative text names only a person | caught |
+| A viewBox 1,600 wide | caught |
+
+#### Not verified
+
+- How github.com shows the image: it was checked with Chrome and Quick Look on this machine, before anything was pushed.
+- Fonts on Windows and Linux: `system-ui` falls back to Segoe UI, Roboto or the default sans-serif.

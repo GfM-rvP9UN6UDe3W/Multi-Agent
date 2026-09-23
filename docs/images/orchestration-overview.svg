@@ -1,51 +1,61 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 370" role="img" aria-labelledby="title desc">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 460" role="img" aria-labelledby="title desc">
   <title id="title">Orchvia orchestration overview</title>
-  <desc id="desc">An application sends work to the Orchvia engine. The engine stores durable state in SQLite and coordinates Claude Code and Codex sessions through a mailbox. A person reviews and approves each result.</desc>
+  <desc id="desc">Your application sends tasks to the Orchvia engine. The engine schedules them within your limits and runs them on Claude Code and Codex sessions, each of which keeps its history. The engine's SQLite state holds the tasks, approvals, token usage and a mailbox, through which the sessions message each other. A person or a registered check accepts each result.</desc>
   <defs>
     <marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
       <path d="M 0 0 L 10 5 L 0 10 z" fill="#53657d" />
     </marker>
     <style>
+      text { font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; text-anchor: middle; }
+      .title { fill: #172b4d; font-size: 22px; font-weight: 700; }
+      .heading { fill: #172b4d; font-size: 18px; font-weight: 700; }
+      .label { fill: #334766; font-size: 18px; font-weight: 400; }
+      .note { fill: #53657d; font-size: 16px; font-weight: 400; }
+      .banner { fill: #fff; font-size: 20px; font-weight: 700; }
       .box { fill: #fff; stroke: #b8c8dc; stroke-width: 2; }
-      .title { fill: #172b4d; font: 700 20px system-ui, sans-serif; }
-      .label { fill: #334766; font: 16px system-ui, sans-serif; }
-      .small { fill: #53657d; font: 14px system-ui, sans-serif; }
-      .line { fill: none; stroke: #53657d; stroke-width: 2.5; marker-end: url(#arrow); }
+      .part { fill: #f4f7fb; stroke: #c9d6e6; stroke-width: 1.5; }
       .accent { fill: #eaf3ff; stroke: #6b9bd2; stroke-width: 2; }
+      .line { fill: none; stroke: #53657d; stroke-width: 2.5; marker-end: url(#arrow); }
+      .both { marker-start: url(#arrow); }
     </style>
   </defs>
-  <rect width="1200" height="370" rx="18" fill="#f7f9fc" />
+  <rect width="1200" height="460" rx="18" fill="#f7f9fc" />
 
-  <rect class="box" x="35" y="118" width="190" height="112" rx="14" />
-  <text class="title" x="130" y="163" text-anchor="middle">Your application</text>
-  <text class="small" x="130" y="193" text-anchor="middle">TypeScript or Python</text>
+  <rect class="box" x="30" y="79" width="230" height="100" rx="14" />
+  <text class="title" x="145" y="124">Your application</text>
+  <text class="note" x="145" y="154">TypeScript or Python</text>
 
-  <path class="line" d="M225 174 H278" />
+  <rect class="accent" x="320" y="40" width="430" height="330" rx="16" />
+  <text class="title" x="535" y="80">Orchvia engine</text>
+  <rect class="box" x="345" y="100" width="380" height="58" rx="10" />
+  <text class="label" x="535" y="135">Schedules tasks within your limits</text>
+  <rect class="box" x="345" y="176" width="380" height="172" rx="10" />
+  <text class="heading" x="535" y="206">SQLite state</text>
+  <rect class="part" x="362" y="224" width="182" height="106" rx="8" />
+  <text class="note" x="453" y="270">Tasks, approvals</text>
+  <text class="note" x="453" y="294">and token usage</text>
+  <rect class="accent" x="560" y="224" width="148" height="106" rx="8" />
+  <text class="heading" x="634" y="270">Mailbox</text>
+  <text class="note" x="634" y="294">between agents</text>
 
-  <rect class="accent" x="285" y="78" width="285" height="192" rx="16" />
-  <text class="title" x="427" y="119" text-anchor="middle">Orchvia engine</text>
-  <rect class="box" x="320" y="145" width="215" height="46" rx="10" />
-  <text class="label" x="427" y="174" text-anchor="middle">Tasks and coordination</text>
-  <rect class="box" x="320" y="207" width="215" height="42" rx="10" />
-  <text class="label" x="427" y="234" text-anchor="middle">SQLite durable state</text>
+  <rect class="box" x="850" y="100" width="320" height="248" rx="16" />
+  <text class="title" x="1010" y="136">Agent sessions</text>
+  <text class="note" x="1010" y="160">each keeps its history</text>
+  <rect class="box" x="875" y="178" width="270" height="56" rx="10" />
+  <text class="label" x="1010" y="212">Claude Code session</text>
+  <rect class="box" x="875" y="270" width="270" height="56" rx="10" />
+  <text class="label" x="1010" y="304">Codex session</text>
 
-  <path class="line" d="M570 174 H625" />
+  <path class="line" d="M260 129 H337" />
+  <text class="note" x="290" y="117">tasks</text>
+  <path class="line" d="M725 129 H842" />
+  <text class="note" x="797" y="117">runs tasks</text>
+  <path class="line both" d="M716 258 L867 210" />
+  <path class="line both" d="M716 300 L867 298" />
+  <text class="note" x="797" y="272">messages</text>
+  <path class="line" d="M1010 348 V410 H145 V187" />
+  <text class="note" x="1022" y="386" style="text-anchor: start">results</text>
 
-  <rect class="box" x="632" y="78" width="263" height="192" rx="16" />
-  <text class="title" x="763" y="119" text-anchor="middle">Agent sessions</text>
-  <rect class="box" x="665" y="145" width="197" height="46" rx="10" />
-  <text class="label" x="763" y="174" text-anchor="middle">Claude Code</text>
-  <rect class="box" x="665" y="207" width="197" height="42" rx="10" />
-  <text class="label" x="763" y="234" text-anchor="middle">Codex</text>
-
-  <path class="line" d="M895 174 H946" />
-
-  <rect class="accent" x="953" y="118" width="212" height="112" rx="14" />
-  <text class="title" x="1059" y="158" text-anchor="middle">Durable mailbox</text>
-  <text class="small" x="1059" y="188" text-anchor="middle">Messages and results</text>
-  <text class="small" x="1059" y="209" text-anchor="middle">remain available</text>
-
-  <path class="line" d="M1059 230 V310 H130 V238" />
-  <rect x="390" y="286" width="405" height="52" rx="13" fill="#173b63" />
-  <text x="592" y="319" text-anchor="middle" fill="#fff" font="700 18px system-ui, sans-serif">A person reviews and approves each result</text>
+  <rect x="277" y="385" width="600" height="50" rx="13" fill="#173b63" />
+  <text class="banner" x="577" y="417">A person or a registered check accepts each result</text>
 </svg>
