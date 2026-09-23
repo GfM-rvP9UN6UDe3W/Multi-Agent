@@ -1,6 +1,6 @@
 # Multi-agent orchestration SDK usage and detailed wiring
 
-Updated 2026-09-21 for SPEC-0010. This guide describes implemented interfaces. The npm packages are published as 0.1.0; the Python package is not on PyPI yet, so Python uses a source build. The five npm packages are **ESM-only**; direct require is not exported. A Claude consumer installs SDK + engine + adapter-claude. See [the local RC and CJS/ESM bundled-host contract](acceptance/bundled-host.md). Offline process/transport/storage acceptance is recorded separately from real-model, sandbox, external-host and release acceptance in the [completion matrix](specs/0009-complete-design.md#completion-matrix).
+Updated 2026-09-23. This guide describes implemented interfaces. The npm packages are published as 0.1.0; the Python package is not on PyPI yet, so Python uses a source build. The five npm packages are **ESM-only**; direct require is not exported. A Claude consumer installs SDK + engine + adapter-claude. See [the local RC and CJS/ESM bundled-host contract](acceptance/bundled-host.md). Offline process/transport/storage acceptance is recorded separately from real-model, sandbox, external-host and release acceptance in the [completion matrix](specs/0009-complete-design.md#completion-matrix).
 
 ## 1. Choose an integration mode
 
@@ -376,7 +376,7 @@ const orch = await createOrchestrator({
 
 ### 8.3 Optional routing layer
 
-[SPEC-0018](./specs/0018-routing-layer.md) adds `@orchvia/sdk/routing` and `orchvia.routing`, and [SPEC-0019](./specs/0019-routing-corrections.md) corrects it; rc.13 includes the corrections, and the rc.12 package predates them. A judge answers typed questions about a request and the agents of one group. Code turns the answers into an ordinary `TaskSpec` with `contextPlan`, and the host submits it or not. The router adds no engine rule or storage. Its one engine addition is the read-only `context.checkRefs` of [SPEC-0020](./specs/0020-context-check.md), after rc.13, and every engine rule still applies to what is submitted.
+[SPEC-0018](./specs/0018-routing-layer.md) adds `@orchvia/sdk/routing` and `orchvia.routing`, and [SPEC-0019](./specs/0019-routing-corrections.md) corrects it; the published packages include both. A judge answers typed questions about a request and the agents of one group. Code turns the answers into an ordinary `TaskSpec` with `contextPlan`, and the host submits it or not. The router adds no engine rule or storage. Its one engine addition is the read-only `context.checkRefs` of [SPEC-0020](./specs/0020-context-check.md), after rc.13, and every engine rule still applies to what is submitted.
 
 **Setup.**
 - Create the router with `createRouter({ orchestrator, judge, runtimes, scope?, describe?, policy? })`, or `Router(orch, judge, read_only=..., writable=..., scope=..., describe=..., policy=...)` in Python.
