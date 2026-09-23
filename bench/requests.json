@@ -1,0 +1,22 @@
+[
+  {
+    "id": "X1",
+    "track": "restock",
+    "prompt": "Add restock/index.js exporting restock(inventory, name, quantity). It adds quantity to the item's stock and returns the new stock; an unknown item throws the same error as stockOf in src/inventory.js. Add tests in restock/index.test.js and make sure `npm test` passes."
+  },
+  {
+    "id": "Y1",
+    "track": "report",
+    "prompt": "Add report/index.js exporting lowStock(inventory, threshold). It returns the names of the items whose stock is below threshold, sorted alphabetically. Add tests in report/index.test.js and make sure `npm test` passes."
+  },
+  {
+    "id": "X2",
+    "track": "restock",
+    "prompt": "restock must throw a RangeError when quantity is not a positive integer: zero, negative, fractional or not a number. Update restock/index.test.js and make sure `npm test` passes."
+  },
+  {
+    "id": "Y2",
+    "track": "report",
+    "prompt": "Change lowStock so that it sorts by stock, lowest first, and by name when stocks are equal. Update report/index.test.js and make sure `npm test` passes."
+  }
+]

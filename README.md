@@ -27,13 +27,19 @@ The example uses a fake runtime, so it needs no account and calls no model. It r
 The second task reused the first agent's session: true
 ```
 
+With real Claude, the same two tasks run on one Claude Code session. You need Claude Code signed in (`claude auth login`); the example makes two small model calls:
+
+```sh
+node examples/typescript/quickstart-claude.ts
+```
+
 From Python, the same kind of task runs through a Node host that Python starts:
 
 ```sh
 PYTHONPATH=python/src python3 examples/python/fake_roundtrip.py
 ```
 
-To run real agents, install Claude Code or Codex and follow the [integration guide](docs/guide.md). The packages are not on npm or PyPI yet; the first release publishes them as `@orchvia/*` and `orchvia`. Until then, [build them from source](docs/reference.md#install).
+To let agents edit files, run Codex, or wire the engine into your application, follow the [integration guide](docs/guide.md). The packages are not on npm or PyPI yet; the first release publishes them as `@orchvia/*` and `orchvia`. Until then, [build them from source](docs/reference.md#install).
 
 ## How it compares
 

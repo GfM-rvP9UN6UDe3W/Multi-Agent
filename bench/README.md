@@ -1,0 +1,69 @@
+# Benchmark: the same work, three ways
+
+This benchmark measures what running agents through Orchvia costs and saves, compared with running Claude directly ([SPEC-0021](../docs/specs/0021-open-source-readiness.md) E03 to E06). Results are published whether or not they favor Orchvia.
+
+## The work
+
+A small JavaScript project ([fixture](fixture/)) gets four requests ([requests.json](requests.json)) on two independent tracks:
+
+| Request | Track | Asks for |
+| --- | --- | --- |
+| X1 | restock | `restock(inventory, name, quantity)` with tests |
+| Y1 | report | `lowStock(inventory, threshold)`, sorted by name, with tests |
+| X2 | restock | a `RangeError` for quantities that are not positive integers |
+| Y2 | report | sorting by stock, then by name |
+
+Each request passes when its hidden check ([checks](checks/)) and the track's own tests pass. The checks never live inside the agent's workspace.
+
+## The three arms
+
+All arms use the same model (Claude Sonnet 5 by default), the same Claude Code build (the one bundled with `@anthropic-ai/claude-agent-sdk`), the same tools (Read, Glob, Grep, Edit, Write, Bash), no user or project settings, and the same operating-system sandbox as Orchvia's writable Claude profile.
+
+- **single:** one Claude session does all four requests in order, resuming its history each time.
+- **fresh:** each request starts a new Claude session, in order.
+- **orchvia:** the two tracks run at the same time, each on its own session; each follow-up reuses its track's warm session. The harness acts as the reviewer: it runs the checks and accepts the result.
+
+## Running it
+
+This section is the only source for running the benchmark. A real run calls a model and spends money on the Claude Code account signed in on the machine; `--budget-usd` stops before the next request once the estimate reaches the limit.
+
+1. Sign in to Claude Code on the machine (the account owner, about 2 minutes, needs the internet):
+
+   ```sh
+   claude auth login
+   ```
+
+   - Success: `claude auth status` prints `"loggedIn": true`.
+   - Failure: a real run that stops with "OAuth session expired" means the sign-in is missing or expired; sign in again.
+
+2. Check the harness with the real Claude Code binary and no model (about a minute, offline):
+
+   ```sh
+   node bench/run.mjs --gateway --out /tmp/orchvia-bench-gateway.json
+   ```
+
+   - Success: every arm prints `4/4 passed`.
+   - Failure: do not start a paid run; the report's rows show which request failed and why.
+
+3. Run the pilot, one repetition per arm, within $10:
+
+   ```sh
+   node bench/run.mjs --reps 1 --budget-usd 10 --out bench/results/$(date +%F)-pilot.json
+   ```
+
+   - Success: the last line prints `"stopped":false` and the spent estimate.
+   - Failure: `"stopped":true` means the budget ended the run before every request ran; the report keeps what ran.
+
+4. The full run repeats step 3 with `--reps 3`, a budget the owner sets from the pilot's cost, and a `-full.json` name.
+
+`--fake` runs every arm offline with the reference solutions ([solutions](solutions/)) in place of the agent's edits, and `--fake-skip X2` leaves one request's solution out, which its checks must then fail. `npm test` runs both (`tests/contract/bench.test.ts`). `--gateway` answers every model request from a loopback gateway ([gateway.mjs](gateway.mjs)) that reads and writes the reference solutions through Claude Code's own tools; CI runs it on Linux and macOS with `--require-pass`, which exits with 1 unless every arm passes every request.
+
+In the orchvia arm, the engine releases a writable dispatch only after the host proves that its execution stopped. Both tracks share the workspace, so the harness's proof ([stop.mjs](stop.mjs)) waits for the dispatch's own Claude process to exit and then requires every process still using the workspace to descend from the harness; a process that outlived its parent fails the proof.
+
+## What is measured
+
+For every request: wall time, input, cache-read, cache-write and output tokens, and the estimated cost at [list prices](https://platform.claude.com/docs/en/about-claude/pricing) ($2 input, $10 output, $0.20 cache read and $2.50 cache write per million tokens for Claude Sonnet 5, checked on 2026-09-23). Every arm prices cache writes at the 5-minute rate, because the engine's usage records do not separate 1-hour writes ($4 per million); the two direct arms also record Claude Code's own cost figure, so a difference shows. A subscription plan is not billed per token; the estimate then measures usage, not a bill. Each report records the model, prices, machine and every request.
+
+## Results
+
+See [results](results/).
