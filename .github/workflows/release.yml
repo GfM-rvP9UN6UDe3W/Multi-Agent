@@ -59,10 +59,21 @@ jobs:
         run: PACKAGE_BUILD_PYTHON="$(command -v python)" node scripts/package-smoke.mjs out
       - name: Check publishing metadata without publishing
         shell: bash
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
         run: |
-          # A path must start with ./ or npm reads it as a GitHub repository.
-          # npm requires a tag for a pre-release version, such as the throwaway version of a pull request.
-          for archive in ./out/*.tgz; do npm publish "$archive" --dry-run --ignore-scripts --tag next; done
+          set -euo pipefail
+          for name in engine adapter-claude adapter-codex sdk cli; do
+            # The npm job skips a version that is already on the registry, so its dry run does too:
+            # npm refuses to publish over a version, and the first npm publish is made by hand.
+            if npm view "@orchvia/${name}@${VERSION}" version >/dev/null 2>&1; then
+              echo "@orchvia/${name}@${VERSION} is already published; the npm job skips it"
+              continue
+            fi
+            # A path must start with ./ or npm reads it as a GitHub repository.
+            # npm requires a tag for a pre-release version, such as the throwaway version of a pull request.
+            npm publish "./out/orchvia-${name}-${VERSION}.tgz" --dry-run --ignore-scripts --tag next
+          done
           python -m twine check --strict out/*.whl out/*.tar.gz
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
