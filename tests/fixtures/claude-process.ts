@@ -102,3 +102,19 @@ export function withClaudeProcess(
     }
   };
 }
+
+/**
+ * A forced cleanup kills the Claude process's group (SPEC-0023 P04). A test that needs a process to
+ * outlive its cleanup makes every group signal fail with EPERM until the test ends, as when
+ * permissions forbid the signal.
+ */
+export function refuseGroupSignals(t: { after(fn: () => void): void }): void {
+  const signal = process.kill;
+  process.kill = ((pid: number, sig?: string | number) => {
+    if (pid < 0) throw Object.assign(new Error('kill EPERM'), { code: 'EPERM' });
+    return signal.call(process, pid, sig);
+  }) as typeof process.kill;
+  t.after(() => {
+    process.kill = signal;
+  });
+}

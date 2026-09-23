@@ -15,7 +15,11 @@ import type {
   SessionSnapshot,
   TaskSnapshot,
 } from '../../packages/engine/src/types.ts';
-import { claudeProcess, stubbornClaudeProcess } from '../fixtures/claude-process.ts';
+import {
+  claudeProcess,
+  refuseGroupSignals,
+  stubbornClaudeProcess,
+} from '../fixtures/claude-process.ts';
 
 function input(evidence: ExecutionEvidence[]): RuntimeInput {
   return {
@@ -245,6 +249,8 @@ test('AC-R04 cleanup seals a saved spawn callback against delayed process creati
 });
 
 test('AC-R04 all observed child processes must exit before cleanup is confirmed', async (t) => {
+  // The children outlive their cleanup only because the adapter may not signal their groups.
+  refuseGroupSignals(t);
   const children: ChildProcessWithoutNullStreams[] = [];
   const evidence: ExecutionEvidence[] = [];
   const adapter = createClaudeAdapter({
@@ -283,7 +289,9 @@ async function until(check: () => Promise<boolean>): Promise<void> {
   }
 }
 
-test('AC-R04 a live Claude child blocks owner release and queued dispatch until late exit', async () => {
+test('AC-R04 a live Claude child blocks owner release and queued dispatch until late exit', async (t) => {
+  // The child outlives its cleanup only because the adapter may not signal its group.
+  refuseGroupSignals(t);
   const dir = await mkdtemp(join(tmpdir(), 'claude-cleanup-engine-'));
   const workspace = join(dir, 'workspace');
   await mkdir(workspace);

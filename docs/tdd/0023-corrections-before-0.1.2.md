@@ -135,6 +135,12 @@ Both workflows name `actions/checkout` v7.0.1, `actions/setup-node` v7.0.0, `act
 
 Checking the group before its SIGKILL guards against a reused group ID, which no test can bring about.
 
+### A regression that CI found
+
+The push CI run of `known-issues` failed `0003-A05 retained adapter cleanup blocks attestation after the observation loop ends` on macOS 14 with Node 24: `Missing expected rejection`, where `RUNTIME_STILL_ACTIVE` was expected. P04 caused it. The test keeps a process that ignores SIGTERM alive after a forced cleanup, and P04 now SIGKILLs that process's group when the cleanup window ends; once the kill landed, the owner's attestation was no longer refused. Run alone, the test passed 7 of 20 times with P04 and 20 of 20 without it; the full local suite had passed by chance. Logging every group SIGKILL across the test files of the Claude adapter found three more tests that rely on a process outliving its cleanup: `AC-R04 all observed child processes must exit before cleanup is confirmed`, `AC-R04 a live Claude child blocks owner release and queued dispatch until late exit`, which failed 3 of 20 runs, and `A2 Claude keeps a late matching terminal as resource evidence without reviving the business result`.
+
+These tests describe a process that the adapter cannot end. With P04 that happens only when signalling its group fails, so a new fixture, `refuseGroupSignals(t)`, makes every group signal fail with EPERM until the test ends. The four tests use it, and P04's own tests cover a group that is ended. Each of the three files then passed 30 of 30 runs, and 10 of 10 next to 18 busy loops.
+
 ## Not verified
 
 - W02 until the pull request's CI runs, and the npm publish through setup-node v7 until the 0.1.2 release.
