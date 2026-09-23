@@ -660,11 +660,20 @@ const questions: Record<string, JudgeQuestion> = {
 };
 const answer = JSON.stringify({ model: 'jev-1.13.0', answers: { w: { type: 'noul', noul: 0.9 } } });
 
-/** Plain HTTP server; `slowBody` sends the body five bytes at a time. */
-async function jevServer(reply: { status: number; slowBody?: boolean }) {
+/**
+ * Plain HTTP server; `slowBody` sends the body five bytes at a time. A request counts once its body
+ * has been read. `delayMs` holds each request back before that, as a slow machine does; a client that
+ * gives up meanwhile is never counted.
+ */
+async function jevServer(reply: { status: number; slowBody?: boolean; delayMs?: number }) {
   const requests: string[] = [];
   const server = createServer(async (req: IncomingMessage, res: ServerResponse) => {
-    for await (const _chunk of req);
+    if (reply.delayMs) await new Promise((resolve) => setTimeout(resolve, reply.delayMs));
+    try {
+      for await (const _chunk of req);
+    } catch {
+      return; // The client went away before its request was read.
+    }
     requests.push(req.url ?? '');
     const body = reply.status === 200 ? answer : '{}';
     res.writeHead(reply.status, {
@@ -717,6 +726,16 @@ async function slowHeaders() {
   };
 }
 const timedOut = (error: unknown) => (error as JudgeError).code === 'JUDGE_TIMEOUT';
+/**
+ * Waits past the moment the single retry would have been sent after a 503 (the 200 ms pause), then
+ * checks that it was not. The first request may count or not: on a slow machine the 50 ms deadline
+ * can pass before the server reads it, and the elapsed bound alone shows the pause was not awaited.
+ */
+async function noRetry(server: { requests: string[] }, started: number) {
+  const settle = started + 400 - performance.now();
+  if (settle > 0) await new Promise((resolve) => setTimeout(resolve, settle));
+  assert.ok(server.requests.length <= 1, `the judge retried: ${server.requests.length} requests`);
+}
 
 test('0019-C04 the Jev judge waits for its retry only while its deadline lasts', async () => {
   const server = await jevServer({ status: 503 });
@@ -731,7 +750,27 @@ test('0019-C04 the Jev judge waits for its retry only while its deadline lasts',
     );
     const elapsed = performance.now() - started;
     assert.ok(elapsed < 190, `the 200 ms retry pause outlived a 50 ms deadline: ${elapsed} ms`);
-    assert.equal(server.requests.length, 1);
+    await noRetry(server, started);
+  } finally {
+    await server.close();
+  }
+});
+
+test('0019-C04 the Jev judge keeps its deadline when the server is slower than the deadline', async () => {
+  // A slow machine delays the local server past the 50 ms deadline (CI run 35866873671).
+  const server = await jevServer({ status: 503, delayMs: 100 });
+  try {
+    const started = performance.now();
+    await assert.rejects(
+      createJevJudge({ apiKey: 'synthetic', baseUrl: server.baseUrl, timeoutMs: 50 }).evaluate({
+        state: {},
+        questions,
+      }),
+      timedOut,
+    );
+    const elapsed = performance.now() - started;
+    assert.ok(elapsed < 190, `the 200 ms retry pause outlived a 50 ms deadline: ${elapsed} ms`);
+    await noRetry(server, started);
   } finally {
     await server.close();
   }
