@@ -223,3 +223,9 @@ Limits: a Python stdio test reports only `Engine connection ended before the nex
 ### Temporary directories left by a failed startup
 
 The owner asked whether the tests remove their temporary files. None of the 847 reserve files written in the three measured runs remained. Listing the temporary directory before and after one run showed `npm test` leaving 12 directories, each holding an empty `workspace`. `setup()` in `tests/engine/host-workflow.test.ts` and in `tests/engine/fork-model.test.ts` creates its directory before `createEngine`; six cases in each file expect startup to fail, so `close()` never runs. Both helpers now remove their directory when startup fails; a directory the caller passed in stays. Running the two files left 12 new directories before the change and none after, **46/46**. A whole-suite run, logged to confirm that no other test process ran on the machine at the time, left no new entry; `npm run test:python` left none either.
+
+### On main `e1609fd`
+
+The change was rebased onto main `e1609fd`, which adds the benchmark harness (PR #17) and the CLI shutdown watchdogs (PR #16). There the guard found one more source: the harness's offline mode, `bench/run.mjs --fake`, which `tests/contract/bench.test.ts` runs, started its orchvia arm with the default reserve, and `0021-E04` failed with `TEST_RESERVE_GUARD`. `--fake` runs now use a 4 KiB reserve; `--gateway` and real benchmark runs keep the production default.
+
+On that tree: guarded `npm test` **576/576** on Node 24.14.0 (46.9 s) and 22.18.0 (46.9 s), and guarded `npm run test:python` **81/81** on both. A run wrote 408 reserves: 404 of 4 KiB, **3 of 256 MiB** from the examples, and one that the guard stopped at 0 bytes, in the R10 test's own host. It left no new temporary entry. Typecheck, format, generated-artifact and diff checks pass.
