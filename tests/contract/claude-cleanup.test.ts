@@ -49,6 +49,8 @@ async function stop(child: ChildProcessWithoutNullStreams): Promise<void> {
 }
 
 test('AC-R04 close and iterator completion keep a live child held until its observed exit', async (t) => {
+  // The child outlives its cleanup only because the adapter may not signal its group.
+  refuseGroupSignals(t);
   const evidence: ExecutionEvidence[] = [];
   let child!: ChildProcessWithoutNullStreams;
   const adapter = createClaudeAdapter({
@@ -185,6 +187,8 @@ test('AC-R04 rejecting close and iterator return still require actual owned proc
 });
 
 test('AC-R04 an owned spawn failure is observed without treating a later process error as exit', async (t) => {
+  // The live child below outlives its cleanup only because the adapter may not signal its group.
+  refuseGroupSignals(t);
   const evidence: ExecutionEvidence[] = [];
   let child!: ChildProcessWithoutNullStreams;
   const adapter = createClaudeAdapter({

@@ -13,7 +13,7 @@ import type {
   TaskSnapshot,
   UsageRecord,
 } from '../../packages/engine/src/types.ts';
-import { withClaudeProcess } from '../fixtures/claude-process.ts';
+import { refuseGroupSignals, withClaudeProcess } from '../fixtures/claude-process.ts';
 import { controlledExecutionBudget } from '../fixtures/execution-budget.ts';
 
 type UsageEvent = Extract<RuntimeEvent, { type: 'usage' }>;
@@ -242,7 +242,9 @@ test('AC-P06 resumed or initialized session mismatch cannot publish usage', asyn
   }
 });
 
-test('AC-P06 cleanup uncertainty and late terminal retain usage with unknown fields', async () => {
+test('AC-P06 cleanup uncertainty and late terminal retain usage with unknown fields', async (t) => {
+  // The held children outlive their cleanup only because the adapter may not signal their groups.
+  refuseGroupSignals(t);
   for (const late of [false, true]) {
     const clock = controlledExecutionBudget();
     let release!: () => void;
@@ -309,7 +311,11 @@ test('AC-P06 cleanup uncertainty and late terminal retain usage with unknown fie
       if (!late) assert.equal(events.filter((event) => event.type === 'usage').length, 1);
     } finally {
       release();
-      await new Promise((resolve) => setTimeout(resolve, 30));
+      // The released child exits after its SIGKILL. Wait until the adapter observes that exit; the
+      // deadline only reports a child that never exits.
+      const deadline = performance.now() + 5000;
+      while (adapter.hasActiveResources('s') && performance.now() < deadline)
+        await new Promise((resolve) => setTimeout(resolve, 5));
       await adapter.close();
     }
   }

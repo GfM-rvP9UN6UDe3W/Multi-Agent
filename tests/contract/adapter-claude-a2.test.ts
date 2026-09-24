@@ -171,6 +171,8 @@ test('A2 Claude reports matched terminal before cleanup and then full stop', asy
 });
 
 test('A2 Claude retains terminal evidence until delayed process exit confirms stop', async (t) => {
+  // The held child outlives its cleanup only because the adapter may not signal its group.
+  refuseGroupSignals(t);
   const evidence: Evidence[] = [];
   let finishReturn!: () => void;
   const returned = new Promise<IteratorResult<unknown>>((resolve) => {

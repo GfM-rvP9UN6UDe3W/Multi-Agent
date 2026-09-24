@@ -29,7 +29,11 @@ import type {
   SessionSnapshot,
   TaskSnapshot,
 } from '../../packages/engine/src/types.ts';
-import { claudeProcess, stubbornClaudeProcess } from '../fixtures/claude-process.ts';
+import {
+  claudeProcess,
+  refuseGroupSignals,
+  stubbornClaudeProcess,
+} from '../fixtures/claude-process.ts';
 
 const spec = {
   goal: 'offline cleanup recovery',
@@ -154,6 +158,8 @@ test('AC-R04.3 pending close without a terminal only confirms local exit', async
 });
 
 test('AC-R04.3 an uncooperative child keeps cleanup unknown after the bounded fallback', async (t) => {
+  // The uncooperative child outlives its cleanup only because the adapter may not signal its group.
+  refuseGroupSignals(t);
   const evidence: ExecutionEvidence[] = [];
   let cooperative!: ChildProcessWithoutNullStreams;
   let stubborn!: ChildProcessWithoutNullStreams;
