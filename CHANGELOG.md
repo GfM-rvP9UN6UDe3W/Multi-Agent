@@ -2,7 +2,7 @@
 
 All notable changes to Orchvia are recorded here. Versions follow [Semantic Versioning](https://semver.org/); before 1.0, a minor version may change the API.
 
-## [Unreleased]
+## [0.1.2] - 2026-09-24
 
 The first release on PyPI and on GitHub Releases. It carries the changes of 0.1.1, which was tagged but not published.
 
