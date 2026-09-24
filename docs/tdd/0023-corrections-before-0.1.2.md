@@ -1,6 +1,6 @@
 # TDD-0023: Corrections before 0.1.2
 
-Date: 2026-09-23. Base: the last tree of the branch `one-version`, which sits on `community-12-13-14`. Specification: [SPEC-0023](../specs/0023-corrections-before-0.1.2.md). The owner approved the designs of E03 and P on 2026-09-23 (D-known-6 = 1, D-known-7 = 1), and that of S on 2026-09-24 (D-known-9 = 1), before any of their code was written.
+Date: 2026-09-23. Base: the last tree of the branch `one-version`, which sits on `community-12-13-14`. Specification: [SPEC-0023](../specs/0023-corrections-before-0.1.2.md). The owner approved the designs of E03 and P on 2026-09-23 (D-known-6 = 1, D-known-7 = 1), and those of S and F03 on 2026-09-24 (D-known-9 = 1, D-known-10 = 1), before any of their code was written.
 
 ## F: Stdio fixture waits
 
@@ -32,6 +32,30 @@ The push CI run of `one-version` ([35886905684](https://github.com/masonlee39/or
 - 16 of 16 without a delay, with `realpathSync` 30 ms slower, and with it 100 ms slower.
 - Ten runs at once next to 18 busy loops: 10 of 10.
 - The file takes 6.2 seconds instead of 1.7.
+
+## F03: The half-budget close test
+
+### RED
+
+The push CI run of `release-0.1.2` ([35890483232](https://github.com/masonlee39/orchvia/actions/runs/35890483232)) failed `0022-C02 the close waits at most half of its timeoutMs` on macOS 14 with Node 22: `closed after 1225.98 ms`, where the test required less than 1,000 ms for a 1-second budget. The branch differs from `known-issues` only in its version. The test timed the whole `close()`, but the engine starts its deadline after it has written the shutdown receipt, and after the wait it writes the final receipt and closes the database, synchronously and without a bound, as TDD-0011 found for 0011-R03. Load alone did not reproduce it: ten runs of the old file at once, next to four busy loops on this machine's four cores, passed 10 of 10. A new test that makes every SQLite database close 600 ms slower during the call failed at once with the old measurement: `closed after 1716.08 ms`.
+
+### Changes
+
+`tests/contract/claude-close-interrupt.test.ts` records when the engine starts to close the Claude adapter, by wrapping the adapter's `close`. The half-budget test requires that moment, not the end of `close()`, to come at least 490 ms and less than 1 second after the call. The new test, `0022-C02 a slow database close does not count against the half-budget wait`, checks that the slowed close took at least 1.1 seconds and requires the same wait. SPEC-0022 C03 now says that the budget bounds the wait, not the whole close.
+
+### GREEN
+
+- 5 of 5 in the file; the slowed close took about 1.7 seconds and the wait still ended in time.
+- Ten runs at once next to four busy loops on four cores: 10 of 10.
+
+### Mutation checks
+
+| Mutation | Result |
+| --- | --- |
+| The engine waits the whole budget instead of half | caught by both tests: the close runs out of its budget and reports `SHUTDOWN_INCOMPLETE` |
+| The database close is not slowed | caught by the check that the close took at least 1.1 seconds |
+
+A wait between half and the whole budget still passes: the upper bound leaves the rest of the budget for the receipt before the wait and for timers on a loaded runner (SPEC-0023 F03).
 
 ## E: Why a host did not start
 
@@ -194,4 +218,4 @@ The push CI run of `known-issues` ([35890482938](https://github.com/masonlee39/o
 - F on GitHub's runners: the reproduction delays the host start on this machine.
 - P with a real Claude Code process and on Linux: the tests use a stand-in process on macOS; CI runs them on Linux too. A descendant that leaves its group, such as a daemon, stays invisible to the check, as the specification states.
 - P on Windows, where the adapter does not create groups and leaves `processes` out.
-- S on GitHub's runners until its next CI run: here the preloads stand in for a loaded runner. S on Windows, where the socket host does not run.
+- S and F03 on GitHub's runners until their next CI run: here the preloads and the slowed database close stand in for a loaded runner. S on Windows, where the socket host does not run.
