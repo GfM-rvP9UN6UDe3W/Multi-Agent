@@ -74,6 +74,26 @@ The file's host fixture waits, after the task runs, until the session has its na
 - 3 of 3 with and without the preload.
 - Other tests that control a session were checked: `lifecycle-wire` already waits for the native session ID, and the others control an idle session or a mocked client. `0022-C04` waits a fixed 50 ms for the adapter to observe the turn's first activity before it reads its target; it has not failed and is left as it is.
 
+## F05: Example watchdogs
+
+### RED
+
+The release run of `v0.1.2` ([35962234095](https://github.com/masonlee39/orchvia/actions/runs/35962234095)) failed `AC-P08 runnable forwarding example survives lost acknowledgment and replay without double accounting` on Ubuntu 24.04 with Node 24: the test killed the example when its 5-second limit ran out (`killed: true`, `signal: 'SIGTERM'`), and the example had written nothing. The same commit passed the test in the run's three other contract jobs, in 0.5 to 1.1 seconds, and in every job of the push CI of `main` ([35959253378](https://github.com/masonlee39/orchvia/actions/runs/35959253378)). In the failed job other tests also ran slowly, up to 17 times slower than in the run's Ubuntu and Node 22 job. The example's engine writes and flushes the production emergency reserve of 256 MiB before it opens (SPEC-0011 R10); on this machine that takes about 0.3 of the example's 0.55 seconds. `AC-H09` gives `hosted.ts`, which does the same, the same 5 seconds. Two reproductions, neither committed:
+
+- A test-only preload that makes the flush of `emergency.reserve` 6 seconds slower in a process started from `examples/` failed both tests after 5 seconds with the CI failure: `killed: true`, `signal: 'SIGTERM'`, no output.
+- Eight runs of both tests at once, next to four busy loops on this machine's four cores: 15 of 16 failed the same way; the one that passed took 4.8 seconds.
+
+The failed job of the release run was run again once on the same tag and passed. The packages of the release contain no tests, so the tag keeps its commit.
+
+### Changes
+
+Both tests give their example 60 seconds, as the quickstart tests do, and `AC-H09` allows its test 70 seconds, so that the limit on the example reports first, with the example's output. The examples and their own 2-second deadlines, which start only after the engine opened, are unchanged.
+
+### GREEN
+
+- With the flush 6 seconds slower: 2 of 2, in 7.8 seconds each. With it 70 seconds slower: both failed after 60 seconds with the same kill, so an example that hangs is still reported.
+- Eight runs of both tests at once, next to four busy loops: 16 of 16, in 7.8 to 11.1 seconds.
+
 ## E: Why a host did not start
 
 ### RED

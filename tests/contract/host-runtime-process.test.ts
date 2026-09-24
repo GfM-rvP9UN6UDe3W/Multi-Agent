@@ -156,9 +156,11 @@ asyncio.run(main())
 
 test(
   'AC-H09 runnable offline host example completes only after simulated task review',
-  { timeout: 10000 },
+  { timeout: 70_000 },
   async () => {
-    const { stdout } = await execute(process.execPath, [example], { timeout: 5000 });
+    // A watchdog only. The example writes the production 256 MiB emergency reserve (SPEC-0011 R10),
+    // and a loaded runner can make that many times slower (SPEC-0023 F05).
+    const { stdout } = await execute(process.execPath, [example], { timeout: 60_000 });
     assert.deepEqual(JSON.parse(stdout), {
       runtime: 'offline-host',
       nativeIdWhileQueued: null,

@@ -148,7 +148,9 @@ test('AC-P08 runnable forwarding example survives lost acknowledgment and replay
   const example = fileURLToPath(
     new URL('../../examples/typescript/usage-forwarding.ts', import.meta.url),
   );
-  const { stdout } = await execute(process.execPath, [example], { timeout: 5000 });
+  // A watchdog only. The example writes the production 256 MiB emergency reserve (SPEC-0011 R10),
+  // and a loaded runner can make that many times slower (SPEC-0023 F05).
+  const { stdout } = await execute(process.execPath, [example], { timeout: 60_000 });
   assert.deepEqual(JSON.parse(stdout), {
     runtime: 'fake',
     replayed: true,
