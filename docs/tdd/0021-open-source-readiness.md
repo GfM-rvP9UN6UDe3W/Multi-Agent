@@ -119,7 +119,7 @@ Base: `702a3d7`. Branch `orchvia-rename`, merged as pull request #11 (`f331930`)
 
 ### Not verified yet
 
-- The release workflow's publishing jobs and `scripts/registry-check.mjs` run for the first time with a tag; only the build job runs on pull requests.
+- The release workflow's publishing jobs and `scripts/registry-check.mjs` run for the first time with a tag; only the build job runs on pull requests. They ran with `v0.1.2` and passed; see "The first release (P04)" below.
 - The `v0.1.0` tag's run ([35865838151](https://github.com/masonlee39/orchvia/actions/runs/35865838151)) passed the offline matrix and stopped in the build job's dry run: `npm error You cannot publish over the previously published versions: 0.1.0.` The npm job skips a version already on the registry, but the dry run did not, and 0.1.0 had been published by hand first (P06). Nothing was published. The same local script failed the same way on the published archives; the corrected step skips the five published versions and still dry-runs a new one (0.0.0-rc.999). By the owner's choice (D-rel-1), 0.1.1 is the first release on PyPI and GitHub Releases, and 0.1.0 stays on npm only. Later, D-rel-2 stopped 0.1.1 before publishing (see "One version" below).
 
 ## Real-model evidence (E)
@@ -346,5 +346,15 @@ A local build of 0.1.1 from its tag's commit `5d95079`, made as the release work
 
 ### Not verified
 
-- The release workflow's new Version step and the registry check's new assertions run only with the next tag. The registry check's generated scripts were checked with `py_compile` and `node --check`.
+- The release workflow's new Version step and the registry check's new assertions run only with the next tag. The registry check's generated scripts were checked with `py_compile` and `node --check`. Both ran with `v0.1.2` and passed; see "The first release (P04)" below.
 - D-rel-2 on GitHub was carried out on 2026-09-23: the deployments of the v0.1.1 run ([35868558191](https://github.com/masonlee39/orchvia/actions/runs/35868558191)) were rejected, so the run ended without publishing. npm lists only 0.1.0, and neither PyPI nor GitHub Releases has 0.1.1.
+
+## The first release (P04)
+
+The tag `v0.1.2`, on the merge commit `fc6ad55` of pull request #23, started the release workflow ([35962234095](https://github.com/masonlee39/orchvia/actions/runs/35962234095)) on 2026-09-24.
+
+- The Version step accepted the tag: it equals the version in `package.json`, the changelog has its section, and the commit is on `main` (P09). The build's offline installation reported 0.1.2 everywhere (P08).
+- In the first attempt, one of the offline matrix's jobs, Ubuntu 24.04 with Node 24, failed one test: the forwarding example of AC-P08 did not finish within its test's 5-second limit on a slow runner. The same commit passed that test in every other job. The publishing jobs did not start, so nothing was published. That job was run again once and passed. The test was corrected on `main` afterwards; see [SPEC-0023 F05](../specs/0023-corrections-before-0.1.2.md).
+- The owner approved the `npm` and `pypi` deployments in the run. The npm job published the five packages through trusted publishing, in dependency order; the PyPI job published the wheel and the sdist. The GitHub release "Orchvia 0.1.2" was created after both, with the five npm archives, the wheel, the sdist, both manifests and `SHA256SUMS`; its notes are the changelog's 0.1.2 section.
+- P04 passed on both runners, Ubuntu 24.04 with Node 22.18.0 and Python 3.11.13, and macOS 14 with Node 24.14.0 and Python 3.14.6. The Ubuntu runner's log shows that for about three minutes after the npm job ended the registry answered 404 for the new versions, first for `@orchvia/engine@0.1.2` and last for `@orchvia/sdk@0.1.2`, and that the check waited for each, as it is written to. Both runners then printed `{"version":"0.1.2","pythonVersion":"0.1.2","results":[{"mode":"npm-registry","status":"completed","reused":true},{"mode":"pypi-registry","status":"completed"}]}`.
+- The npm registry lists 0.1.2 as the `latest` version of all five packages, and PyPI lists `orchvia` 0.1.2 with its wheel and sdist.

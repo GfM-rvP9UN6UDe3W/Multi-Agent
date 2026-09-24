@@ -60,6 +60,8 @@ For each package, on npmjs.com under the package's Settings, Trusted publishing:
 2. The maintainer adds a pending publisher in the owner's signed-in browser, at https://pypi.org/manage/account/publishing/: project `orchvia`, owner `masonlee39`, repository `orchvia`, workflow `release.yml`, environment `pypi`.
    - Success: the page lists the pending publisher. It does not reserve the name, so the first release follows soon after.
 
+The first release, 0.1.2, created the project `orchvia` through this publisher on 2026-09-24.
+
 ### 5. GitHub environments
 
 Done on 2026-09-23. The environments `npm` and `pypi` exist under the repository's Settings, Environments. Each has one protection rule: the owner (`masonlee39`) is a required reviewer, administrators cannot bypass it, and self-review is allowed, so the owner approves the runs they start.

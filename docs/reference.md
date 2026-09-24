@@ -20,7 +20,7 @@ The npm packages are published. Install the three Claude packages together in th
 npm install @orchvia/sdk @orchvia/engine @orchvia/adapter-claude
 ```
 
-Keep the generated npm lockfile. The Python package is not on PyPI yet. Until it is, build it, or all packages, from source into a fresh directory:
+Keep the generated npm lockfile. Install the Python package from PyPI with `pip install orchvia`. To build it, or all packages, from source instead, use a fresh directory:
 
 ```sh
 npm ci --ignore-scripts
