@@ -9,26 +9,13 @@ import { tmpdir } from 'node:os';
 export async function smokeClaudeBundles({ root, isolated, run }) {
   const results = [];
   const modules = join(isolated, 'node_modules');
-  // Host-owned SDK files are copied from exact locked development dependencies.
+  // Host-owned SDK files are copied from the exact locked development dependency; Zod is not:
+  // the adapter's MCP server needs none (SPEC-0026).
   // No dependency discovery, network access, credentials or native binaries at runtime.
-  for (const name of ['@anthropic-ai/claude-agent-sdk', 'zod']) {
-    await mkdir(dirname(join(modules, name)), { recursive: true });
-    await cp(join(root, 'node_modules', name), join(modules, name), { recursive: true });
-    if (name === '@anthropic-ai/claude-agent-sdk')
-      run(
-        process.execPath,
-        [
-          '--input-type=module',
-          '-e',
-          `
-import assert from 'node:assert/strict';
-import {createClaudeMcpServer} from '@orchvia/adapter-claude';
-await assert.rejects(createClaudeMcpServer({definitions:[],call:async()=>null}), error => error.code === 'CLAUDE_DEPENDENCY_UNAVAILABLE' && error.message.includes('zod 4.4.3') && error.cause?.message.includes('zod'));
-`,
-        ],
-        { cwd: isolated },
-      );
-  }
+  const sdkName = '@anthropic-ai/claude-agent-sdk';
+  await mkdir(dirname(join(modules, sdkName)), { recursive: true });
+  await cp(join(root, 'node_modules', sdkName), join(modules, sdkName), { recursive: true });
+  await assert.rejects(access(join(modules, 'zod')));
   const native = JSON.parse(
     await readFile(join(modules, '@anthropic-ai/claude-agent-sdk/package.json'), 'utf8'),
   );
@@ -90,6 +77,7 @@ await assert.rejects(createClaudeMcpServer({definitions:[],call:async()=>null}),
         name,
       );
     assert.ok(!inputs.some((path) => /@orchvia\/(adapter-codex|cli)\//.test(path)));
+    assert.ok(!inputs.some((path) => /node_modules\/zod\//.test(path)), 'Zod in the bundle');
     for (const output of Object.values(result.metafile.outputs))
       for (const dependency of output.imports)
         assert.ok(

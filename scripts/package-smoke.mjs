@@ -151,18 +151,25 @@ try {
     );
     assertOutput(run(process.execPath, ['check.mjs'], { cwd: isolated }), 'ok');
     if (selected === 'claude') {
+      // SPEC-0026 Z02: the MCP server needs neither the Claude SDK nor Zod, and neither is installed.
       await writeFile(
-        join(isolated, 'missing-peer.mjs'),
+        join(isolated, 'without-peers.mjs'),
         `import assert from 'node:assert/strict';
 import {createClaudeMcpServer} from '@orchvia/adapter-claude';
-await assert.rejects(createClaudeMcpServer({definitions:[],call:async()=>null}),e=>e.code==='CLAUDE_DEPENDENCY_UNAVAILABLE'&&e.message.includes('zod 4.4.3'));
-console.log('missing-peer-ok');`,
+import {ORCHESTRATION_TOOLS} from '@orchvia/engine/internal/tools';
+for (const name of ['zod','@anthropic-ai/claude-agent-sdk']) await assert.rejects(import(name),{code:'ERR_MODULE_NOT_FOUND'});
+const server=await createClaudeMcpServer({definitions:ORCHESTRATION_TOOLS,call:async()=>null});
+const transport={async start(){},async close(){},async send(message){transport.answer(message);}};
+await server.instance.connect(transport);
+const answer=await new Promise(resolve=>{transport.answer=resolve;transport.onmessage({jsonrpc:'2.0',id:1,method:'tools/list'});});
+assert.deepEqual(answer.result.tools.map(tool=>tool.name),ORCHESTRATION_TOOLS.map(tool=>tool.name));
+console.log('without-peers-ok');`,
       );
       assertOutput(
-        run(process.execPath, ['missing-peer.mjs'], { cwd: isolated }),
-        'missing-peer-ok',
+        run(process.execPath, ['without-peers.mjs'], { cwd: isolated }),
+        'without-peers-ok',
       );
-      await rm(join(isolated, 'missing-peer.mjs'));
+      await rm(join(isolated, 'without-peers.mjs'));
       results.push(...(await smokeClaudeBundles({ root, isolated, run })));
     }
     if (selected === 'codex') {

@@ -1,4 +1,3 @@
-import { createRequire } from 'node:module';
 import assert from 'node:assert/strict';
 import { mkdtemp, mkdir, rm } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -8,7 +7,6 @@ import {
   createClaudeAdapter,
   type ClaudeQueryFactory,
 } from '../../packages/adapter-claude/src/index.ts';
-import { createClaudeMcpServer } from '../../packages/adapter-claude/src/mcp.ts';
 import { ORCHESTRATION_TOOLS } from '../../packages/engine/src/tools.ts';
 const path = process.argv[2];
 if (!path) throw new Error('Pass the absolute installed SDK module path; no native CLI will run');
@@ -18,12 +16,8 @@ await mkdir(join(root, 'workspace'));
 await mkdir(join(root, 'state'));
 const calls: string[] = [];
 const permissions: string[] = [];
+// No createMcpServer: the adapter serves its own MCP server, which needs no SDK (SPEC-0026 Z06).
 const adapter = createClaudeAdapter({
-  createMcpServer: (tools) =>
-    createClaudeMcpServer(tools, {
-      sdk: sdk as unknown as typeof import('@anthropic-ai/claude-agent-sdk'),
-      zod: createRequire(path!)('zod'),
-    }),
   query: (req) =>
     sdk.query({
       ...req,

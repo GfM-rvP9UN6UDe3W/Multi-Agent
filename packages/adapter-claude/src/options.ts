@@ -83,7 +83,7 @@ export interface ClaudeOptionsContext<Extra extends object = object> {
 export interface ClaudeAdapterConfig<Extra extends object = object> {
   /** Engine provider name; defaults to `claude`. Distinct names let one engine run several profiles. */
   provider?: string;
-  /** Host injection owns native dependency selection; also supply MCP/inspection callbacks as needed. */
+  /** Host injection owns native dependency selection; also supply `inspectSession` when needed. */
   query?: ClaudeQueryFactory<Extra>;
   createMcpServer?: (tools: RuntimeTools) => unknown | Promise<unknown>;
   inspectSession?: (input: RuntimeInspectionInput) => Promise<RuntimeInspection>;

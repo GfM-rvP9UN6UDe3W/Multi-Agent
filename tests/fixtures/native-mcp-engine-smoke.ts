@@ -1,4 +1,3 @@
-import { createRequire } from 'node:module';
 import assert from 'node:assert/strict';
 import { mkdtemp, mkdir, rm } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -10,7 +9,6 @@ import {
   type ClaudeQueryFactory,
 } from '../../packages/adapter-claude/src/index.ts';
 import { createCodexAdapter } from '../../packages/adapter-codex/src/index.ts';
-import { createClaudeMcpServer } from '../../packages/adapter-claude/src/mcp.ts';
 const [provider, sdkPath] = process.argv.slice(2);
 if (!['claude', 'codex'].includes(provider!))
   throw new Error('Choose offline claude or codex peer');
@@ -23,11 +21,6 @@ await mkdir(join(root, 'work'));
 const adapter =
   provider === 'claude'
     ? createClaudeAdapter({
-        createMcpServer: (tools) =>
-          createClaudeMcpServer(tools, {
-            sdk: sdk as unknown as typeof import('@anthropic-ai/claude-agent-sdk'),
-            zod: createRequire(sdkPath!)('zod'),
-          }),
         query: (request) =>
           sdk!.query({
             ...request,

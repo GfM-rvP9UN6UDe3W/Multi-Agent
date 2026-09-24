@@ -721,10 +721,7 @@ export function createClaudeAdapter<Extra extends object = object>(
           };
         }
         if (input.orchestrationTools) {
-          if (config.query && !config.createMcpServer)
-            throw new Error(
-              'Host-provided query requires matching config.createMcpServer when orchestration tools are enabled; no default SDK was loaded',
-            );
+          // The adapter's own server loads no SDK, so it also serves an injected query (SPEC-0026 Z06).
           const host = options as Record<string, unknown>;
           if (record(host.mcpServers)?.agent_orch !== undefined)
             throw new Error('The agent_orch MCP server name is adapter-owned');

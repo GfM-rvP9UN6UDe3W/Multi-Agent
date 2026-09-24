@@ -20,11 +20,7 @@ import { fileURLToPath } from 'node:url';
 import { connectOrchestrator } from '../packages/sdk-typescript/src/index.ts';
 import { createEngine } from '../packages/engine/src/index.ts';
 import { startUnixHost } from '../packages/cli/src/host.ts';
-import {
-  createClaudeAdapter,
-  createClaudeMcpServer,
-  inspectClaudeSession,
-} from '../packages/adapter-claude/src/index.ts';
+import { createClaudeAdapter, inspectClaudeSession } from '../packages/adapter-claude/src/index.ts';
 import { createCodexAdapter } from '../packages/adapter-codex/src/index.ts';
 
 const [provider, outputPath, executable] = process.argv.slice(2);
@@ -276,8 +272,8 @@ try {
       throw new Error(
         'Claude smoke uses the installed SDK-owned binary; custom executable paths require host stop evidence',
       );
-    const sdk = await import('@anthropic-ai/claude-agent-sdk'),
-      zod = await import('zod');
+    // The adapters serve their own MCP server, which needs neither this SDK nor Zod (SPEC-0026).
+    const sdk = await import('@anthropic-ai/claude-agent-sdk');
     adapter = createClaudeAdapter({
       query(request) {
         evidence.policy = {
@@ -302,7 +298,6 @@ try {
           interrupt: () => native.interrupt(),
         };
       },
-      createMcpServer: (tools) => createClaudeMcpServer(tools, { sdk, zod }),
       inspectSession: (input) => inspectClaudeSession(input, sdk),
       requestTimeoutMs: 30000,
       turnTimeoutMs: 60000,
@@ -335,7 +330,6 @@ try {
           };
           return sdk.query(request);
         },
-        createMcpServer: (tools) => createClaudeMcpServer(tools, { sdk, zod }),
         inspectSession: (input) => inspectClaudeSession(input, sdk),
         requestTimeoutMs: 30000,
         turnTimeoutMs: 60000,

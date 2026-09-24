@@ -10,7 +10,6 @@ import {
   inspectClaudeSession,
 } from '@orchvia/adapter-claude';
 import * as nativeSdk from '@anthropic-ai/claude-agent-sdk';
-import * as zod from 'zod';
 
 // Replaced with an owned, compiled protocol fixture by package-bundles-smoke.mjs.
 const peerSource = '__OWNED_CLAUDE_PEER__';
@@ -51,10 +50,8 @@ async function main() {
           return tools.call(name, request);
         },
       };
-      return createClaudeMcpServer(
-        counted,
-        mode === 'installed-claude-mcp' ? undefined : { sdk: nativeSdk, zod },
-      );
+      // The adapter's own server needs neither the SDK nor Zod in any mode (SPEC-0026).
+      return createClaudeMcpServer(counted);
     },
     inspectSession: (input) =>
       inspectClaudeSession(input, {

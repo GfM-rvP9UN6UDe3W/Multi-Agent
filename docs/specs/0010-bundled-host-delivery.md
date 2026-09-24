@@ -22,3 +22,5 @@ Both ordinary package installations and node_modules-free bundles are required. 
 ## Completion
 
 D01–D06 are implemented and verified for the local RC. The final run passed 435 Node tests, 48 Python tests and nine package modes. The first concurrent Node run had one crash-fixture timeout; its isolated rerun and subsequent full run passed without changing its deadline or assertions. See [complete evidence](../tdd/0010-bundled-host-delivery.md). RC 0.1.0-rc.1 is local and unpublished; actual acceptance inside an Electron application remains pending.
+
+Later change: [SPEC-0026](0026-claude-mcp-without-zod.md) removed the Zod peer of D03 and the MCP half of D04. The adapter's MCP server needs neither the SDK nor Zod, so an injected query needs no MCP factory; inspection still requires the host's reader.
