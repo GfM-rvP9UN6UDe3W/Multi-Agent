@@ -57,6 +57,23 @@ The push CI run of `release-0.1.2` ([35890483232](https://github.com/masonlee39/
 
 A wait between half and the whole budget still passes: the upper bound leaves the rest of the budget for the receipt before the wait and for timers on a loaded runner (SPEC-0023 F03).
 
+## F04: Interrupt lifecycle control targets
+
+### RED
+
+The push CI of `known-issues` at `c08928a` ([35957601160](https://github.com/masonlee39/orchvia/actions/runs/35957601160)) failed `AC-I04 late native terminal releases capacity without completing expired pause or replaying` on macOS 14 with Node 22: `sessions.control` failed with `STALE_TARGET: Control target changed`. The same commit passed that job in the push run of another branch. The test's host fixture returns as soon as the task runs; the test then reads the session and pauses it with that snapshot as the target. The runtime's acceptance of the native session changes the session's revision, and it can arrive after the task runs. A test-only preload, not committed, that makes the test process wait 200 ms before it sends `sessions.control`, as a loaded runner can, failed both TypeScript tests of the file that pause a session with `STALE_TARGET` every time; the Python test, whose client the preload does not reach, passed. Without the preload all three passed.
+
+The same job also failed `0019-C04 the Jev judge waits for its retry only while its deadline lasts`, the flake that the branch `test-0019-c04-deadline` fixes. That branch is now merged into `known-issues`, so its fix is part of this pull request.
+
+### Changes
+
+The file's host fixture waits, after the task runs, until the session has its native session ID, with a 3-second deadline that only detects a hang, before it hands the session to a test.
+
+### GREEN
+
+- 3 of 3 with and without the preload.
+- Other tests that control a session were checked: `lifecycle-wire` already waits for the native session ID, and the others control an idle session or a mocked client. `0022-C04` waits a fixed 50 ms for the adapter to observe the turn's first activity before it reads its target; it has not failed and is left as it is.
+
 ## E: Why a host did not start
 
 ### RED
