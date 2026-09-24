@@ -17,7 +17,7 @@ Last recorded on 2026-09-23 at source `7af317c`, the merge of pull request #9.
   - integration inside an external application;
   - economic benefit: speed and cost compared with other ways of running agents;
   - Windows.
-- **Published:** 0.1.0 of the five npm packages on 2026-09-23 (`@orchvia/engine`, `sdk`, `adapter-claude`, `adapter-codex`, `cli`). The owner published archives built at `f331930`; each registry archive is byte-identical to that build, and a Linux CI build of the same source produces the same bytes. Later npm releases go through the release workflow with trusted publishing, after the owner approves them in GitHub. The Python package is not on PyPI yet.
+- **Published:** 0.1.2 on 2026-09-24, from the tag `v0.1.2` at `fc6ad55`, by the [release workflow](https://github.com/masonlee39/orchvia/actions/runs/35962234095) after the owner approved it: the five npm packages through trusted publishing, the Python package `orchvia` on PyPI, and a [GitHub release](https://github.com/masonlee39/orchvia/releases/tag/v0.1.2) with the same archives and their SHA-256 sums. The workflow then installed the packages from npm and PyPI into empty directories on Ubuntu with Node 22.18 and on macOS 14 with Node 24.14, checked that each npm archive has the bytes it built, and ran a quickstart and a Python host (SPEC-0021 P04). Before that, 0.1.0 of the five npm packages on 2026-09-23 (`@orchvia/engine`, `sdk`, `adapter-claude`, `adapter-codex`, `cli`): the owner published archives built at `f331930`; each registry archive is byte-identical to that build, and a Linux CI build of the same source produces the same bytes. 0.1.1 was tagged but not published.
 
 The [remaining-gate ledger](acceptance/readiness.md) lists every open gate and what would close it.
 

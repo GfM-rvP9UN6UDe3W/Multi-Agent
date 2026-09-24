@@ -45,7 +45,7 @@ To use Orchvia in your own project, install it from npm (Node.js 22.18 or later)
 npm install @orchvia/sdk @orchvia/engine @orchvia/adapter-claude
 ```
 
-Use `@orchvia/adapter-codex` for Codex and add `@orchvia/cli` for a separate host. The Python package `orchvia` is not on PyPI yet; until it is, [build it from source](docs/reference.md#install). To let agents edit files, run Codex, or wire the engine into your application, follow the [integration guide](docs/guide.md).
+Use `@orchvia/adapter-codex` for Codex and add `@orchvia/cli` for a separate host. For Python 3.11 or later, `pip install orchvia` installs the [Python SDK](python/README.md), which starts or connects to the Node host of `@orchvia/cli`. To let agents edit files, run Codex, or wire the engine into your application, follow the [integration guide](docs/guide.md).
 
 ## How it compares
 
