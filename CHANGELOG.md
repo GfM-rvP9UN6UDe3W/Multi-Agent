@@ -2,6 +2,13 @@
 
 All notable changes to Orchvia are recorded here. Versions follow [Semantic Versioning](https://semver.org/); before 1.0, a minor version may change the API.
 
+## [Unreleased]
+
+### Fixed
+
+- `events.read` with `taskId`, which `events({ taskId })` uses in both SDKs, reads only that task's events, through its index, and a page that is not full moves the cursor to the store's last event. On a store with a long history a new task's first event had reached the iterator seconds late: 5 seconds behind 10,000 events of other tasks, 25 seconds behind 50,000 (SPEC-0024 E).
+- The engine finds pending approvals, persisted messages and pending handoffs through partial indexes instead of reading those whole tables before every call, in every scheduler pass and dispatch, and when a task is cancelled. Each call had cost about 22 ms more with 10,000 finished approvals and messages and 140 ms more with 50,000, and one idle event subscriber had kept the engine's thread up to 88% busy (SPEC-0024 X).
+
 ## [0.1.2] - 2026-09-24
 
 The first release on PyPI and on GitHub Releases. It carries the changes of 0.1.1, which was tagged but not published.

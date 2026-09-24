@@ -912,9 +912,14 @@ class LocalEngine implements Engine {
     try {
       const now = this.clock.wallNow();
       const due: HandoffRequest[] = [];
-      for (const row of this.store.db
-        .prepare("SELECT data FROM handoffs WHERE json_extract(data,'$.status')='pending'")
-        .all() as { data: string }[]) {
+      // Through handoffs_pending_expiry, in creation order (SPEC-0024 X01, X02).
+      for (const row of (
+        this.store.db
+          .prepare(
+            "SELECT rowid AS ordinal,data FROM handoffs WHERE json_extract(data,'$.status')='pending'",
+          )
+          .all() as { ordinal: number; data: string }[]
+      ).sort((a, b) => a.ordinal - b.ordinal)) {
         const handoff = JSON.parse(row.data) as HandoffRequest;
         const at = Date.parse(handoff.expiresAt);
         if (at <= now) due.push(handoff);
@@ -1906,9 +1911,18 @@ class LocalEngine implements Engine {
     });
   }
   private expireApprovals(): void {
-    const expired = this.store
-      .all<ApprovalRequest>('approvals')
-      .filter((a) => a.status === 'pending' && Date.parse(a.expiresAt) <= this.clock.wallNow());
+    // Through approvals_pending_expiry, so finished approvals cost nothing. An ORDER BY rowid would
+    // make SQLite scan the table instead; the few due rows are put in creation order here
+    // (SPEC-0024 X01, X02).
+    const expired = (
+      this.store.db
+        .prepare(
+          "SELECT rowid AS ordinal,data FROM approvals WHERE json_extract(data,'$.status')='pending' AND json_extract(data,'$.expiresAt')<=?",
+        )
+        .all(this.time()) as { ordinal: number; data: string }[]
+    )
+      .sort((a, b) => a.ordinal - b.ordinal)
+      .map((row) => JSON.parse(row.data) as ApprovalRequest);
     if (!expired.length) return;
     this.store.transaction(() => {
       for (const approval of expired) {
@@ -2809,8 +2823,7 @@ class LocalEngine implements Engine {
             } else {
               this.invalidateApproval(task);
               this.saveTask(task, 'cancelled', 'cancelled_by_client');
-              for (const message of this.store.all<MessageSnapshot>('messages')) {
-                if (message.taskId !== task.id || message.status !== 'persisted') continue;
+              for (const message of this.persistedMessages('taskId', task.id)) {
                 message.status = 'expired';
                 this.store.put('messages', message.id, message);
                 const outbox = this.store.get<Record<string, unknown>>('outbox', message.id);
@@ -3567,24 +3580,29 @@ class LocalEngine implements Engine {
     this.kick();
     return op;
   }
+  /**
+   * Persisted messages of a session or task, in creation order, through messages_persisted_expiry
+   * (SPEC-0024 X01).
+   */
+  private persistedMessages(field: 'toSessionId' | 'taskId', id: string): MessageSnapshot[] {
+    return (
+      this.store.db
+        .prepare(
+          `SELECT rowid AS ordinal,data FROM messages WHERE json_extract(data,'$.status')='persisted' AND json_extract(data,'$.${field}')=?`,
+        )
+        .all(id) as { ordinal: number; data: string }[]
+    )
+      .sort((a, b) => a.ordinal - b.ordinal)
+      .map((row) => JSON.parse(row.data) as MessageSnapshot);
+  }
   private pendingMessages(sessionId: string): MessageSnapshot[] {
-    return this.store
-      .all<MessageSnapshot>('messages')
-      .filter(
-        (m) =>
-          m.toSessionId === sessionId &&
-          m.status === 'persisted' &&
-          (!m.expiresAt || Date.parse(m.expiresAt) > this.clock.wallNow()),
-      );
+    return this.persistedMessages('toSessionId', sessionId).filter(
+      (m) => !m.expiresAt || Date.parse(m.expiresAt) > this.clock.wallNow(),
+    );
   }
   /** A closed session never runs again, so no message to it stays pending (SPEC-0017 A05). */
   private expireStoppedMessages(sessionId: string): void {
-    for (const row of this.store.db
-      .prepare(
-        "SELECT data FROM messages WHERE json_extract(data,'$.status')='persisted' AND json_extract(data,'$.toSessionId')=?",
-      )
-      .all(sessionId) as { data: string }[]) {
-      const message = JSON.parse(row.data) as MessageSnapshot;
+    for (const message of this.persistedMessages('toSessionId', sessionId)) {
       message.status = 'expired';
       this.store.put('messages', message.id, message);
       const outbox = this.store.get<Record<string, unknown>>('outbox', message.id);
@@ -3602,11 +3620,14 @@ class LocalEngine implements Engine {
     }
   }
   private expireMessages(): void {
-    const expired = this.store.db
-      .prepare(
-        "SELECT data FROM messages WHERE json_extract(data,'$.status')='persisted' AND json_extract(data,'$.expiresAt')<=?",
-      )
-      .all(this.time()) as { data: string }[];
+    // Through messages_persisted_expiry, in creation order (SPEC-0024 X01, X02).
+    const expired = (
+      this.store.db
+        .prepare(
+          "SELECT rowid AS ordinal,data FROM messages WHERE json_extract(data,'$.status')='persisted' AND json_extract(data,'$.expiresAt')<=?",
+        )
+        .all(this.time()) as { ordinal: number; data: string }[]
+    ).sort((a, b) => a.ordinal - b.ordinal);
     if (!expired.length) return;
     this.store.transaction(() => {
       for (const row of expired) {
