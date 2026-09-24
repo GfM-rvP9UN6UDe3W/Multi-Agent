@@ -118,7 +118,7 @@ Read the relevant specification before changing behavior. Resolve implementation
 | `docs/specs/0020-context-check.md` | The read-only `context.checkRefs` method and the router's use of it |
 | `docs/specs/0021-open-source-readiness.md` | Open-source readiness: README, documentation layout, name, publishing, evidence and launch |
 | `docs/specs/0022-close-interrupt-and-verification-feedback.md` | Interrupting close waits for interrupted turns; verification retries and events say why a check failed |
-| `docs/specs/0023-corrections-before-0.1.2.md` | Corrections before 0.1.2: stdio fixture waits, the Python SDK's host start errors, workflow actions pinned on Node.js 24, and the design for process identity in the stop proof |
+| `docs/specs/0023-corrections-before-0.1.2.md` | Corrections before 0.1.2: stdio fixture waits, the Python SDK's host start errors, workflow actions pinned on Node.js 24, the design for process identity in the stop proof, and stop signals while a socket host starts |
 | `docs/tdd/*.md` | Observed RED/GREEN evidence for each increment |
 | `schemas/protocol.schema.json` | Normative wire data definitions |
 

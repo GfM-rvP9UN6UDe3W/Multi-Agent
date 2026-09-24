@@ -1,6 +1,6 @@
 # TDD-0023: Corrections before 0.1.2
 
-Date: 2026-09-23. Base: the last tree of the branch `one-version`, which sits on `community-12-13-14`. Specification: [SPEC-0023](../specs/0023-corrections-before-0.1.2.md). The owner approved the designs of E03 and P on 2026-09-23 (D-known-6 = 1, D-known-7 = 1) before any of their code was written.
+Date: 2026-09-23. Base: the last tree of the branch `one-version`, which sits on `community-12-13-14`. Specification: [SPEC-0023](../specs/0023-corrections-before-0.1.2.md). The owner approved the designs of E03 and P on 2026-09-23 (D-known-6 = 1, D-known-7 = 1), and that of S on 2026-09-24 (D-known-9 = 1), before any of their code was written.
 
 ## F: Stdio fixture waits
 
@@ -157,9 +157,41 @@ The push CI run of `known-issues` failed `0003-A05 retained adapter cleanup bloc
 
 These tests describe a process that the adapter cannot end. With P04 that happens only when signalling its group fails, so a new fixture, `refuseGroupSignals(t)`, makes every group signal fail with EPERM until the test ends. The four tests use it, and P04's own tests cover a group that is ended. Each of the three files then passed 30 of 30 runs, and 10 of 10 next to 18 busy loops.
 
+## S: Stop signals while a socket host starts
+
+### RED
+
+The push CI run of `known-issues` ([35890482938](https://github.com/masonlee39/orchvia/actions/runs/35890482938)) failed `0023-P05 orchvia host shuts down in order on SIGHUP` on Ubuntu with Node 24: the host wrote `orchvia listening on ...` and then died of the signal, `{ code: null, signal: 'SIGHUP' }`. `packages/cli/src/main.ts` wrote that line and only then registered its signal handlers, and `startUnixHost` accepted connections before it returned, while it set the socket's permissions.
+
+`node --test tests/contract/host-signals.test.ts` failed 4 of 4 against that code, each in about 0.2 seconds:
+
+- `0023-S01 0023-S02`, with a preload that stalls the host for 300 ms right after its ready line: SIGHUP, SIGTERM and SIGINT each killed the host, `{ code: null, signal: 'SIGHUP' }` and likewise for the other two.
+- `0023-S03`, with a preload that stalls the host's startup for 300 ms once its socket accepts connections: SIGTERM killed it, `{ code: null, signal: 'SIGTERM' }`.
+
+### Changes
+
+- `packages/cli/src/main.ts`: `hostSignals()` registers the SIGTERM, SIGINT and SIGHUP handlers as soon as the engine has opened its state, before the socket exists. A signal that arrives before the host has started is kept; `attach` gives the handlers the host's close and runs it at once when a signal is waiting. The ready line is written after `attach`, and not at all when a signal is waiting. The stdio host registers the same way, before it reads any input.
+- `tests/fixtures/stall-after-ready.ts` and `tests/fixtures/stall-before-ready.ts`: the two test-only preloads.
+- The guide says from when the host handles the signals, and the reference lists SIGHUP with the others.
+
+### GREEN
+
+- `node --test tests/contract/host-signals.test.ts`: 4 of 4. With `tests/contract/cli-shutdown.test.ts` and `tests/contract/claude-process-groups.test.ts`: 25 of 25.
+- Ten runs of the new file at once next to four busy loops on four cores: 10 of 10.
+
+### Mutation checks
+
+| Mutation | Result |
+| --- | --- |
+| The handlers are registered after the ready line, as before | caught by all four tests |
+| The handlers are registered once the host has started, before the ready line (moving only the line) | caught by `0023-S03`; the three `0023-S01` tests pass |
+| A signal that arrives while the host starts is dropped | caught by `0023-S03`, after its 30-second watchdog |
+| The ready line is written although a signal is waiting | caught by `0023-S03` |
+
 ## Not verified
 
 - W02 until the pull request's CI runs, and the npm publish through setup-node v7 until the 0.1.2 release.
 - F on GitHub's runners: the reproduction delays the host start on this machine.
 - P with a real Claude Code process and on Linux: the tests use a stand-in process on macOS; CI runs them on Linux too. A descendant that leaves its group, such as a daemon, stays invisible to the check, as the specification states.
 - P on Windows, where the adapter does not create groups and leaves `processes` out.
+- S on GitHub's runners until its next CI run: here the preloads stand in for a loaded runner. S on Windows, where the socket host does not run.

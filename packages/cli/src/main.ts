@@ -37,17 +37,24 @@ function print(value: unknown) {
   process.stdout.write(JSON.stringify(value) + '\n');
 }
 
-async function waitForHostSignals(
-  closed: Promise<void>,
-  close: (options: CloseOptions) => Promise<void>,
-  options: CloseOptions,
-) {
+/**
+ * Takes the host's stop signals before it accepts connections (SPEC-0023 S01). A signal that arrives
+ * while the host starts is kept, and the host shuts down in order once `attach` gives it the close
+ * action (S03).
+ */
+function hostSignals() {
+  let target:
+    | { close: (options: CloseOptions) => Promise<void>; options: CloseOptions }
+    | undefined;
+  let requested = false;
   let stopping = false;
   let operationId: string | undefined;
   const stop = () => {
-    if (stopping) return;
+    requested = true;
+    if (!target || stopping) return;
     stopping = true;
-    close({ ...options, ...(operationId ? { operationId } : {}) })
+    target
+      .close({ ...target.options, ...(operationId ? { operationId } : {}) })
       .catch((error) => {
         const pendingId =
           error.operationId ?? error.details?.operationId ?? error.data?.operationId;
@@ -68,13 +75,21 @@ async function waitForHostSignals(
   process.on('SIGINT', stop);
   // SPEC-0023 P05: Claude processes lead their own groups, so a closing terminal reaches only the host.
   process.on('SIGHUP', stop);
-  try {
-    await closed;
-  } finally {
-    process.removeListener('SIGTERM', stop);
-    process.removeListener('SIGINT', stop);
-    process.removeListener('SIGHUP', stop);
-  }
+  return {
+    /** A stop signal arrived, and the host must not announce that it is ready (S02). */
+    get requested() {
+      return requested;
+    },
+    attach(close: (options: CloseOptions) => Promise<void>, options: CloseOptions) {
+      target = { close, options };
+      if (requested) stop();
+    },
+    remove() {
+      process.removeListener('SIGTERM', stop);
+      process.removeListener('SIGINT', stop);
+      process.removeListener('SIGHUP', stop);
+    },
+  };
 }
 
 export async function main(argv = process.argv.slice(2)): Promise<void> {
@@ -114,18 +129,25 @@ export async function main(argv = process.argv.slice(2)): Promise<void> {
       mode: config.shutdown?.mode ?? 'interrupt',
       timeoutMs: config.shutdown?.timeoutMs ?? (stdio ? OWNER_EOF_TIMEOUT_MS : 1000),
     } satisfies CloseOptions;
+    // Until here a stop signal ends the process like a crash during startup: no client can connect
+    // yet, and recovery dispatches nothing. From here it shuts the host down in order (SPEC-0023 S).
+    const signals = hostSignals();
     try {
       if (stdio) {
         const connection = startStdioHost(engine);
-        await waitForHostSignals(connection.closed, connection.shutdown, shutdown);
+        signals.attach(connection.shutdown, shutdown);
+        await connection.closed;
       } else {
         const host = await startUnixHost(engine, { socketPath: socketPath! });
-        process.stderr.write(`orchvia listening on ${socketPath}\n`);
-        await waitForHostSignals(host.closed, host.close, shutdown);
+        signals.attach(host.close, shutdown);
+        if (!signals.requested) process.stderr.write(`orchvia listening on ${socketPath}\n`);
+        await host.closed;
       }
     } catch (error) {
       await engine.close({ mode: 'interrupt', timeoutMs: 1000 }).catch(() => {});
       throw error;
+    } finally {
+      signals.remove();
     }
     return;
   }

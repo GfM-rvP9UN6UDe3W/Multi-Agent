@@ -12,6 +12,7 @@ The first release on PyPI and on GitHub Releases. It carries the changes of 0.1.
 - The engine's `engineVersion`, the `sdkVersion` that both SDKs send, and the versions that the MCP servers and the Codex client report now follow the release. The builds had rewritten only the package manifests, so these stayed at 0.1.0 (SPEC-0021 P08, P09).
 - When the host that the Python SDK started ends before it answers, the error ends with the host's error output, which `error.data["stderrTail"]` holds in full, instead of only `CONNECTION_CLOSED` (SPEC-0023 E01, E02).
 - The Python SDK notices that its host exited even while a process the host left behind keeps its output open: pending requests fail within about a second with `CONNECTION_CLOSED` instead of waiting for their timeout, and the SDK closes its ends of the host's pipes (SPEC-0023 E03).
+- `orchvia host --socket` handles SIGTERM, SIGINT and SIGHUP before its socket accepts connections, and writes `orchvia listening on` only after that. A signal sent as soon as that line appeared, or while the host was still starting, could end the host at once instead of shutting it down in order (SPEC-0023 S).
 
 ### Added
 

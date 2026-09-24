@@ -1,6 +1,6 @@
 # SPEC-0023: Corrections before 0.1.2
 
-Date: 2026-09-23. Status: approved by the owner and implemented: F01, E01, E02 and W with D-known-1 = 1, D-known-2 = 1 and D-known-3 = 2 on 2026-09-23; F02, found by CI on 2026-09-24, with D-known-8 = 1; E03, found while testing E02, with D-known-6 = 1; and P, implemented before the release (D-known-4 = 1), with its design approved as D-known-7 = 1. The owner decided that 0.1.2 is released only after every known issue is solved, and that the verification gaps that the README lists as not verified do not block it (D-known-5 = 1). Evidence: [TDD-0023](../tdd/0023-corrections-before-0.1.2.md).
+Date: 2026-09-23. Status: approved by the owner and implemented: F01, E01, E02 and W with D-known-1 = 1, D-known-2 = 1 and D-known-3 = 2 on 2026-09-23; F02, found by CI on 2026-09-24, with D-known-8 = 1; E03, found while testing E02, with D-known-6 = 1; and P, implemented before the release (D-known-4 = 1), with its design approved as D-known-7 = 1; and S, found by the CI run of `known-issues` on 2026-09-24, with D-known-9 = 1. The owner decided that 0.1.2 is released only after every known issue is solved, and that the verification gaps that the README lists as not verified do not block it (D-known-5 = 1). Evidence: [TDD-0023](../tdd/0023-corrections-before-0.1.2.md).
 
 ## Why
 
@@ -10,6 +10,10 @@ Besides the work already on branches (issues #12 to #14, one version number in S
 - **E:** the Python SDK hides why its host did not start. It raises `CONNECTION_CLOSED` with empty `data`, while the host printed `{"code":"INVALID_CONFIG",...}` on its error output.
 - **W:** every CI job warns that its actions run on Node.js 20, which GitHub deprecates. The offline workflow also names actions by tags that can move.
 - **P:** a host's stop observer cannot tell which operating-system processes belong to a dispatch.
+
+CI found one more on 2026-09-24:
+
+- **S:** a socket host announces that it is ready, and accepts connections, before it handles its stop signals, so a signal in between kills it.
 
 ## Acceptance criteria
 
@@ -60,3 +64,20 @@ Tests: an offline query whose Claude process starts a grandchild that sleeps. Th
 Environments: macOS and Linux. Windows is unchanged and stays unverified. The downstream host is told to call `processGroupsStopped` in its observer.
 
 Rollback: `processes` is optional, and `processGroupsStopped` returns false without it, so reverting the adapter change leaves hosts that use it conservative.
+
+### S: Stop signals while a socket host starts
+
+`orchvia host --socket` wrote `orchvia listening on PATH` and only then handled its stop signals, and its socket accepted connections even earlier, while the host set the socket's permissions. A signal in either window ended the host by the signal's default action. A process manager or a test that signals as soon as it reads the line could kill it, and a turn that a client had started in the first window was not interrupted in order. Since P01, Claude processes no longer receive a terminal's SIGHUP, so a host killed this way leaves them running. The push CI run of `known-issues` found it: `0023-P05` saw `{ code: null, signal: 'SIGHUP' }` on Ubuntu with Node 24. The race is older than P05, which was the first test to signal on the line.
+
+- **S01** From the moment the socket accepts connections until the host's close completes, SIGTERM, SIGINT and SIGHUP run the configured shutdown: the engine closes in the configured mode, the connections close, the socket file is removed and the process exits with code 0. None of them ends the host by its default action.
+- **S02** The host writes `orchvia listening on PATH` only once S01 holds, and never after a stop signal arrived while it started.
+- **S03** A stop signal that arrives while the host starts is kept: the host shuts down in order as soon as it has started.
+
+Timing invariants:
+
+- The host handles the signals from the moment the engine has opened its state, before it creates the socket. Before that, while the host reads its configuration and opens and recovers the state, a signal still ends the process like a crash during startup: no client can connect yet, recovery dispatches nothing, and the next start recovers as after any crash. The guide says so.
+- The stdio host already handled its signals before it read any input, and does not change.
+
+Approved as D-known-9 = 1. Alternatives considered: moving only the ready line after the handlers, which leaves the window while the socket accepts connections before the host has started; and waiting in the test before it signals, which hides the race from the test but not from a process manager.
+
+Tests: test-only preloads stall a host for 300 ms right after its ready line, and after its socket accepts connections but before it has started. SIGHUP, SIGTERM and SIGINT sent on the ready line end the host with code 0 and remove its socket. SIGTERM sent while the host starts does the same without a ready line, and a second host then starts with the same state and socket path.
