@@ -52,6 +52,7 @@ Found on the way:
 - The packed engine and adapter installed next to Zod 4.6.5 and SDK 0.3.281 without an error, and the installed server answered `tools/list` with the four tools.
 - Outside CI, with Zod 4.6.5: SDK 0.3.241, 0.3.274 and 0.3.281 each passed the standalone MCP smoke and the actual-engine smoke.
 - The real Claude binary of SDK 0.3.274 (`node scripts/native-gateway-smoke.mjs claude`), with Zod 4.6.5 in the workspace: nine cases passed. The binary reported `agent_orch` as `connected` with the four tools, and its model requests carried their JSON Schemas, with the description of `request`.
+- The real Codex binary 0.153.4 (`node scripts/native-gateway-smoke.mjs codex`), whose bridge now answers through the shared code: six cases passed.
 
 ## Mutation checks
 
