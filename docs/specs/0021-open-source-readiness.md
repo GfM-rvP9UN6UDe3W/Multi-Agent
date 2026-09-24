@@ -1,6 +1,6 @@
 # SPEC-0021: Open-source readiness
 
-Date: 2026-09-23. Status: approved by the owner on 2026-09-23, with D-oss-1 to D-oss-4 each set to option 1. G, R and C and the repository rename (N05) were merged in pull request #10. The rename (N), P01 to P03, P05, P06, R06, R10 and L03 were merged in pull request #11 (`f331930`); P04 runs with the first release. E01, E03 and E04 were merged in pull request #17 (`0b36181`). E02, E05 and E06 are not run: on 2026-09-23 the owner decided against paid model runs for now. On 2026-09-23 the owner published the five npm packages as 0.1.0, and npm trusted publishing and approval of releases in GitHub were set up (D-oss-13); The tagged release of 0.1.0 stopped in its dry run, before publishing anything; with the dry run corrected, 0.1.1 is the first release on PyPI and GitHub Releases, where P04 runs (D-rel-1). L01, L02 and L04 are not implemented yet. Evidence: [TDD-0021](../tdd/0021-open-source-readiness.md). The owner asked for one plan that answers an outside assessment of why the public repository draws little attention. The owner chose the name Orchvia (D-oss-5). The project has no relationship with TypeSafe. It supersedes no specification. It changes packaging ([SPEC-0010](0010-bundled-host-delivery.md), [SPEC-0011](0011-release-readiness.md)) and the documentation layout, not the engine.
+Date: 2026-09-23. Status: approved by the owner on 2026-09-23, with D-oss-1 to D-oss-4 each set to option 1. G, R and C and the repository rename (N05) were merged in pull request #10. The rename (N), P01 to P03, P05, P06, R06, R10 and L03 were merged in pull request #11 (`f331930`); P04 runs with the first release. E01, E03 and E04 were merged in pull request #17 (`0b36181`). E02, E05 and E06 are not run: on 2026-09-23 the owner decided against paid model runs for now. On 2026-09-23 the owner published the five npm packages as 0.1.0, and npm trusted publishing and approval of releases in GitHub were set up (D-oss-13); The tagged release of 0.1.0 stopped in its dry run, before publishing anything (D-rel-1). With the dry run corrected, 0.1.1 was tagged, but its release was rejected before publishing, because its packages would have reported version 0.1.0 in eight places (D-rel-2). P08 and P09 keep one version everywhere (D-ver-1); 0.1.2 is the first release on PyPI and GitHub Releases, where P04 runs. L01, L02 and L04 are not implemented yet. The maintainer implemented L03's three good first issues: #12 as P07, #13 as R12 and #14 as R11, which keeps the outside contributor's commit. Evidence: [TDD-0021](../tdd/0021-open-source-readiness.md). The owner asked for one plan that answers an outside assessment of why the public repository draws little attention. The owner chose the name Orchvia (D-oss-5). The project has no relationship with TypeSafe. It supersedes no specification. It changes packaging ([SPEC-0010](0010-bundled-host-delivery.md), [SPEC-0011](0011-release-readiness.md)) and the documentation layout, not the engine.
 
 ## Why
 
@@ -61,6 +61,14 @@ The repository became public on 2026-09-19. A reader who arrives cannot tell wha
 - **R08** The README is at most 15 KB, checked by the R02 test.
 - **R09** Internal names follow D-oss-2. With option 1, no tracked file contains them, checked by a test that stores only hashes of the names. Git history is not rewritten.
 - **R10** The README that each generated npm package carries, and the PyPI description, describe the published package, link to the repository, and no longer say "unpublished".
+- **R11** The README's diagram is a simple overview for a first-time reader (issue #14): the application, the engine with its SQLite state, the Claude Code and Codex sessions, and the acceptance of each result. The detailed diagram stays in the design document, at the start of its architecture section.
+  - Every text takes its font from a CSS class or from the `font-family`, `font-size` and `font-weight` attributes. SVG has no `font` attribute, and browsers ignore it.
+  - No text is smaller than 16 px, and the viewBox is at most 1,200 wide, so the smallest text is at least 12 px when the image is shown 900 px wide (R05).
+  - The mailbox is drawn inside the engine, as part of its SQLite state, and the sessions message each other through it. Results leave the sessions, not the mailbox.
+  - The banner, the SVG's description and the README's alternative text say that a person or a registered check accepts each result, as the README's third reason does.
+  - A test checks the fonts, the sizes and the wording; the drawing is checked by eye on a rendering.
+- **R12** The offline quickstart also runs from Python (issue #13). `examples/python/quickstart.py` starts the Node host from the checkout with `Orchestrator.local`, runs the same two tasks with the fake runtime, accepts each result and prints the same three lines; the second task reuses the first one's session. The README's quickstart gives its command, and a test runs it next to the TypeScript quickstart.
+  - The test gives the example a 4 KiB emergency reserve with `--emergency-bytes 4096`: the host it starts runs from `packages/cli/`, not from `examples/`, so the reserve guard of SPEC-0011 R10 applies to it. A reader's run keeps the engine's default.
 
 ### C: Agent instruction files (D-oss-2)
 
@@ -103,6 +111,18 @@ The repository became public on 2026-09-19. A reader who arrives cannot tell wha
   - a first manual publish, if the registry requires a package to exist before trusted publishing can be configured;
   - the PyPI pending publisher;
   - GitHub environment protection for the release workflow.
+- **P07** `orchvia --version` prints the version in the `package.json` of the installed `@orchvia/cli`, followed by a newline, and exits with 0 (issue #12). `orchvia --help` lists it.
+  - The CLI reads the file only when asked, at `../package.json` next to its running module: `packages/cli/package.json` in a checkout, and the package's own `package.json` when the built `dist/main.js` runs. A release build writes the released version into the package it builds, so a checkout prints the version its source manifest holds.
+  - There is no `-v`: the command line has no short options, and many tools use `-v` for verbose output.
+  - A test runs it from the source; the package smoke runs it from the installed package.
+- **P08** One version number (D-ver-1). The `version` in the root `package.json` is the only copy anyone edits, and only with `node scripts/set-version.mjs X.Y.Z`. The script writes it to every other copy: the five package manifests, `package-lock.json`, `packages/engine/src/version.ts`, `python/pyproject.toml` and `python/src/orchvia/_version.py`, the Python copies in PEP 440 spelling (`0.2.0rc1` for `0.2.0-rc.1`).
+  - Code takes the version from `version.ts` or `_version.py`: the engine's `engineVersion`, the `sdkVersion` that the TypeScript and Python SDKs send, `orchvia.__version__`, and the versions that the MCP servers and the Codex client report. The CLI's `--version` reads its own `package.json` (P07). No other version is written in package source.
+  - `main` holds the latest released version, or the version that a release pull request is about to tag, so `CHANGELOG.md` always has a section for it.
+  - A test checks every copy, that package source holds no other version, the engine's reported version and the changelog section.
+- **P09** A release reports its version everywhere (D-ver-1, D-rel-2).
+  - A build without `--version` uses the source version. With `--version`, as a pull request's dry run uses, it also rewrites the built `version.js` and `_version.py`, so the throwaway packages are consistent too.
+  - The release workflow stops when the tag differs from the source version, when the changelog has no section for it, or when the tagged commit is not on `main`.
+  - The package smoke and the registry check require the installed packages to report the release version: `orchvia --version`, the engine's `engineVersion`, and in Python `orchvia.__version__` and the SDK's `sdkVersion`.
 
 ### E: Real-model evidence (new code outside the engine; paid runs only on the owner's account, within D-oss-11)
 
@@ -127,7 +147,7 @@ The repository became public on 2026-09-19. A reader who arrives cannot tell wha
   - posts for r/ClaudeAI and r/ChatGPTCoding;
   - one article built on the benchmark.
   - Communities about local models are not targeted: the engine runs no local model.
-- **L03** Community files: issue and pull request templates, `SECURITY.md`, a `CONTRIBUTING.md` updated for outside contributors, and three "good first issue" items.
+- **L03** Community files: issue and pull request templates, `SECURITY.md`, a `CONTRIBUTING.md` updated for outside contributors, and three "good first issue" items. The maintainer implemented all three: #12 as P07, #13 as R12 and #14 as R11. #14 keeps the outside contributor's commit from pull request #15, merged unchanged; the corrections follow in a separate commit.
 - **L04** A social preview image and a short terminal recording of the quickstart.
 
 ## Timing invariants
@@ -170,7 +190,9 @@ Each public action waits for the owner's explicit authorization: renaming, chang
 - **D-oss-12, the first npm publish:** now, before PyPI can be used (option 1). The npm pages become public before the PyPI release and the GitHub Release, and the package READMEs link to a PyPI page that does not exist yet.
 - **D-oss-13, how CI publishes to npm:** option 3. The npm trusted publisher of each package may publish directly, which npm marks "not recommended" (its default allows only staged publishing that a maintainer approves on npmjs.com). The human approval is in GitHub instead: the environments `npm` and `pypi` require the owner's approval, and administrators cannot bypass it. The alternatives were staged publishing only, which changes the release workflow and needs the owner's approval on npmjs.com for each package, and direct publishing with no human approval.
 - **D-npm-1, npm publishing access:** option 1, unchanged. Every settings change on npmjs.com needs the owner's security key, and the project uses no tokens that bypass two-factor authentication.
-- **D-rel-1, after the failed 0.1.0 release run:** option 1. The dry run skips versions already on npm, and 0.1.1 is the first full release; 0.1.0 stays on npm only, and its tag stays. The alternative was moving the `v0.1.0` tag to a release branch with only the workflow fix.
+- **D-rel-1, after the failed 0.1.0 release run:** option 1. The dry run skips versions already on npm, and 0.1.1 is the first full release; 0.1.0 stays on npm only, and its tag stays. The alternative was moving the `v0.1.0` tag to a release branch with only the workflow fix. D-rel-2 later stopped 0.1.1 itself.
+- **D-rel-2, the tagged 0.1.1:** option 2, do not publish it. Its packages would have reported 0.1.0 in eight places, because the build rewrote only the manifests: the engine's `engineVersion`, the `sdkVersion` that both SDKs send (three places), and the versions of both MCP servers and of the Codex client (four places). A published version cannot be corrected. The owner rejected its deployment; 0.1.2 is the first release on PyPI and GitHub Releases. The alternative was publishing 0.1.1 and correcting the versions in 0.1.2.
+- **D-ver-1, where the version lives:** option 1, in the source (P08, P09). A release pull request sets it, and the tag must match it. The alternative was a placeholder `0.0.0-dev` in the source that the build replaces with the tag, which leaves a checkout of a tag without its version and ships the placeholder if one copy is missed.
 - **D-bench-1, the orchvia arm's stop proof:** option 1. The dispatch's own Claude process must have exited, and every process that still uses the shared workspace must descend from the harness; errors never prove a stop. The alternatives were a workspace per track, which is not how a team shares a repository, and running the tracks one after the other, which removes the parallelism the benchmark measures.
 
 ## Boundaries

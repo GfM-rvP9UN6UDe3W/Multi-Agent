@@ -81,6 +81,13 @@ async function host(t: TestContext, mode = 'startup') {
     }
   }
   await waitTask('running');
+  // Acceptance of the native session changes the session's revision after the task runs, so a
+  // control target is read only once it happened (SPEC-0023 F04). The deadline detects a hang.
+  const accepted = Date.now() + 3000;
+  while (!(await client.sessions.get(task.initial.sessionId!)).providerSessionId) {
+    assert.ok(Date.now() < accepted, 'The native session was not accepted');
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
   return { client, child, socketPath, task, audit, waitTask };
 }
 

@@ -25,6 +25,7 @@ import { adapterProviderName } from '../../engine/src/runtime.ts';
 import { workspacePath } from '../../engine/src/verification.ts';
 import { createToolBridge } from '../../engine/src/tool-bridge.ts';
 import { TOOL_NAMES } from '../../engine/src/tools.ts';
+import { VERSION } from '../../engine/src/version.ts';
 
 type Message = Record<string, unknown>;
 function record(value: unknown): Message | null {
@@ -431,7 +432,7 @@ export function createCodexAdapter(config: CodexAdapterConfig = {}): RuntimeAdap
       input.signal.addEventListener('abort', abort, { once: true });
       try {
         await connection.request('initialize', {
-          clientInfo: { name: 'agent_orch_inspect', version: '0.1.0' },
+          clientInfo: { name: 'agent_orch_inspect', version: VERSION },
         });
         connection.notify('initialized');
         const response = await connection.request('thread/read', {
@@ -656,7 +657,7 @@ export function createCodexAdapter(config: CodexAdapterConfig = {}): RuntimeAdap
       input.signal.addEventListener('abort', requestInterrupt);
       try {
         await connection.request('initialize', {
-          clientInfo: { name: 'agent_orch', title: 'Agent Orchestration', version: '0.1.0' },
+          clientInfo: { name: 'agent_orch', title: 'Agent Orchestration', version: VERSION },
         });
         connection.notify('initialized');
         const thread = await connection.request(

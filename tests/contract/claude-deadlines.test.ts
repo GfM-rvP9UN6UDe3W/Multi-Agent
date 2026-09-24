@@ -18,7 +18,12 @@ function input(signal = new AbortController().signal): RuntimeInput {
   };
 }
 
-async function within<T>(promise: Promise<T>, ms = 300): Promise<T> {
+// SPEC-0023 F02: before it submits, the adapter prepares its options and resolves paths with
+// synchronous file calls, which can take tens of milliseconds on a loaded runner. Every deadline
+// that must outlast that preparation gets this much more; the rules under test are unchanged.
+const PREPARE_MS = 500;
+
+async function within<T>(promise: Promise<T>, ms = PREPARE_MS + 2000): Promise<T> {
   let timer: NodeJS.Timeout | undefined;
   try {
     return await Promise.race([
@@ -42,7 +47,7 @@ test('Claude acceptance deadline bounds a never-settling first next and aborts S
   let requestController: AbortController | undefined;
   let returned = false;
   const adapter = createClaudeAdapter({
-    requestTimeoutMs: 30,
+    requestTimeoutMs: PREPARE_MS + 30,
     cleanupTimeoutMs: 20,
     query: (request) => {
       requestController = request.options.abortController;
@@ -74,8 +79,8 @@ test('Claude acceptance deadline bounds a never-settling first next and aborts S
 test('Claude terminal deadline is absolute after acceptance and never invents interruption', async () => {
   let calls = 0;
   const adapter = createClaudeAdapter({
-    requestTimeoutMs: 100,
-    turnTimeoutMs: 35,
+    requestTimeoutMs: PREPARE_MS + 100,
+    turnTimeoutMs: PREPARE_MS + 35,
     cleanupTimeoutMs: 20,
     query: () => ({
       [Symbol.asyncIterator]() {
@@ -114,8 +119,8 @@ test('Claude terminal deadline is absolute after acceptance and never invents in
 test('Claude terminal deadline is not extended by unrelated stream messages', async () => {
   let calls = 0;
   const adapter = createClaudeAdapter({
-    requestTimeoutMs: 100,
-    turnTimeoutMs: 35,
+    requestTimeoutMs: PREPARE_MS + 100,
+    turnTimeoutMs: PREPARE_MS + 35,
     cleanupTimeoutMs: 20,
     query: () => ({
       [Symbol.asyncIterator]() {
@@ -148,7 +153,7 @@ test('Claude terminal deadline is not extended by unrelated stream messages', as
 
 test('Claude cleanup timeout stays bounded and adapter.close rejects unconfirmed resource', async () => {
   const adapter = createClaudeAdapter({
-    requestTimeoutMs: 20,
+    requestTimeoutMs: PREPARE_MS + 20,
     cleanupTimeoutMs: 25,
     query: () => ({
       [Symbol.asyncIterator]() {
@@ -170,7 +175,7 @@ test('Claude late iterator return without process observation keeps cleanup unco
     finishReturn = () => resolve({ done: true, value: undefined });
   });
   const adapter = createClaudeAdapter({
-    requestTimeoutMs: 20,
+    requestTimeoutMs: PREPARE_MS + 20,
     cleanupTimeoutMs: 20,
     query: () => ({
       [Symbol.asyncIterator]() {
@@ -197,7 +202,7 @@ test('Claude late iterator return without process observation keeps cleanup unco
 
 test('Claude iterator.return done:false does not release the active resource lease', async () => {
   const adapter = createClaudeAdapter({
-    requestTimeoutMs: 20,
+    requestTimeoutMs: PREPARE_MS + 20,
     cleanupTimeoutMs: 20,
     query: () => ({
       [Symbol.asyncIterator]() {
@@ -255,7 +260,7 @@ test('Claude suppresses a successful result when local cleanup is unconfirmed', 
 test('Claude Query.close cannot confirm cleanup while process observation is missing', async () => {
   let closed = false;
   const adapter = createClaudeAdapter({
-    requestTimeoutMs: 20,
+    requestTimeoutMs: PREPARE_MS + 20,
     cleanupTimeoutMs: 25,
     query: () => ({
       close() {
@@ -281,7 +286,7 @@ test('Claude observes a late next rejection after timeout', async () => {
     rejectLate = reject;
   });
   const adapter = createClaudeAdapter({
-    requestTimeoutMs: 20,
+    requestTimeoutMs: PREPARE_MS + 20,
     cleanupTimeoutMs: 20,
     query: () => ({
       [Symbol.asyncIterator]() {
@@ -302,7 +307,7 @@ test('Claude observes a late next rejection after timeout', async () => {
 test('Claude observes next rejection when cancellation wins before wait registration', async () => {
   let closeCalled = false;
   const adapter = createClaudeAdapter({
-    requestTimeoutMs: 30,
+    requestTimeoutMs: PREPARE_MS + 30,
     cleanupTimeoutMs: 20,
     query: (request) => {
       request.options.abortController.abort();
@@ -378,7 +383,7 @@ test('Claude acceptance deadline does not stretch when wall clock jumps backward
   let offset = 0;
   t.mock.method(Date, 'now', () => realNow() + offset);
   const adapter = createClaudeAdapter({
-    requestTimeoutMs: 35,
+    requestTimeoutMs: PREPARE_MS + 35,
     cleanupTimeoutMs: 20,
     query: () => ({
       [Symbol.asyncIterator]() {

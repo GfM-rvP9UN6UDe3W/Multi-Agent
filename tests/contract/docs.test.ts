@@ -76,6 +76,27 @@ test('0021-R01 the offline quickstart runs two tasks on one warm session', () =>
   assert.match(run.stdout, /reused the first agent's session: true/);
 });
 
+test('0021-R12 the Python quickstart runs the same two tasks on one warm session', () => {
+  // The host that the example starts runs packages/cli/src/main.ts, not a file under examples/, so
+  // the reserve guard of SPEC-0011 R10 applies to it: the test asks for the 4 KiB reserve.
+  const args = ['--node', process.execPath, '--emergency-bytes', '4096'];
+  const run = spawnSync('python3', ['examples/python/quickstart.py', ...args], {
+    cwd: root,
+    encoding: 'utf8',
+    timeout: 60_000,
+    env: { ...process.env, PYTHONPATH: join(root, 'python/src') },
+  });
+  assert.equal(run.status, 0, run.stderr);
+  const lines = run.stdout.trimEnd().split('\n');
+  const first = /^1\. "Draft the release notes": completed, session (\S+)$/.exec(lines[0] ?? '');
+  const second = /^2\. "Tighten the draft you just wrote": completed, session (\S+)$/.exec(
+    lines[1] ?? '',
+  );
+  assert.ok(first && second && lines.length === 3, run.stdout);
+  assert.equal(second[1], first[1]);
+  assert.equal(lines[2], "The second task reused the first agent's session: true");
+});
+
 test('0021-R02 0021-R06 0021-R08 the README carries no release evidence, price or paid judge, and stays within 15 KB', () => {
   const text = readme();
   assert.ok(Buffer.byteLength(text) <= 15 * 1024, `${Buffer.byteLength(text)} bytes`);
@@ -122,6 +143,80 @@ test('0021-R05 the README embeds a diagram of at most 400 KB', () => {
     const size = statSync(join(root, decodeURIComponent(image))).size;
     assert.ok(size <= 400 * 1024, `${image} is ${size} bytes`);
   }
+});
+
+/** CSS declarations, with the `font` shorthand split into its size, family and weight. */
+function fontDeclarations(css: string) {
+  const result: Record<string, string> = {};
+  for (const declaration of css.split(';')) {
+    const colon = declaration.indexOf(':');
+    if (colon < 0) continue;
+    const name = declaration.slice(0, colon).trim();
+    const value = declaration.slice(colon + 1).trim();
+    if (name === 'font') {
+      // [style] [weight] size[/line-height] family
+      const shorthand = /^(?:(.*?)\s+)?([\d.]+px)(?:\/\S+)?\s+(.+)$/.exec(value);
+      if (!shorthand) continue;
+      result['font-size'] = shorthand[2]!;
+      result['font-family'] = shorthand[3]!;
+      if (shorthand[1]) result['font-weight'] = shorthand[1];
+    } else if (name.startsWith('font-')) result[name] = value;
+  }
+  return result;
+}
+
+/** The font of each text in a hand-written SVG: attributes, then style rules, then inline style. */
+function svgTextFonts(svg: string) {
+  const rules = [...svg.matchAll(/<style[^>]*>([\s\S]*?)<\/style>/g)].flatMap(([, sheet]) =>
+    [...sheet!.matchAll(/([^{}]+)\{([^}]*)\}/g)].map(([, selectors, body]) => ({
+      selectors: selectors!.split(',').map((selector) => selector.trim()),
+      font: fontDeclarations(body!),
+    })),
+  );
+  return [...svg.matchAll(/<text\b([^>]*)>([^<]*)/g)].map(([, attributes, content]) => {
+    const font: Record<string, string> = {};
+    for (const [, name, value] of attributes!.matchAll(
+      /\s(font-family|font-size|font-weight)="([^"]*)"/g,
+    ))
+      font[name!] = value!;
+    const classes = /\sclass="([^"]*)"/.exec(attributes!)?.[1]!.split(/\s+/) ?? [];
+    const applies = (selectors: string[]) =>
+      classes.some((name) => selectors.includes(`.${name}`) || selectors.includes(`text.${name}`));
+    for (const rule of rules) if (rule.selectors.includes('text')) Object.assign(font, rule.font);
+    for (const rule of rules) if (applies(rule.selectors)) Object.assign(font, rule.font);
+    const inline = /\sstyle="([^"]*)"/.exec(attributes!)?.[1];
+    if (inline) Object.assign(font, fontDeclarations(inline));
+    return {
+      text: content!.trim(),
+      family: font['font-family'],
+      size: Number.parseFloat(font['font-size'] ?? ''),
+    };
+  });
+}
+
+test('0021-R11 the overview diagram sets the font of every text, stays legible at 900 px and names both ways a result is accepted', () => {
+  const text = readme();
+  const diagrams = localImages(text).filter((image) => image.endsWith('.svg'));
+  assert.equal(diagrams.length, 1, 'the README embeds one SVG overview');
+  const svg = readFileSync(join(root, decodeURIComponent(diagrams[0]!)), 'utf8');
+  const problems: string[] = [];
+  // SVG has no `font` attribute: browsers ignore it and draw the text in a serif 16 px regular.
+  for (const [element] of svg.matchAll(/<[^>]*\sfont\s*=[^>]*>/g))
+    problems.push(`a font attribute, which SVG does not have: ${element}`);
+  const width = Number(/\sviewBox="\s*[-\d.]+[\s,]+[-\d.]+[\s,]+([\d.]+)/.exec(svg)?.[1]);
+  if (!(width > 0 && width <= 1200)) problems.push(`a viewBox ${width} wide`);
+  const fonts = svgTextFonts(svg);
+  for (const font of fonts)
+    if (!font.family || !(font.size >= 16))
+      problems.push(`"${font.text}": ${font.family ?? 'no font family'}, ${font.size || 'no'} px`);
+  const accepts = /a person or a registered check accepts each result/i;
+  if (!accepts.test(/<desc\b[^>]*>([^<]*)</.exec(svg)?.[1] ?? ''))
+    problems.push('the description does not name both ways a result is accepted');
+  if (!fonts.some((font) => accepts.test(font.text)))
+    problems.push('no text names both ways a result is accepted');
+  if (!accepts.test(/!\[([^\]]*)\]\(\s*<?[^)\s>]+\.svg/.exec(text)?.[1] ?? ''))
+    problems.push('the alternative text in the README does not name both ways');
+  assert.deepEqual(problems, []);
 });
 
 // The names are stored as SHA-256 digests of lower-case words and word pairs, so this file does not

@@ -1,6 +1,6 @@
 # Multi-agent orchestration SDK usage and detailed wiring
 
-Updated 2026-09-21 for SPEC-0010. This guide describes implemented interfaces. The npm packages are published as 0.1.0; the Python package is not on PyPI yet, so Python uses a source build. The five npm packages are **ESM-only**; direct require is not exported. A Claude consumer installs SDK + engine + adapter-claude. See [the local RC and CJS/ESM bundled-host contract](acceptance/bundled-host.md). Offline process/transport/storage acceptance is recorded separately from real-model, sandbox, external-host and release acceptance in the [completion matrix](specs/0009-complete-design.md#completion-matrix).
+Updated 2026-09-23. This guide describes implemented interfaces. The npm packages are published as 0.1.0; the Python package is not on PyPI yet, so Python uses a source build. The five npm packages are **ESM-only**; direct require is not exported. A Claude consumer installs SDK + engine + adapter-claude. See [the local RC and CJS/ESM bundled-host contract](acceptance/bundled-host.md). Offline process/transport/storage acceptance is recorded separately from real-model, sandbox, external-host and release acceptance in the [completion matrix](specs/0009-complete-design.md#completion-matrix).
 
 ## 1. Choose an integration mode
 
@@ -43,7 +43,7 @@ python -m build --no-isolation --sdist --wheel --outdir dist/release python
 PACKAGE_BUILD_PYTHON="$(command -v python)" npm run test:packages
 ```
 
-Install the engine and SDK tarballs together with the chosen adapter. An embedded Claude consumer needs `@orchvia/sdk`, `@orchvia/engine` and `@orchvia/adapter-claude`; add `@orchvia/cli` only for a standalone/managed host. Keep the npm package versions aligned, currently `0.1.0-rc.1` for the local RC. Claude's optional SDK and Zod 4 peers and Codex's native executable are separate runtime dependencies; ordinary startup does not download them. Host-injected Claude query owns dependency selection: provide matching MCP/inspection callbacks as described in the [bundled-host guide](acceptance/bundled-host.md). Python installs the unchanged wheel with `python -m pip install --no-index --no-deps /absolute/release/orchvia-0.1.0-py3-none-any.whl`.
+Install the engine and SDK tarballs together with the chosen adapter. An embedded Claude consumer needs `@orchvia/sdk`, `@orchvia/engine` and `@orchvia/adapter-claude`; add `@orchvia/cli` only for a standalone/managed host. The five npm packages share one version, and a package that depends on another requires exactly that version. Claude's optional SDK and Zod 4 peers and Codex's native executable are separate runtime dependencies; ordinary startup does not download them. Host-injected Claude query owns dependency selection: provide matching MCP/inspection callbacks as described in the [bundled-host guide](acceptance/bundled-host.md). Python installs the unchanged wheel with `python -m pip install --no-index --no-deps /absolute/release/orchvia-0.1.0-py3-none-any.whl`.
 
 Keep workspace, private state, and application/native credentials separate. The workspace and private directories must be canonical existing paths as required by CLI validation; state is outside the workspace. If using archive rollover, controlDir/storesRoot/archiveRoot must be private canonical outside-workspace directories, exclusively owned by this host. Do not use another application's state or history for fixture tests.
 
@@ -164,6 +164,17 @@ Codex accepts `permissionProfile`, `networkAccess` (default false), and `webSear
 
 For extended Claude options or either write profile, `observeExecutionStop({ target, terminal, signal, remainingMs })` must observe complete remote/background stop for the exact dispatch/generation/native IDs. Return true only after actual host observation. False, rejection, absence, and timeout retain unknown execution. Waiting is bounded by cleanup time; late true evidence is retained without clearing business quarantine or resubmitting. Local child-process exit is independently required. With an observer configured, `terminalCoversExecution` denotes this combined proof; native-terminal evidence retains `remoteExecution: unknown` until host confirmation.
 
+On macOS and Linux each Claude Code process leads its own process group, which its descendants share, and the context also lists `processes: [{ pid, processGroupId }]` for the dispatch (SPEC-0023 P). `processGroupsStopped(context)` from `@orchvia/adapter-claude` returns true only when none of those groups has a member left, and any unexpected error counts as not stopped. It does not see a descendant that left its group, for example a daemon that called `setsid`, or remote work, so an observer combines it with its own checks:
+
+```ts
+import { processGroupsStopped } from '@orchvia/adapter-claude';
+
+const observeExecutionStop = async (context) =>
+  processGroupsStopped(context) && (await remoteWorkStopped(context.target));
+```
+
+When the adapter has to end a Claude process that did not stop by itself, it sends SIGTERM to the whole group and, when the cleanup window ends, SIGKILL to what is left of it. Because the processes no longer share the host's process group, a terminal's Ctrl-C or hang-up reaches only the host; `orchvia host` shuts down in order on SIGINT, SIGTERM and SIGHUP.
+
 The writable Claude profile always requires the runtime's OS sandbox (`enabled` and `failIfUnavailable`, with no unsandboxed fallback). It works only where Claude Code can sandbox Bash. macOS uses its built-in sandbox; Linux needs `bubblewrap` and `socat` installed. Without them a writable task fails at its first dispatch with the runtime's `Sandbox required but unavailable` reason, and nothing runs unsandboxed. The engine's native checks cover macOS and Ubuntu CI with those packages. Other platforms are unverified; check Claude Code's sandbox support before enabling the writable profile there.
 
 Usage consumers subscribe to existing engine events and read exact records:
@@ -255,7 +266,7 @@ node packages/cli/src/main.ts control --socket /absolute/private/state/host.sock
 
 `submit` persists without observing; `status` reads a task; `approve` requires the approval ID, current revision and explicit approve/deny. `run`/`attach` detach on approval, blocked or paused by default; `--follow` keeps observing, `--interactive` requires TTY input for a decision, and `--timeout-ms` limits local observation. Ctrl-C detaches without cancelling shared work. `control` freezes all five session target fields, and compact/rotate/stop return durable operations.
 
-The host handles SIGINT/SIGTERM with configured shutdown mode/time. Incomplete cleanup retains the control endpoint and operationId; another signal continues the same mode. Stdio parent EOF separately triggers bounded interrupt cleanup. No command approves automatically, enables fake implicitly, or invokes another management model.
+The host handles SIGINT, SIGTERM and SIGHUP with the configured shutdown mode and time from the moment it has opened its state, before its socket accepts connections, and writes `orchvia listening on PATH` only after that. A signal that arrives while the host starts shuts it down in order once it has started, without that line. Before the state is open, while the host reads its configuration and recovers, a signal ends it like a crash during startup: no client can connect yet, nothing is dispatched, and the next start recovers ([SPEC-0023](./specs/0023-corrections-before-0.1.2.md) S). Incomplete cleanup retains the control endpoint and operationId; another signal continues the same mode. Stdio parent EOF separately triggers bounded interrupt cleanup. No command approves automatically, enables fake implicitly, or invokes another management model.
 
 ## 8. Private tools, routing and verification
 
@@ -376,7 +387,7 @@ const orch = await createOrchestrator({
 
 ### 8.3 Optional routing layer
 
-[SPEC-0018](./specs/0018-routing-layer.md) adds `@orchvia/sdk/routing` and `orchvia.routing`, and [SPEC-0019](./specs/0019-routing-corrections.md) corrects it; rc.13 includes the corrections, and the rc.12 package predates them. A judge answers typed questions about a request and the agents of one group. Code turns the answers into an ordinary `TaskSpec` with `contextPlan`, and the host submits it or not. The router adds no engine rule or storage. Its one engine addition is the read-only `context.checkRefs` of [SPEC-0020](./specs/0020-context-check.md), after rc.13, and every engine rule still applies to what is submitted.
+[SPEC-0018](./specs/0018-routing-layer.md) adds `@orchvia/sdk/routing` and `orchvia.routing`, and [SPEC-0019](./specs/0019-routing-corrections.md) corrects it; the published packages include both. A judge answers typed questions about a request and the agents of one group. Code turns the answers into an ordinary `TaskSpec` with `contextPlan`, and the host submits it or not. The router adds no engine rule or storage. Its one engine addition is the read-only `context.checkRefs` of [SPEC-0020](./specs/0020-context-check.md), after rc.13, and every engine rule still applies to what is submitted.
 
 **Setup.**
 - Create the router with `createRouter({ orchestrator, judge, runtimes, scope?, describe?, policy? })`, or `Router(orch, judge, read_only=..., writable=..., scope=..., describe=..., policy=...)` in Python.

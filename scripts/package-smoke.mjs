@@ -107,6 +107,7 @@ import {createJevJudge,createRouter} from '@orchvia/sdk/routing';
 import {createFakeAdapter} from '@orchvia/engine/fake';
 const client=await createOrchestrator({workspace:${JSON.stringify(join(base, 'work'))},stateDir:${JSON.stringify(join(base, 'state'))},storage:{emergencyBytes:4096,minFreeBytes:0},adapters:[createFakeAdapter()]});
 try {
+ assert.equal(client.info.engineVersion,${JSON.stringify(releaseVersion)});
  const task=await client.tasks.create({goal:'offline packaged acceptance',runtime:{provider:'fake',model:'fixture'},acceptance:{mode:'human',criteria:['fixture output']}});
  for await(const event of client.events({taskId:task.id,signal:AbortSignal.timeout(5000)})) {
   if(event.type==='approval.requested'){const approval=await client.approvals.get(String(event.data.approvalId));await client.approvals.decide(approval.approvalId,{choice:'approve',expectedRevision:approval.revision});break;}
@@ -123,6 +124,8 @@ try {
   results.push(JSON.parse(run(process.execPath, ['embedded.mjs'])));
   const cli = join(base, 'node_modules/@orchvia/cli/dist/main.js');
   run(process.execPath, [cli, '--help']);
+  // SPEC-0021 P07: the installed CLI reports the version of the package it was built as.
+  assert.equal(run(process.execPath, [cli, '--version']), `${releaseVersion}\n`);
   for (const selected of ['codex', 'claude']) {
     const isolated = join(base, selected);
     await mkdir(isolated);
@@ -211,7 +214,7 @@ assert.equal(events.at(-1).type,'result',JSON.stringify(events));assert.equal(ca
     '--no-deps',
     join(pythonRelease, `orchvia-${pythonVersion}-py3-none-any.whl`),
   ]);
-  const pythonScript = `import asyncio,json\nfrom orchvia import Orchestrator,TaskSpec,RuntimeSpec,AcceptanceSpec,validate_wire\nfrom orchvia import wire_types\nasync def main():\n client=await Orchestrator.local(engine_command=${JSON.stringify([process.execPath, cli, 'host', '--stdio', '--config', join(base, 'python-config.json')])},close_timeout=3)\n try:\n  task=await client.tasks.create(TaskSpec(goal='installed Python managed host',runtime=RuntimeSpec('fake','fixture'),acceptance=AcceptanceSpec(criteria=['fixture review'])))\n  async for event in client.events(task_id=task.id):\n   if event.type=='approval.requested':\n    approval=await client.approvals.get(event.data.approval_id)\n    await client.approvals.decide(approval.approval_id,{'choice':'approve','expected_revision':approval.revision})\n    break\n  done=await task.wait(timeout=5)\n  assert done.status=='completed'\n  print(json.dumps({'mode':'installed-python-managed','status':done.status,'modelCalls':0}))\n finally: await client.close(timeout=3)\nasyncio.run(main())\n`;
+  const pythonScript = `import asyncio,json\nfrom orchvia import Orchestrator,TaskSpec,RuntimeSpec,AcceptanceSpec,validate_wire\nfrom orchvia import wire_types\nimport orchvia,orchvia.client\nassert (orchvia.__version__,orchvia.client.SDK_VERSION)==(${JSON.stringify(pythonVersion)},)*2,(orchvia.__version__,orchvia.client.SDK_VERSION)\nasync def main():\n client=await Orchestrator.local(engine_command=${JSON.stringify([process.execPath, cli, 'host', '--stdio', '--config', join(base, 'python-config.json')])},close_timeout=3)\n try:\n  assert client.info.engine_version==${JSON.stringify(releaseVersion)},client.info.engine_version\n  task=await client.tasks.create(TaskSpec(goal='installed Python managed host',runtime=RuntimeSpec('fake','fixture'),acceptance=AcceptanceSpec(criteria=['fixture review'])))\n  async for event in client.events(task_id=task.id):\n   if event.type=='approval.requested':\n    approval=await client.approvals.get(event.data.approval_id)\n    await client.approvals.decide(approval.approval_id,{'choice':'approve','expected_revision':approval.revision})\n    break\n  done=await task.wait(timeout=5)\n  assert done.status=='completed'\n  print(json.dumps({'mode':'installed-python-managed','status':done.status,'modelCalls':0}))\n finally: await client.close(timeout=3)\nasyncio.run(main())\n`;
   await mkdir(join(base, 'python-state'));
   await writeFile(
     join(base, 'python-config.json'),

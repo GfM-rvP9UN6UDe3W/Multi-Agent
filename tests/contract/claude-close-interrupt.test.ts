@@ -3,6 +3,7 @@ import { test } from 'node:test';
 import { mkdir, mkdtemp, realpath, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { DatabaseSync } from 'node:sqlite';
 import {
   createClaudeAdapter,
   type ClaudeAdapterConfig,
@@ -108,15 +109,24 @@ async function fixture() {
   const stateDir = join(root, 'state');
   await mkdir(workspace);
   await mkdir(stateDir, { mode: 0o700 });
-  const open = (config: ClaudeAdapterConfig, interruptMs?: number) =>
-    createOrchestrator({
+  /** `onAdapterClose` runs when the engine starts to close the Claude adapter. */
+  const open = (config: ClaudeAdapterConfig, interruptMs?: number, onAdapterClose?: () => void) => {
+    const adapter = createClaudeAdapter(config);
+    const close = adapter.close!;
+    if (onAdapterClose)
+      adapter.close = () => {
+        onAdapterClose();
+        return close();
+      };
+    return createOrchestrator({
       workspace,
       stateDir,
-      adapters: [createClaudeAdapter(config)],
+      adapters: [adapter],
       providers: { claude: { model: 'offline' } },
       storage: { emergencyBytes: 4096 },
       ...(interruptMs ? { timeouts: { interruptMs } } : {}),
     });
+  };
   return { root, open };
 }
 
@@ -204,20 +214,45 @@ test('0022-C04 pausing the session with mode interrupt, then a drain close, paus
   }
 });
 
-/** Closes with mode interrupt while a turn ignores the interrupt; returns the close time and the task. */
-async function closeUnanswered(timeoutMs: number, interruptMs?: number) {
+/** While `run` runs, closing a SQLite database takes `ms` longer, as on a loaded CI disk. */
+async function withSlowDatabaseClose<T>(ms: number, run: () => Promise<T>): Promise<T> {
+  const close = DatabaseSync.prototype.close;
+  const pause = new Int32Array(new SharedArrayBuffer(4));
+  DatabaseSync.prototype.close = function (this: DatabaseSync) {
+    close.call(this);
+    Atomics.wait(pause, 0, 0, ms);
+  };
+  try {
+    return await run();
+  } finally {
+    DatabaseSync.prototype.close = close;
+  }
+}
+
+/**
+ * Closes with mode interrupt while a turn ignores the interrupt. Returns the time of the whole close,
+ * the time until the engine started to close the adapters, which ends the wait of SPEC-0022 C02,
+ * and the task.
+ */
+async function closeUnanswered(timeoutMs: number, interruptMs?: number, slowDatabaseCloseMs = 0) {
   const { root, open } = await fixture();
   try {
     const claude = interruptibleClaude({ answers: false });
-    const orch = await open(claude.config, interruptMs);
+    let adapterCloseAt: number | undefined;
+    const orch = await open(claude.config, interruptMs, () => {
+      adapterCloseAt ??= performance.now();
+    });
     const task = await startTurn(orch, claude.state);
     const begin = performance.now();
-    await orch.close({ mode: 'interrupt', timeoutMs });
+    const close = () => orch.close({ mode: 'interrupt', timeoutMs });
+    await (slowDatabaseCloseMs ? withSlowDatabaseClose(slowDatabaseCloseMs, close) : close());
     const elapsed = performance.now() - begin;
+    assert.ok(adapterCloseAt !== undefined, 'the engine closed the adapter');
     const reopened = await open(interruptibleClaude().config);
     try {
       return {
         elapsed,
+        waited: adapterCloseAt - begin,
         interrupts: claude.state.interrupts,
         task: await reopened.tasks.get(task.id),
       };
@@ -239,8 +274,17 @@ test('0022-C02 0022-C03 the close waits up to timeouts.interruptMs, then closes 
   assert.match(task.reason ?? '', /^outcome_unknown/);
 });
 
+// The budget bounds the wait, not the synchronous writes around it, such as the final database
+// close (SPEC-0023 F03), so these tests time the wait: until the engine starts to close the adapters.
 test('0022-C02 the close waits at most half of its timeoutMs', async () => {
-  const { elapsed } = await closeUnanswered(1_000);
-  assert.ok(elapsed >= 490, `closed after ${elapsed} ms, before half of the 1000 ms budget`);
-  assert.ok(elapsed < 1_000, `closed after ${elapsed} ms`);
+  const { waited } = await closeUnanswered(1_000);
+  assert.ok(waited >= 490, `closed the adapters after ${waited} ms, before half of the budget`);
+  assert.ok(waited < 1_000, `closed the adapters after ${waited} ms`);
+});
+
+test('0022-C02 a slow database close does not count against the half-budget wait', async () => {
+  const { elapsed, waited } = await closeUnanswered(1_000, undefined, 600);
+  assert.ok(elapsed >= 1_100, `the database close was not slowed: closed after ${elapsed} ms`);
+  assert.ok(waited >= 490, `closed the adapters after ${waited} ms, before half of the budget`);
+  assert.ok(waited < 1_000, `closed the adapters after ${waited} ms`);
 });

@@ -4,6 +4,7 @@ import type { ContextRefCheck } from '../../engine/src/generated/wire.ts';
 import { requestDigest, type RetryIdentity } from '../../engine/src/identity.ts';
 import { randomUUID } from 'node:crypto';
 import { createEngine } from '../../engine/src/index.ts';
+import { VERSION } from '../../engine/src/version.ts';
 import type {
   ApprovalRequest,
   CloseOptions,
@@ -301,7 +302,7 @@ export class Orchestrator {
   async refresh(): Promise<InitializeResult> {
     const info = await this.call<InitializeResult>('initialize', {
       protocolVersion: '2.0',
-      sdkVersion: '0.1.0',
+      sdkVersion: VERSION,
     });
     if (
       info.protocolVersion !== '2.0' ||
@@ -789,7 +790,7 @@ async function initialize(caller: Caller, owner: boolean) {
   try {
     const info = await caller.call<InitializeResult>(
       'initialize',
-      { protocolVersion: '2.0', sdkVersion: '0.1.0' },
+      { protocolVersion: '2.0', sdkVersion: VERSION },
       { timeoutMs: 5000 },
     );
     if (info.protocolVersion !== '2.0')

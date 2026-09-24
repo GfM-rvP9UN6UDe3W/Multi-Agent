@@ -21,6 +21,7 @@ Use Node.js 22.18+ and Python 3.11+. Run from the repository root:
 - `npm test`: run Node engine and contract suites.
 - `npm run test:python`: run Python unittest discovery.
 - `npm run cli -- --help`: inspect available CLI commands.
+- `node scripts/set-version.mjs X.Y.Z`: the only way to change the version; it writes every copy (SPEC-0021 P08).
 - `PYTHONPATH=python/src python3 examples/python/fake_roundtrip.py`: run the offline Python-to-Node example.
 
 Source development executes erasable TypeScript directly. `npm run build:packages` emits locally installable JavaScript/declaration tarballs; `npm run check:generated` verifies the generated protocol contract. Python wheel/sdist and clean-install commands are documented in `docs/reference.md`.

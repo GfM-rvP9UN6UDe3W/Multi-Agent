@@ -17,6 +17,13 @@ export async function observeRuntimeStop(
         Object.freeze({
           target: Object.freeze({ ...context.target }),
           terminal: Object.freeze({ ...context.terminal }),
+          ...(context.processes
+            ? {
+                processes: Object.freeze(
+                  context.processes.map((item) => Object.freeze({ ...item })),
+                ),
+              }
+            : {}),
           signal: controller.signal,
           remainingMs: () => Math.max(0, deadline - performance.now()),
         }),

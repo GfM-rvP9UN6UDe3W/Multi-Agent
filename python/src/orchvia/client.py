@@ -11,9 +11,9 @@ from .identity import request_digest
 from .errors import OrchestrationError, ShutdownIncomplete, unsupported
 from .transport import RpcTransport
 from .types import ReconcileEvidence, Snapshot, TaskSpec, snapshot, to_wire
+from ._version import VERSION as SDK_VERSION
 
 
-SDK_VERSION = "0.1.0"
 PROTOCOL_VERSION = "2.0"
 _TASK_TERMINAL = {"completed", "failed", "cancelled"}
 _OPERATION_TERMINAL = {"completed", "noop", "rejected", "failed", "outcome_unknown"}
@@ -489,8 +489,20 @@ class Orchestrator:
                     except BaseException as cleanup_error:
                         raise startup_error from cleanup_error
                 self._closed = True
-                raise
+                explained = self._with_host_output(startup_error)
+                if explained is startup_error:
+                    raise
+                raise explained from startup_error
             return self
+
+    def _with_host_output(self, error: BaseException) -> BaseException:
+        """SPEC-0023 E01: an owned host that ended before it answered says why."""
+        tail = self._transport.stderr_tail if self._command is not None and self._transport else ""
+        if (not isinstance(error, OrchestrationError) or error.code not in {"CONNECTION_CLOSED", "PROTOCOL_ERROR"}
+                or not tail.strip()):
+            return error
+        return OrchestrationError(error.code, f"{error}. The host's error output ends with:\n{tail.strip()[-2000:]}",
+                                  data={**error.data, "stderrTail": tail})
 
     async def _cleanup_failed_start(self, opening: asyncio.Task[RpcTransport]) -> None:
         if self._transport is None:

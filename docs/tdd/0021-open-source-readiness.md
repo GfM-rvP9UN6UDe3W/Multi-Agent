@@ -120,7 +120,7 @@ Base: `702a3d7`. Branch `orchvia-rename`, merged as pull request #11 (`f331930`)
 ### Not verified yet
 
 - The release workflow's publishing jobs and `scripts/registry-check.mjs` run for the first time with a tag; only the build job runs on pull requests.
-- The `v0.1.0` tag's run ([35865838151](https://github.com/masonlee39/orchvia/actions/runs/35865838151)) passed the offline matrix and stopped in the build job's dry run: `npm error You cannot publish over the previously published versions: 0.1.0.` The npm job skips a version already on the registry, but the dry run did not, and 0.1.0 had been published by hand first (P06). Nothing was published. The same local script failed the same way on the published archives; the corrected step skips the five published versions and still dry-runs a new one (0.0.0-rc.999). By the owner's choice (D-rel-1), 0.1.1 is the first release on PyPI and GitHub Releases, and 0.1.0 stays on npm only.
+- The `v0.1.0` tag's run ([35865838151](https://github.com/masonlee39/orchvia/actions/runs/35865838151)) passed the offline matrix and stopped in the build job's dry run: `npm error You cannot publish over the previously published versions: 0.1.0.` The npm job skips a version already on the registry, but the dry run did not, and 0.1.0 had been published by hand first (P06). Nothing was published. The same local script failed the same way on the published archives; the corrected step skips the five published versions and still dry-runs a new one (0.0.0-rc.999). By the owner's choice (D-rel-1), 0.1.1 is the first release on PyPI and GitHub Releases, and 0.1.0 stays on npm only. Later, D-rel-2 stopped 0.1.1 before publishing (see "One version" below).
 
 ## Real-model evidence (E)
 
@@ -189,3 +189,162 @@ Timing invariants, as approved:
 - The scripted gateway only reads and writes files, so the agent running the project's tests through sandboxed Bash is exercised only by a real run.
 - The stop proof cannot see a leftover process that left the workspace directory and holds no file in it.
 - The CI step runs for the first time with the pull request that adds it.
+
+## Good first issues (L03)
+
+Base: `5d95079`. Branch `community-12-13-14`. The maintainer implemented L03's three good first issues on one branch. Issue #14 keeps the outside contributor's commit: the head of pull request #15, `29fab73` by Gambit-Checkmate, is merged unchanged, and the corrections follow in a separate commit.
+
+### R11: the overview diagram (issue #14, pull request #15)
+
+#### RED
+
+`node --test --test-name-pattern 0021-R11 tests/contract/docs.test.ts`, run after merging `29fab73` and before any correction, failed with eight problems:
+
+- `a font attribute, which SVG does not have: <text x="592" y="319" text-anchor="middle" fill="#fff" font="700 18px system-ui, sans-serif">`. Browsers ignore the attribute, so the banner was drawn in a serif 16 px regular.
+- `"TypeScript or Python"`, `"Messages and results"` and `"remain available"` were 14 px, about 10.5 px when the image is shown 900 px wide.
+- `"A person reviews and approves each result": no font family, no px`.
+- The description, the banner and the README's alternative text named only a person, not a registered check.
+
+Two corrections concern the drawing and the layout, so a rendering checks them rather than the test: the mailbox stood outside the engine and the results passed through it, and the heading "Orchestration flow" that the pull request added to the design document put the three paragraphs about the design reviews under it.
+
+#### Changes
+
+- `docs/images/orchestration-overview.svg`, redrawn. Fonts come from CSS rules (`font-family`, `font-size`, `font-weight`); the smallest text is 16 px in a viewBox 1,200 wide. The engine holds the scheduler and its SQLite state, and the mailbox is part of that state; each session exchanges messages with the mailbox. Results leave the sessions and reach the application through the banner "A person or a registered check accepts each result". Connectors are drawn after the boxes, so no box covers an arrow. The file is 3.7 KB. As in the pull request, it sets no `width` or `height`, so a browser sizes it to the README's column; with them, Quick Look rendered only the left half.
+- The README's alternative text and the SVG's description say the same.
+- `docs/design.md`: the heading is removed, and the detailed diagram with its sentence opens section 3, Architecture.
+- The test reads the SVG's style rules, attributes and inline styles. It understands the CSS `font` shorthand, so it read the contributor's classes with their real sizes.
+
+#### GREEN
+
+- `node --test tests/contract/docs.test.ts tests/contract/naming.test.ts`: 11 of 11.
+- Rendered with Quick Look at 1,600 px, and with headless Chrome in a 900 px column as on GitHub: the text is sans-serif, the titles are bold, and the smallest text is 12 px.
+
+#### Mutation checks
+
+| Mutation | Result |
+| --- | --- |
+| The banner uses the `font` attribute again | caught |
+| Notes at 14 px | caught |
+| No font family | caught |
+| The description names only a person | caught |
+| The banner names only a person | caught |
+| The README's alternative text names only a person | caught |
+| A viewBox 1,600 wide | caught |
+
+#### Not verified
+
+- How github.com shows the image: it was checked with Chrome and Quick Look on this machine, before anything was pushed.
+- Fonts on Windows and Linux: `system-ui` falls back to Segoe UI, Roboto or the default sans-serif.
+
+### P07: `orchvia --version` (issue #12)
+
+#### RED
+
+- `node --test --test-name-pattern 0021-P07 tests/contract/host-cli.test.ts` failed before the change: `{"code":"UNSUPPORTED_COMMAND","message":"Unknown command: --version"}`, with exit code 1 instead of 0.
+- With the new branch removed from `main.ts` again, a build followed by `npm run test:packages` failed at the new check: `Command failed: node …/node_modules/@orchvia/cli/dist/main.js --version`, with the same message.
+
+#### Changes
+
+- `packages/cli/src/main.ts`: `--version`, next to `--help`, reads `../package.json` next to the running module when it is asked for, and prints its `version` and a newline. `--help` lists `orchvia --version`.
+- `scripts/package-smoke.mjs`: the installed CLI must print the version the packages were built as.
+- The CLI paragraph of the reference, and the changelog.
+
+#### GREEN
+
+- `node --test tests/contract/host-cli.test.ts`: 6 of 6.
+- `npm run build:packages`, `scripts/build-python.py dist/release` and `npm run test:packages`, with the Python build tools pinned as in CI: all nine installation and bundle modes passed. The built `dist/main.js` keeps `new URL('../package.json', import.meta.url)`; the build rewrites only `../../` URLs and `.ts` or `.js` paths.
+- A build as `0.2.0-rc.7`, a version that no source manifest holds, passed the same smoke, so the installed CLI prints the version it was built as.
+- From a checkout the command prints `0.1.0`, the version in `packages/cli/package.json`.
+
+#### Mutation checks
+
+| Mutation | Result |
+| --- | --- |
+| `--help` does not list `--version` | caught (source test) |
+| JSON instead of the bare version | caught (source test) |
+| No newline | caught (source test) |
+| `-v` prints the version too | caught (source test) |
+| The version is written into the code as `0.1.0` | not caught by the source test, whose manifest also says 0.1.0; caught by the smoke of the build as `0.2.0-rc.7` (`'0.1.0\n'` instead of `'0.2.0-rc.7\n'`). The release workflow runs that smoke with the tag's version, and with `0.0.0-rc.N` on pull requests that touch packaging. |
+
+The check that `-v` stays an unknown command was added after its mutation first went unnoticed. It covers behavior that was already right, so it has no failing run of its own.
+
+### R12: the Python quickstart (issue #13)
+
+#### RED
+
+The test and the example were written together, as the TypeScript quickstart's were. A missing example file would only have shown that the file did not exist, so it is not counted as a failure of behavior.
+
+- The first run of `node --test --test-name-pattern 0021-R12 tests/contract/docs.test.ts` failed while the client initialized the host: `orchvia.errors.OrchestrationError: Engine connection ended before the next complete response`. The host had stopped on the reserve guard of SPEC-0011 R10, which `npm test` loads into every Node process through `NODE_OPTIONS`. Started by hand under the guard with the same configuration, it printed ``{"code":"TEST_RESERVE_GUARD","message":"…/state/emergency.reserve would grow past 4096 bytes in `node …/packages/cli/src/main.ts host --stdio --config …`. …"}``. The guard lets the engine's 256 MiB default through only for Node processes started from a file under `examples/`, and the host that the Python example starts runs from `packages/cli/`. The Python client keeps the host's error output in `stderr_tail` and does not repeat it in the exception.
+- Run as a reader runs it, without the guard, the example printed the three lines and exited with 0.
+
+#### Changes
+
+- `examples/python/quickstart.py`, the Python version of `examples/typescript/quickstart.ts`. It writes a host configuration with the fake provider and `allowCrossRootReuse`, starts `packages/cli/src/main.ts host --stdio` with `Orchestrator.local`, approves each result as the TypeScript example does, and gives the second task a `ContextPlan`, with its camelCase keys, that asks to reuse the first task's session. `--node` names the Node executable, as in `fake_roundtrip.py`. `--emergency-bytes` sets the host's emergency reserve, which is otherwise the engine's 256 MiB.
+- The test passes its own Node with `--node`, and `--emergency-bytes 4096`. The guard's rules are unchanged.
+- The README gives the Python command after the offline quickstart's output. It replaces the mention of `fake_roundtrip.py`, which the reference and the guide still document. The README is 5,949 bytes.
+
+#### Mutation checks
+
+| Mutation | Result |
+| --- | --- |
+| The second task starts a new session | caught |
+| The last line prints Python's `True` | caught |
+| No `allowCrossRootReuse` | caught |
+| Another goal for the second task | caught |
+| The result is read without waiting for the task to end | caught |
+
+## One version (P08, P09)
+
+Base: the last tree of the branch `community-12-13-14`. The owner chose D-rel-2 option 2 and D-ver-1 option 1 on 2026-09-23.
+
+### What was found
+
+A local build of 0.1.1 from its tag's commit `5d95079`, made as the release workflow makes it, showed that the builds rewrote only the package manifests, `pyproject.toml` and `orchvia.__version__`. Eight literals kept 0.1.0: the engine's `engineVersion`, the TypeScript SDK's `sdkVersion` in two places, the Python SDK's `SDK_VERSION`, the tool bridge's MCP `serverInfo`, the Claude adapter's MCP server version, and the Codex adapter's `clientInfo` in two places. The source manifests said 0.1.0 while 0.1.1 was tagged, and `build-python.py` fell back to a written `0.1.0`.
+
+### RED
+
+- `node --test tests/contract/version.test.ts` failed 4 of 5:
+  - `0021-P08 package source writes the version only in version.ts and _version.py` listed nine literals: the eight above and `__version__` in `orchvia/__init__.py`.
+  - `0021-P08 set-version writes the version to every copy and changes nothing else` failed against a stub that wrote nothing: every copy still said 0.1.0.
+  - `0021-P09 a release tag must equal the source version, have a changelog section and be on main` ran against the release workflow's Version step, moved unchanged into `scripts/release-version.mjs`. It accepted `v0.1.1` while `package.json` said 0.1.0, and a tag on a commit that is not on main.
+  - `0021-P08 every copy of the version is the root version, and the changelog has its section` failed only because `version.ts` and `_version.py` did not exist yet, which is not counted as a defect.
+  - `0021-P08 the engine reports the root version to the TypeScript SDK` passed: with every copy at 0.1.0, the written literal happened to agree. It guards the behavior.
+- Packages built as `0.2.0-rc.7` with the unchanged builds failed the package smoke's new check: `client.info.engineVersion` was `'0.1.0'` instead of `'0.2.0-rc.7'`.
+
+### Changes
+
+- `packages/engine/src/version.ts` and `python/src/orchvia/_version.py` hold the version, and the eight places and `orchvia.__version__` read it. The SDK and the adapters import it from the engine, which the build maps to `@orchvia/engine/internal/version`, so bundled hosts get it too.
+- `scripts/set-version.mjs X.Y.Z [--root DIR]` reads and checks every copy before writing any: the root and package manifests, the lockfile's seven entries, `version.ts`, `pyproject.toml` and `_version.py`. It writes JSON as npm does, so setting the old version again leaves each file byte for byte as it was.
+- `scripts/build-packages.mjs` and `scripts/build-python.py` take the root version by default and stop when a copy differs from it. With `--version` they also rewrite the built `version.js`, `version.d.ts` and `_version.py`.
+- `scripts/release-version.mjs` replaces the release workflow's Version step. The build job checks out the full history, so the script can check that the tagged commit is on main; any error of that check stops the release.
+- The package smoke and the registry check require `orchvia --version`, `engineVersion`, `orchvia.__version__` and the Python SDK's version to equal the release.
+- `docs/release/publishing.md` describes the release pull request. `CHANGELOG.md` lists 0.1.1's changes under the next version and marks 0.1.1 as not published. The guide no longer names a local candidate version, and `AGENTS.md` and `.claude/CLAUDE.md` name the script.
+
+### GREEN
+
+- `node --test tests/contract/version.test.ts`: 5 of 5.
+- A build as `0.2.0-rc.7` and the package smoke: all nine modes passed. The built `version.js` and `version.d.ts` say `0.2.0-rc.7`; the wheel's `_version.py` and metadata say `0.2.0rc7`.
+- Builds without `--version`, which use 0.1.0, and as `0.0.0-rc.999`, the kind of version a pull request's dry run uses: the smoke passed all nine modes for each.
+- `npm test`: 593 passed, 588 before plus the five version tests. `npm run test:python`: 81 passed. Typecheck, formatting, the generated-contract check and `git diff --check` passed.
+
+### Mutation checks
+
+| Mutation | Result |
+| --- | --- |
+| `engineVersion` written as a literal again | caught (P08 source) |
+| `SDK_VERSION` written as a literal again | caught (P08 source) |
+| A package manifest at another version | caught (P08 copies) |
+| A lockfile workspace entry at another version | caught (P08 copies) |
+| `_version.py` at another version | caught (P08 copies) |
+| No changelog section for the source version | caught (P08 copies) |
+| `set-version` skips the lockfile | caught (P08 set-version) |
+| `set-version` writes JSON with four spaces | caught (P08 set-version) |
+| The release check skips the tag comparison | caught (P09) |
+| The release check skips the check that the commit is on main | caught (P09) |
+| An error in that check lets the release through | caught (P09) |
+| The Python build leaves `_version.py` as it is | caught by the smoke of a `0.2.0-rc.7` build: `AssertionError: ('0.1.0', '0.1.0')` |
+
+### Not verified
+
+- The release workflow's new Version step and the registry check's new assertions run only with the next tag. The registry check's generated scripts were checked with `py_compile` and `node --check`.
+- D-rel-2 on GitHub was carried out on 2026-09-23: the deployments of the v0.1.1 run ([35868558191](https://github.com/masonlee39/orchvia/actions/runs/35868558191)) were rejected, so the run ended without publishing. npm lists only 0.1.0, and neither PyPI nor GitHub Releases has 0.1.1.

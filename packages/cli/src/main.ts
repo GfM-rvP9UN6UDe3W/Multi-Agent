@@ -37,17 +37,24 @@ function print(value: unknown) {
   process.stdout.write(JSON.stringify(value) + '\n');
 }
 
-async function waitForHostSignals(
-  closed: Promise<void>,
-  close: (options: CloseOptions) => Promise<void>,
-  options: CloseOptions,
-) {
+/**
+ * Takes the host's stop signals before it accepts connections (SPEC-0023 S01). A signal that arrives
+ * while the host starts is kept, and the host shuts down in order once `attach` gives it the close
+ * action (S03).
+ */
+function hostSignals() {
+  let target:
+    | { close: (options: CloseOptions) => Promise<void>; options: CloseOptions }
+    | undefined;
+  let requested = false;
   let stopping = false;
   let operationId: string | undefined;
   const stop = () => {
-    if (stopping) return;
+    requested = true;
+    if (!target || stopping) return;
     stopping = true;
-    close({ ...options, ...(operationId ? { operationId } : {}) })
+    target
+      .close({ ...target.options, ...(operationId ? { operationId } : {}) })
       .catch((error) => {
         const pendingId =
           error.operationId ?? error.details?.operationId ?? error.data?.operationId;
@@ -66,12 +73,23 @@ async function waitForHostSignals(
   };
   process.on('SIGTERM', stop);
   process.on('SIGINT', stop);
-  try {
-    await closed;
-  } finally {
-    process.removeListener('SIGTERM', stop);
-    process.removeListener('SIGINT', stop);
-  }
+  // SPEC-0023 P05: Claude processes lead their own groups, so a closing terminal reaches only the host.
+  process.on('SIGHUP', stop);
+  return {
+    /** A stop signal arrived, and the host must not announce that it is ready (S02). */
+    get requested() {
+      return requested;
+    },
+    attach(close: (options: CloseOptions) => Promise<void>, options: CloseOptions) {
+      target = { close, options };
+      if (requested) stop();
+    },
+    remove() {
+      process.removeListener('SIGTERM', stop);
+      process.removeListener('SIGINT', stop);
+      process.removeListener('SIGHUP', stop);
+    },
+  };
 }
 
 export async function main(argv = process.argv.slice(2)): Promise<void> {
@@ -84,8 +102,14 @@ export async function main(argv = process.argv.slice(2)): Promise<void> {
   }
   if (command === '--help' || command === 'help') {
     process.stdout.write(
-      'orchvia host --config FILE [--stdio | --socket PATH]\norchvia doctor --config FILE | --socket PATH\norchvia submit --socket PATH --task FILE [--idempotency-key KEY]\norchvia status --socket PATH --task TASK_ID\norchvia run --socket PATH --task FILE [--interactive] [--follow] [--timeout-ms N] [--idempotency-key KEY]\norchvia attach --socket PATH --task TASK_ID [--interactive] [--follow] [--after-cursor N] [--timeout-ms N]\norchvia control --socket PATH --target FILE --action pause|resume|stop|compact|rotate [--mode drain|interrupt] [--idempotency-key KEY]\norchvia approve --socket PATH --approval ID --revision N --decision approve|deny [--idempotency-key KEY]\n',
+      'orchvia host --config FILE [--stdio | --socket PATH]\norchvia doctor --config FILE | --socket PATH\norchvia submit --socket PATH --task FILE [--idempotency-key KEY]\norchvia status --socket PATH --task TASK_ID\norchvia run --socket PATH --task FILE [--interactive] [--follow] [--timeout-ms N] [--idempotency-key KEY]\norchvia attach --socket PATH --task TASK_ID [--interactive] [--follow] [--after-cursor N] [--timeout-ms N]\norchvia control --socket PATH --target FILE --action pause|resume|stop|compact|rotate [--mode drain|interrupt] [--idempotency-key KEY]\norchvia approve --socket PATH --approval ID --revision N --decision approve|deny [--idempotency-key KEY]\norchvia --version\n',
     );
+    return;
+  }
+  if (command === '--version') {
+    // The CLI package's own manifest: packages/cli/package.json, or the package root for dist/main.js.
+    const manifest = await readFile(new URL('../package.json', import.meta.url), 'utf8');
+    process.stdout.write(`${JSON.parse(manifest).version}\n`);
     return;
   }
   if (command === 'host') {
@@ -105,18 +129,25 @@ export async function main(argv = process.argv.slice(2)): Promise<void> {
       mode: config.shutdown?.mode ?? 'interrupt',
       timeoutMs: config.shutdown?.timeoutMs ?? (stdio ? OWNER_EOF_TIMEOUT_MS : 1000),
     } satisfies CloseOptions;
+    // Until here a stop signal ends the process like a crash during startup: no client can connect
+    // yet, and recovery dispatches nothing. From here it shuts the host down in order (SPEC-0023 S).
+    const signals = hostSignals();
     try {
       if (stdio) {
         const connection = startStdioHost(engine);
-        await waitForHostSignals(connection.closed, connection.shutdown, shutdown);
+        signals.attach(connection.shutdown, shutdown);
+        await connection.closed;
       } else {
         const host = await startUnixHost(engine, { socketPath: socketPath! });
-        process.stderr.write(`orchvia listening on ${socketPath}\n`);
-        await waitForHostSignals(host.closed, host.close, shutdown);
+        signals.attach(host.close, shutdown);
+        if (!signals.requested) process.stderr.write(`orchvia listening on ${socketPath}\n`);
+        await host.closed;
       }
     } catch (error) {
       await engine.close({ mode: 'interrupt', timeoutMs: 1000 }).catch(() => {});
       throw error;
+    } finally {
+      signals.remove();
     }
     return;
   }

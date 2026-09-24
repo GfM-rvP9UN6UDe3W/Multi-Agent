@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { ORCHESTRATION_TOOLS, TOOL_NAMES, type RuntimeTools } from './tools.ts';
 import type { Json } from './types.ts';
+import { VERSION } from './version.ts';
 
 const MAX_FRAME = 1_048_576;
 type BridgeEnv = { AGENT_ORCH_BRIDGE_TOKEN: string; AGENT_ORCH_BRIDGE_SOCKET: string };
@@ -202,7 +203,7 @@ export async function runToolBridge(): Promise<void> {
             ? params.protocolVersion
             : '2024-11-05',
           capabilities: { tools: { listChanged: false } },
-          serverInfo: { name: 'agent_orch', version: '0.1.0' },
+          serverInfo: { name: 'agent_orch', version: VERSION },
         };
       else if (value.method === 'ping') response.result = {};
       else if (value.method === 'tools/list') response.result = { tools: ORCHESTRATION_TOOLS };

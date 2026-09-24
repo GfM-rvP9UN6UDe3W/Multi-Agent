@@ -15,7 +15,11 @@ import type {
   SessionSnapshot,
   TaskSnapshot,
 } from '../../packages/engine/src/types.ts';
-import { claudeProcess, stubbornClaudeProcess } from '../fixtures/claude-process.ts';
+import {
+  claudeProcess,
+  refuseGroupSignals,
+  stubbornClaudeProcess,
+} from '../fixtures/claude-process.ts';
 
 function input(evidence: ExecutionEvidence[]): RuntimeInput {
   return {
@@ -45,6 +49,8 @@ async function stop(child: ChildProcessWithoutNullStreams): Promise<void> {
 }
 
 test('AC-R04 close and iterator completion keep a live child held until its observed exit', async (t) => {
+  // The child outlives its cleanup only because the adapter may not signal its group.
+  refuseGroupSignals(t);
   const evidence: ExecutionEvidence[] = [];
   let child!: ChildProcessWithoutNullStreams;
   const adapter = createClaudeAdapter({
@@ -181,6 +187,8 @@ test('AC-R04 rejecting close and iterator return still require actual owned proc
 });
 
 test('AC-R04 an owned spawn failure is observed without treating a later process error as exit', async (t) => {
+  // The live child below outlives its cleanup only because the adapter may not signal its group.
+  refuseGroupSignals(t);
   const evidence: ExecutionEvidence[] = [];
   let child!: ChildProcessWithoutNullStreams;
   const adapter = createClaudeAdapter({
@@ -245,6 +253,8 @@ test('AC-R04 cleanup seals a saved spawn callback against delayed process creati
 });
 
 test('AC-R04 all observed child processes must exit before cleanup is confirmed', async (t) => {
+  // The children outlive their cleanup only because the adapter may not signal their groups.
+  refuseGroupSignals(t);
   const children: ChildProcessWithoutNullStreams[] = [];
   const evidence: ExecutionEvidence[] = [];
   const adapter = createClaudeAdapter({
@@ -283,7 +293,9 @@ async function until(check: () => Promise<boolean>): Promise<void> {
   }
 }
 
-test('AC-R04 a live Claude child blocks owner release and queued dispatch until late exit', async () => {
+test('AC-R04 a live Claude child blocks owner release and queued dispatch until late exit', async (t) => {
+  // The child outlives its cleanup only because the adapter may not signal its group.
+  refuseGroupSignals(t);
   const dir = await mkdtemp(join(tmpdir(), 'claude-cleanup-engine-'));
   const workspace = join(dir, 'workspace');
   await mkdir(workspace);

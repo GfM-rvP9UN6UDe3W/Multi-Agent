@@ -703,9 +703,13 @@ test('0003-A01 delayed timer delivery cannot let an overdue terminal complete a 
   }
 });
 
-test('0003-A05 retained adapter cleanup blocks attestation after the observation loop ends', async () => {
+test('0003-A05 retained adapter cleanup blocks attestation after the observation loop ends', async (t) => {
   const { createClaudeAdapter } = await import('../../packages/adapter-claude/src/index.ts');
-  const { stubbornClaudeProcess } = await import('../fixtures/claude-process.ts');
+  const { refuseGroupSignals, stubbornClaudeProcess } = await import(
+    '../fixtures/claude-process.ts'
+  );
+  // The process outlives its cleanup only because the adapter may not signal its group.
+  refuseGroupSignals(t);
   let child: ReturnType<typeof stubbornClaudeProcess>['child'] | undefined;
   const dir = await mkdtemp(join(tmpdir(), 'orch-retained-cleanup-'));
   const workspace = join(dir, 'workspace');

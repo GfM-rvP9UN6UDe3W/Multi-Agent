@@ -6,7 +6,7 @@ import {
 } from '../../packages/adapter-claude/src/index.ts';
 import type { RuntimeEvent, RuntimeInput } from '../../packages/engine/src/types.ts';
 
-import { withClaudeProcess } from '../fixtures/claude-process.ts';
+import { refuseGroupSignals, withClaudeProcess } from '../fixtures/claude-process.ts';
 
 function createClaudeAdapter(config: ClaudeAdapterConfig = {}, holdUntil?: Promise<void>) {
   return createAdapter({
@@ -171,6 +171,8 @@ test('A2 Claude reports matched terminal before cleanup and then full stop', asy
 });
 
 test('A2 Claude retains terminal evidence until delayed process exit confirms stop', async (t) => {
+  // The held child outlives its cleanup only because the adapter may not signal its group.
+  refuseGroupSignals(t);
   const evidence: Evidence[] = [];
   let finishReturn!: () => void;
   const returned = new Promise<IteratorResult<unknown>>((resolve) => {
@@ -304,6 +306,8 @@ test('A2 Claude does not submit after the host budget is already exhausted', asy
 });
 
 test('A2 Claude keeps a late matching terminal as resource evidence without reviving the business result', async (t) => {
+  // The held child outlives its cleanup only because the adapter may not signal its group.
+  refuseGroupSignals(t);
   const evidence: Evidence[] = [];
   let remaining = 1000;
   let finishNext!: () => void;

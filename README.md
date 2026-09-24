@@ -6,7 +6,7 @@ Orchvia runs Claude Code and Codex agents as a team from your own application: o
 - **Nothing is lost or silently repeated.** Tasks, messages, approvals and token usage are stored in SQLite before anything runs. After a crash, work whose outcome is unknown waits for you instead of being retried.
 - **You stay in charge.** Your code and the limits you configure decide what runs next, not a manager model. A result counts as done only after a person or a check you registered accepts it.
 
-![How Orchvia runs work: persisted requests, choosing a session, agents working in parallel through a durable mailbox, lifecycle control and recovery](docs/images/orchestration-flow.jpg)
+![Your application sends tasks to the Orchvia engine, which keeps its state and a mailbox in SQLite and runs Claude Code and Codex sessions that message each other through the mailbox. A person or a registered check accepts each result.](docs/images/orchestration-overview.svg)
 
 ## Quickstart
 
@@ -27,16 +27,16 @@ The example uses a fake runtime, so it needs no account and calls no model. It r
 The second task reused the first agent's session: true
 ```
 
+From Python 3.11 or later, the same quickstart runs through a Node host that Python starts, and prints the same three lines:
+
+```sh
+PYTHONPATH=python/src python3 examples/python/quickstart.py
+```
+
 With real Claude, the same two tasks run on one Claude Code session. You need Claude Code signed in (`claude auth login`); the example makes two small model calls:
 
 ```sh
 node examples/typescript/quickstart-claude.ts
-```
-
-From Python, the same kind of task runs through a Node host that Python starts:
-
-```sh
-PYTHONPATH=python/src python3 examples/python/fake_roundtrip.py
 ```
 
 To use Orchvia in your own project, install it from npm (Node.js 22.18 or later):

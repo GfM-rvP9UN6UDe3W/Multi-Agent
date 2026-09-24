@@ -15,7 +15,7 @@ import type {
   SchedulerSnapshot,
   TaskSnapshot,
 } from '../../packages/engine/src/types.ts';
-import { withClaudeProcess } from '../fixtures/claude-process.ts';
+import { refuseGroupSignals, withClaudeProcess } from '../fixtures/claude-process.ts';
 
 const makeAdapter = (config: Record<string, unknown>) =>
   createClaudeAdapter(config as ClaudeAdapterConfig);
@@ -442,6 +442,8 @@ test('AC-P02 rejected and aborted extensions never submit or expose private erro
 });
 
 test('AC-P05 a positive remote observer does not replace local process exit', async (t) => {
+  // The held child outlives its cleanup only because the adapter may not signal its group.
+  refuseGroupSignals(t);
   const paths = await directories(t);
   let release!: () => void;
   const gate = new Promise<void>((resolve) => {
@@ -475,7 +477,11 @@ test('AC-P05 a positive remote observer does not replace local process exit', as
     );
   } finally {
     release();
-    await new Promise((resolve) => setTimeout(resolve, 30));
+    // The released child exits after its SIGKILL. Wait until the adapter observes that exit; the
+    // deadline only reports a child that never exits.
+    const deadline = performance.now() + 5000;
+    while (adapter.hasActiveResources('session') && performance.now() < deadline)
+      await new Promise((resolve) => setTimeout(resolve, 5));
     await adapter.close();
   }
 });

@@ -128,6 +128,16 @@ The first push run of this branch, CI run 35749328231 on `c462405`, failed one j
 - GREEN under the same load: 0 of 240 runs of the expire variant and 0 of 48 runs of the whole file failed.
 - Mutation: without firing the held expiry, the expire variant fails; the permission is never answered (`granted` stays `undefined`, not `false`).
 
+## A CI flake in the C04 deadline test (2026-09-23)
+
+Push run [35866873671](https://github.com/masonlee39/orchvia/actions/runs/35866873671) of `06dd749`, a change to the release workflow and documents only, failed `0019-C04 the Jev judge waits for its retry only while its deadline lasts` on both macOS 14 contract jobs (Node 24.14.0 and 22.18.0): `Expected values to be strictly equal: 0 !== 1` from `assert.equal(server.requests.length, 1)`. The judge had kept its deadline; on the busy runner the 50 ms deadline passed before the local server had read the request, so the request was never counted.
+
+RED: `jevServer` gained `delayMs`, which holds a request back before the server reads it, as a slow machine does; a client that gives up meanwhile is not counted. A new test, `0019-C04 the Jev judge keeps its deadline when the server is slower than the deadline`, used a 100 ms delay with the original assertions and failed three times out of three with the same `0 !== 1`, while its elapsed-time check passed.
+
+Fix, in the tests only: both deadline tests keep `elapsed < 190` and then call `noRetry`, which waits until 400 ms after the start, past the moment the single retry would have been sent after a 503, and requires at most one request. The first request may or may not have been counted; the elapsed bound is what shows that the 200 ms pause was not awaited, and `noRetry` shows that no retry followed.
+
+GREEN: both tests passed three times out of three, and 8 concurrent runs with every core kept busy by a spin loop passed 16 of 16. `npm test`: 586 passed (585 before, plus the new test). Mutation: with the retry pause no longer ended by the deadline (`pause(200, new AbortController().signal)`), the original test failed with `the 200 ms retry pause outlived a 50 ms deadline: 212 ms`.
+
 ## Parity
 
 | Rule | TypeScript | Python |
