@@ -173,6 +173,8 @@ class LocalEngine implements Engine {
   private adapters: Map<string, RuntimeAdapter>;
   private flights = new Map<string, Flight>();
   private closing = false;
+  /** The first internal failure that stopped this engine, if any (SPEC-0025 F01). */
+  private failure?: { step: string; code: string; at: string };
   private closed = false;
   private scheduled = false;
   private shutdownId: string | undefined;
@@ -310,7 +312,7 @@ class LocalEngine implements Engine {
           this.storage.collect();
         } catch (error) {
           this.store.storageFailure(error);
-          this.closing = true;
+          this.stopAfterFailure('storage collection', error);
         }
       }, 3600000);
       this.storageTimer.unref();
@@ -321,6 +323,15 @@ class LocalEngine implements Engine {
     }
   }
 
+  /** Stops new work after an internal failure and keeps the first one for clients (SPEC-0025 F01). */
+  private stopAfterFailure(step: string, error: unknown): void {
+    this.closing = true;
+    this.failure ??= {
+      step,
+      code: error instanceof OrchestrationError ? error.code : 'INTERNAL_ERROR',
+      at: this.time(),
+    };
+  }
   private ensureOpen(): void {
     if (this.closed) fail('CLIENT_CLOSED', 'Engine is closed');
   }
@@ -357,7 +368,7 @@ class LocalEngine implements Engine {
       try {
         this.expire(flight, reason);
       } catch (error) {
-        this.closing = true;
+        this.stopAfterFailure('deadline persistence', error);
         process.emitWarning(`Deadline persistence failed; scheduler stopped: ${String(error)}`);
       }
     };
@@ -419,7 +430,14 @@ class LocalEngine implements Engine {
   private ensureMutable(): void {
     this.ensureOpen();
     this.store.assertWritable();
-    if (this.closing) fail('HOST_STOPPING', 'Engine is stopping');
+    if (this.closing)
+      fail(
+        'HOST_STOPPING',
+        this.failure
+          ? `Engine stopped after its ${this.failure.step} failed (${this.failure.code})`
+          : 'Engine is stopping',
+        this.failure ? { failure: { ...this.failure } } : {},
+      );
   }
   private task(id: string): TaskSnapshot {
     return this.store.require('tasks', id);
@@ -1390,6 +1408,7 @@ class LocalEngine implements Engine {
     if (quarantined.length + reserved.length >= maxQuarantinedDispatches)
       reasons.push('QUARANTINE_CAPACITY_EXCEEDED');
     if (this.closing) reasons.push('HOST_STOPPING');
+    if (this.failure) reasons.push('SCHEDULER_FAILED');
     if (this.pendingResourceCleanups.size) reasons.push('RESOURCE_CLEANUP_PENDING');
     if (conflicts.length) reasons.push('EXECUTION_EVIDENCE_CONFLICT');
     const occupants = records.filter((d) => d.executionLease?.status === 'held' || d.quarantined);
@@ -1649,7 +1668,7 @@ class LocalEngine implements Engine {
       });
       if (!this.flights.has(flight.sessionId)) this.reevaluateRelease(flight.dispatchId);
     } catch (error) {
-      this.closing = true;
+      this.stopAfterFailure('execution evidence persistence', error);
       process.emitWarning(
         `Execution evidence persistence failed; scheduler stopped: ${String(error)}`,
       );
@@ -1695,7 +1714,7 @@ class LocalEngine implements Engine {
         );
       });
     } catch (error) {
-      if (!(error instanceof OrchestrationError)) this.closing = true;
+      if (!(error instanceof OrchestrationError)) this.stopAfterFailure('usage persistence', error);
       throw error;
     }
   }
@@ -4114,7 +4133,7 @@ class LocalEngine implements Engine {
         }
       } catch (error) {
         // A scheduler/storage failure must not become an unhandled promise or silently retry a dispatch.
-        this.closing = true;
+        this.stopAfterFailure('scheduler pass', error);
         process.emitWarning(
           `Orchestrator scheduler stopped: ${error instanceof OrchestrationError ? error.code : 'INTERNAL_ERROR'}`,
         );
@@ -4349,7 +4368,7 @@ class LocalEngine implements Engine {
     ].join('\n');
     flight.promise = this.consume(flight, adapter, { ...session }, prompt)
       .catch((error) => {
-        this.closing = true;
+        this.stopAfterFailure('runtime observation persistence', error);
         process.emitWarning(
           `Runtime observation persistence failed; scheduler stopped: ${String(error)}`,
         );
@@ -4360,7 +4379,7 @@ class LocalEngine implements Engine {
         try {
           this.reevaluateRelease(flight.dispatchId);
         } catch (error) {
-          this.closing = true;
+          this.stopAfterFailure('execution release persistence', error);
           process.emitWarning(
             `Execution release persistence failed; scheduler stopped: ${String(error)}`,
           );

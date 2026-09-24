@@ -1,4 +1,4 @@
-// Generated from schemas/protocol.schema.json; SHA-256 1fe5197a0546b5f5a34bc3c07618e9ad77eb11405e4e7c5ae2b10ac857526bce. Do not edit.
+// Generated from schemas/protocol.schema.json; SHA-256 e0a94dcbbad31c521575780b3af75d3e586a9b9ec184f48160554d715a44e082. Do not edit.
 export const protocolSchema = {
   $schema: 'https://json-schema.org/draft/2020-12/schema',
   $id: 'urn:agent-orch:protocol:2.0',
@@ -983,7 +983,7 @@ export const protocolSchema = {
         reasons: {
           type: 'array',
           description:
-            "Current reasons include EXECUTION_CAPACITY_EXHAUSTED, QUARANTINE_CAPACITY_EXCEEDED, HOST_STOPPING, RESOURCE_CLEANUP_PENDING and EXECUTION_EVIDENCE_CONFLICT. Clients must tolerate additional reason strings. Counts come from persisted dispatches; reasons also reflect this host's shutdown and in-memory cleanup state.",
+            "Current reasons include EXECUTION_CAPACITY_EXHAUSTED, QUARANTINE_CAPACITY_EXCEEDED, HOST_STOPPING, SCHEDULER_FAILED (with HOST_STOPPING, after an internal failure stopped the host), RESOURCE_CLEANUP_PENDING and EXECUTION_EVIDENCE_CONFLICT. Clients must tolerate additional reason strings. Counts come from persisted dispatches; reasons also reflect this host's shutdown and in-memory cleanup state.",
           items: {
             type: 'string',
           },

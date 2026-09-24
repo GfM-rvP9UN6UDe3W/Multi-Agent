@@ -1,4 +1,4 @@
-import { createServer } from 'node:net';
+import { createConnection, createServer } from 'node:net';
 import { chmod, lstat, mkdir, unlink } from 'node:fs/promises';
 import { dirname, isAbsolute } from 'node:path';
 import type { Readable, Writable } from 'node:stream';
@@ -340,6 +340,24 @@ export function startStdioHost(
   );
 }
 
+/** Whether no process accepts connections on the Unix socket at `path` (SPEC-0025 S01). */
+function abandoned(path: string): Promise<boolean> {
+  return new Promise((resolve) => {
+    const socket = createConnection(path);
+    const settle = (value: boolean) => {
+      clearTimeout(timer);
+      socket.destroy();
+      resolve(value);
+    };
+    // A listener that neither accepts nor refuses within a second counts as alive.
+    const timer = setTimeout(() => settle(false), 1000);
+    socket.once('connect', () => settle(false));
+    socket.once('error', (error: NodeJS.ErrnoException) =>
+      settle(error.code === 'ECONNREFUSED' || error.code === 'ENOENT'),
+    );
+  });
+}
+
 export async function startUnixHost(
   engine: Engine,
   options: { socketPath: string; log?: (message: string) => void },
@@ -369,13 +387,27 @@ export async function startUnixHost(
       ),
       { code: 'INVALID_CONFIG' },
     );
-  try {
-    await lstat(options.socketPath);
-    throw Object.assign(new Error('Socket path already exists; refusing to replace it'), {
-      code: 'SOCKET_IN_USE',
+  // A socket that no process accepts connections on was left by a host that ended without
+  // closing, such as after SIGKILL. The engine already holds this state's owner lock and the
+  // directory is private to this user, so the socket is removed; anything else is refused
+  // (SPEC-0025 S).
+  const existing = await lstat(options.socketPath).catch((error: NodeJS.ErrnoException) => {
+    if (error.code === 'ENOENT') return undefined;
+    throw error;
+  });
+  if (existing) {
+    if (!existing.isSocket())
+      throw Object.assign(
+        new Error('Socket path exists and is not a socket; refusing to replace it'),
+        { code: 'SOCKET_IN_USE' },
+      );
+    if (!(await abandoned(options.socketPath)))
+      throw Object.assign(new Error('Another process accepts connections on the socket path'), {
+        code: 'SOCKET_IN_USE',
+      });
+    await unlink(options.socketPath).catch((error: NodeJS.ErrnoException) => {
+      if (error.code !== 'ENOENT') throw error;
     });
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
   }
   const connections = new Set<RpcConnection>();
   const budget: HostBudget = { pending: 0, bytes: 0 };

@@ -1,4 +1,4 @@
-// Generated from schemas/protocol.schema.json; SHA-256 1fe5197a0546b5f5a34bc3c07618e9ad77eb11405e4e7c5ae2b10ac857526bce. Do not edit.
+// Generated from schemas/protocol.schema.json; SHA-256 e0a94dcbbad31c521575780b3af75d3e586a9b9ec184f48160554d715a44e082. Do not edit.
 // Structural types; validateWire enforces numeric and conditional constraints.
 export type RuntimeSpec = { provider: string; model: string };
 export type TaskSpec = {

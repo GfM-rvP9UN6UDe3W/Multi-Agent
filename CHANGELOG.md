@@ -8,6 +8,12 @@ All notable changes to Orchvia are recorded here. Versions follow [Semantic Vers
 
 - `events.read` with `taskId`, which `events({ taskId })` uses in both SDKs, reads only that task's events, through its index, and a page that is not full moves the cursor to the store's last event. On a store with a long history a new task's first event had reached the iterator seconds late: 5 seconds behind 10,000 events of other tasks, 25 seconds behind 50,000 (SPEC-0024 E).
 - The engine finds pending approvals, persisted messages and pending handoffs through partial indexes instead of reading those whole tables before every call, in every scheduler pass and dispatch, and when a task is cancelled. Each call had cost about 22 ms more with 10,000 finished approvals and messages and 140 ms more with 50,000, and one idle event subscriber had kept the engine's thread up to 88% busy (SPEC-0024 X).
+- `orchvia host --socket` starts after a host that ended without closing, such as after SIGKILL: it removes the socket file it finds when no process accepts connections on it. It had refused with `SOCKET_IN_USE` until someone removed the file. Another process listening on the path, or a path that is not a socket, is still refused, now with a message that says which (SPEC-0025 S).
+- The embedded orchestrator of `createOrchestrator` rejects failed reads with `OrchestratorError`, whose details are in `data`, as a socket client does. It had rejected them with the engine's own error class (SPEC-0025 E).
+
+### Changed
+
+- After an internal failure stopped the host, `scheduler.get` lists `SCHEDULER_FAILED` besides `HOST_STOPPING`, and a refused write's `HOST_STOPPING` error names the failed step and holds `failure: {step, code, at}` in its data. A stop on request is unchanged (SPEC-0025 F).
 
 ## [0.1.2] - 2026-09-24
 
