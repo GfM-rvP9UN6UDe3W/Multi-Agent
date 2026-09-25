@@ -2,7 +2,9 @@
 
 All notable changes to Orchvia are recorded here. Versions follow [Semantic Versioning](https://semver.org/); before 1.0, a minor version may change the API.
 
-## [Unreleased]
+## [0.1.3] - 2026-09-25
+
+Corrections from a review of 0.1.2: the Claude adapter installs next to any Zod, reads stay fast on a store with a long history, and a socket host starts again after a crash.
 
 ### Fixed
 
@@ -15,7 +17,7 @@ All notable changes to Orchvia are recorded here. Versions follow [Semantic Vers
 ### Changed
 
 - After an internal failure stopped the host, `scheduler.get` lists `SCHEDULER_FAILED` besides `HOST_STOPPING`, and a refused write's `HOST_STOPPING` error names the failed step and holds `failure: {step, code, at}` in its data. A stop on request is unchanged (SPEC-0025 F).
-- Claude's model sees the same tool schemas as Codex's, with the description of the fields that each tool's `request` takes; Zod's conversion had dropped it. A host that supplies `query` no longer has to supply `createMcpServer` for orchestration tools, and `createClaudeMcpServer(tools)` ignores the `{ sdk, zod }` it took before (SPEC-0026).
+- Claude's model sees the same tool schemas as Codex's, with the description of the fields that each tool's `request` takes; Zod's conversion had dropped it. A host that supplies `query` no longer has to supply `createMcpServer` for orchestration tools, and `createClaudeMcpServer(tools)` ignores the `{ sdk, zod }` it took before. As with Codex, a tool call's arguments must be exactly one object `request`; other arguments are answered `INVALID_REQUEST`, where Zod had dropped extra keys (SPEC-0026).
 - The orchestration MCP servers of both adapters keep the protocol version 2025-11-25 when a client asks for it, and answer the latest version they know, instead of 2024-11-05, to a version they do not know (SPEC-0026 Z04).
 
 ## [0.1.2] - 2026-09-24
