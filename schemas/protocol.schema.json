@@ -974,7 +974,7 @@
         },
         "reasons": {
           "type": "array",
-          "description": "Current reasons include EXECUTION_CAPACITY_EXHAUSTED, QUARANTINE_CAPACITY_EXCEEDED, HOST_STOPPING, RESOURCE_CLEANUP_PENDING and EXECUTION_EVIDENCE_CONFLICT. Clients must tolerate additional reason strings. Counts come from persisted dispatches; reasons also reflect this host's shutdown and in-memory cleanup state.",
+          "description": "Current reasons include EXECUTION_CAPACITY_EXHAUSTED, QUARANTINE_CAPACITY_EXCEEDED, HOST_STOPPING, SCHEDULER_FAILED (with HOST_STOPPING, after an internal failure stopped the host), RESOURCE_CLEANUP_PENDING and EXECUTION_EVIDENCE_CONFLICT. Clients must tolerate additional reason strings. Counts come from persisted dispatches; reasons also reflect this host's shutdown and in-memory cleanup state.",
           "items": {
             "type": "string"
           }

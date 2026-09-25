@@ -8,16 +8,11 @@ The engine requires the filesystem, child-process and SQLite APIs available in N
 
 ## Host-owned Claude SDK
 
-The host owns its pinned native SDK, Zod and platform executable. Inject `query`; if orchestration tools are enabled, inject `createMcpServer` using that same SDK. Inject `inspectSession` when retained native history is required. An injected query without an inspection callback reports `unavailable`; it does not locate another SDK. Enabling tools without the matching MCP factory fails before submission.
+The host owns its pinned native SDK and platform executable. Inject `query`, and `inspectSession` when retained native history is required. An injected query without an inspection callback reports `unavailable`; it does not locate another SDK. Orchestration tools need no callback: the adapter serves its own MCP server, which needs neither the SDK nor Zod (SPEC-0026).
 
 ```ts
 import * as sdk from '@anthropic-ai/claude-agent-sdk';
-import * as zod from 'zod';
-import {
-  createClaudeAdapter,
-  createClaudeMcpServer,
-  inspectClaudeSession,
-} from '@orchvia/adapter-claude';
+import { createClaudeAdapter, inspectClaudeSession } from '@orchvia/adapter-claude';
 
 const adapter = createClaudeAdapter({
   query: (request) => sdk.query({
@@ -27,12 +22,11 @@ const adapter = createClaudeAdapter({
       pathToClaudeCodeExecutable: hostPinnedExecutablePath,
     },
   }),
-  createMcpServer: (tools) => createClaudeMcpServer(tools, { sdk, zod }),
   inspectSession: (input) => inspectClaudeSession(input, sdk),
 });
 ```
 
-Keep the adapter's supplied `spawnClaudeCodeProcess` callback when wrapping native query options so the engine can observe cleanup. For ordinary Node installations without injection, install the Claude SDK and its peers; the adapter explicitly declares optional peers `@anthropic-ai/claude-agent-sdk` and `zod: 4.4.3`. They are optional because complete host injection needs no runtime dependency lookup. Claude SDK 0.3.274 with Zod 4.6.5 fails native tools/list schema conversion; do not widen the tested Zod peer without repeating native enumeration. Missing MCP peers produce `CLAUDE_DEPENDENCY_UNAVAILABLE` with the dependency names.
+Keep the adapter's supplied `spawnClaudeCodeProcess` callback when wrapping native query options so the engine can observe cleanup. For ordinary Node installations without injection, install the Claude SDK and its peers; the adapter declares the optional peer `@anthropic-ai/claude-agent-sdk`, optional because complete host injection needs no runtime dependency lookup. It declares no Zod peer: its MCP server answers with the tools' JSON Schemas and works with any Zod the application uses, or none. SPEC-0026 replaced the `zod: 4.4.3` peer of 0.1.2, whose server failed native tools/list with SDK 0.3.274 and Zod 4.6.5.
 
 All adapter default imports use literal module names so bundlers can analyze them. A host that excludes native peers from its main bundle must provide its own callbacks and may mark those peer names external in its bundler. The host is responsible for how it packages third-party SDK code. The pinned SDK 0.3.274 itself uses `import.meta.url`; the CJS smoke applies a narrowly scoped URL shim to that third-party file only. It applies no URL shim to any orchvia source. See [the smoke implementation](../../scripts/package-bundles-smoke.mjs) for the exact configuration.
 

@@ -1,63 +1,54 @@
+import { answerMcpMessage } from '../../engine/src/mcp-server.ts';
 import type { RuntimeTools } from '../../engine/src/tools.ts';
-import { VERSION } from '../../engine/src/version.ts';
 
+/** @deprecated Ignored: the server needs neither the Claude SDK nor Zod (SPEC-0026 Z07). */
 export interface ClaudeMcpDependencies {
-  sdk: Pick<typeof import('@anthropic-ai/claude-agent-sdk'), 'tool' | 'createSdkMcpServer'>;
-  zod: Pick<typeof import('zod'), 'string' | 'unknown' | 'record'>;
+  sdk?: unknown;
+  zod?: unknown;
 }
 
-/** Pass the host's pinned SDK and Zod together when embedding in a bundle. */
+/** What the Claude Agent SDK passes to an in-process server's `connect`, as far as it is used here. */
+interface SdkServerTransport {
+  onmessage?: (message: unknown) => void;
+  onclose?: () => void;
+  start(): Promise<void>;
+  send(message: unknown): Promise<void>;
+  close(): Promise<void>;
+}
+
+/**
+ * The adapter-owned `agent_orch` server for the Claude Agent SDK's `mcpServers` option. It answers
+ * MCP itself with the tools' JSON Schemas, as the Codex bridge does, so it loads neither the SDK nor
+ * Zod and works with whatever Zod the host has installed (SPEC-0026).
+ */
 export async function createClaudeMcpServer(
   tools: RuntimeTools,
-  dependencies?: ClaudeMcpDependencies,
+  _dependencies?: ClaudeMcpDependencies,
 ): Promise<unknown> {
-  let loaded = dependencies;
-  if (!loaded) {
-    try {
-      const [sdk, zod] = await Promise.all([
-        import('@anthropic-ai/claude-agent-sdk'),
-        import('zod'),
-      ]);
-      loaded = { sdk, zod };
-    } catch (cause) {
-      throw Object.assign(
-        new Error(
-          'Claude MCP requires @anthropic-ai/claude-agent-sdk and zod 4.4.3, or explicit host SDK/Zod bindings',
-          { cause },
-        ),
-        { code: 'CLAUDE_DEPENDENCY_UNAVAILABLE' },
-      );
-    }
-  }
-  const { sdk, zod: z } = loaded;
-  return sdk.createSdkMcpServer({
+  const transports = new Set<SdkServerTransport>();
+  return {
+    type: 'sdk',
     name: 'agent_orch',
-    version: VERSION,
-    tools: tools.definitions.map((definition) =>
-      sdk.tool(
-        definition.name,
-        definition.description,
-        { request: z.record(z.string(), z.unknown()) },
-        async ({ request }) => {
-          try {
-            return {
-              content: [
-                { type: 'text', text: JSON.stringify(await tools.call(definition.name, request)) },
-              ],
-            };
-          } catch (error) {
-            const code =
-              error &&
-              typeof error === 'object' &&
-              'code' in error &&
-              typeof error.code === 'string' &&
-              /^[A-Z_]{1,64}$/.test(error.code)
-                ? error.code
-                : 'TOOL_FAILED';
-            return { isError: true, content: [{ type: 'text', text: code }] };
-          }
-        },
-      ),
-    ),
-  });
+    instance: {
+      async connect(transport: SdkServerTransport) {
+        transports.add(transport);
+        transport.onclose = () => transports.delete(transport);
+        transport.onmessage = (message) => {
+          if (!message || typeof message !== 'object' || Array.isArray(message)) return;
+          void answerMcpMessage(
+            message as Record<string, unknown>,
+            tools.definitions,
+            (name, request) => tools.call(name, request),
+          )
+            .then((answer) => answer && transport.send(answer))
+            // A transport closed by its query cannot take a late answer; nothing waits for it.
+            .catch(() => {});
+        };
+        await transport.start();
+      },
+      async close() {
+        for (const transport of [...transports]) await transport.close();
+      },
+    },
+  };
 }

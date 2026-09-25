@@ -806,6 +806,39 @@ async function initialize(caller: Caller, owner: boolean) {
     throw error;
   }
 }
+/**
+ * The error a socket client receives for `error`, built as the host's `errorData` in
+ * packages/cli/src/host.ts builds it: the code, or INTERNAL_ERROR, the message, and data holding the
+ * details and the code (SPEC-0025 E01).
+ */
+function hostError(error: unknown): OrchestratorError {
+  const value = error && typeof error === 'object' ? (error as Record<string, unknown>) : {};
+  const data = {
+    ...(value.details && typeof value.details === 'object'
+      ? (value.details as Record<string, unknown>)
+      : {}),
+    ...(value.data && typeof value.data === 'object'
+      ? (value.data as Record<string, unknown>)
+      : {}),
+  };
+  const code =
+    typeof value.code === 'string'
+      ? value.code
+      : typeof data.code === 'string'
+        ? data.code
+        : 'INTERNAL_ERROR';
+  const failure = new OrchestratorError(
+    code,
+    typeof value.message === 'string' ? value.message : String(error),
+    {
+      ...data,
+      code,
+      ...(typeof value.operationId === 'string' ? { operationId: value.operationId } : {}),
+    },
+  );
+  failure.cause = error;
+  return failure;
+}
 export async function createOrchestrator(config: EngineConfig): Promise<Orchestrator> {
   const engine = await createEngine(config);
   const caller: Caller = {
@@ -814,8 +847,13 @@ export async function createOrchestrator(config: EngineConfig): Promise<Orchestr
       params: Record<string, unknown> = {},
       options: RequestOptions = {},
     ) => {
+      // The SDK's own errors, such as ABORTED here, are raised before the engine is called (E02).
       aborted(options.signal);
-      return (await engine.call(method, params, { owner: true, signal: options.signal })) as T;
+      try {
+        return (await engine.call(method, params, { owner: true, signal: options.signal })) as T;
+      } catch (error) {
+        throw hostError(error);
+      }
     },
     disconnect() {},
   };

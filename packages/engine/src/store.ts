@@ -227,6 +227,11 @@ export class Store {
         this.db.exec(
           "CREATE INDEX IF NOT EXISTS dispatches_session ON dispatches(json_extract(data, '$.sessionId'))",
         );
+        // Only rows that can still expire, keyed by expiry: the checks before each call and in each
+        // scheduler pass read no finished approval, message or handoff (SPEC-0024 X01).
+        this.db.exec(
+          "CREATE INDEX IF NOT EXISTS approvals_pending_expiry ON approvals(json_extract(data,'$.expiresAt')) WHERE json_extract(data,'$.status')='pending'; CREATE INDEX IF NOT EXISTS messages_persisted_expiry ON messages(json_extract(data,'$.expiresAt')) WHERE json_extract(data,'$.status')='persisted'; CREATE INDEX IF NOT EXISTS handoffs_pending_expiry ON handoffs(json_extract(data,'$.expiresAt')) WHERE json_extract(data,'$.status')='pending';",
+        );
         this.db
           .exec(`CREATE TABLE IF NOT EXISTS retention_records (table_name TEXT NOT NULL, id TEXT NOT NULL, changed_at INTEGER NOT NULL, terminal_at INTEGER, active INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(table_name,id));
           CREATE INDEX IF NOT EXISTS retention_age ON retention_records(table_name,terminal_at);
@@ -693,25 +698,43 @@ export class Store {
         BigInt(Math.max(last.cursor, Number(this.metadata('retentionFloorCursor') ?? 0)))
     )
       fail('CURSOR_EXPIRED', 'Cursor must belong to this store and retained log');
-    const rows = this.db
-      .prepare('SELECT cursor,data FROM events WHERE cursor>? ORDER BY cursor LIMIT ?')
-      .all(after, limit) as { cursor: number; data: string }[];
+    // A task's events come from the (taskId, cursor) index, so other tasks' events cost nothing
+    // (SPEC-0024 E01).
+    const rows = (
+      taskId === undefined
+        ? this.db
+            .prepare('SELECT cursor,data FROM events WHERE cursor>? ORDER BY cursor LIMIT ?')
+            .all(after, limit)
+        : this.db
+            .prepare(
+              'SELECT cursor,data FROM events WHERE taskId=? AND cursor>? ORDER BY cursor LIMIT ?',
+            )
+            .all(taskId, after, limit)
+    ) as { cursor: number; data: string }[];
     const events: EventEnvelope[] = [];
     let cursor = after;
     let bytes = 0;
+    let full = rows.length === limit;
     for (const row of rows) {
       const event = JSON.parse(row.data) as EventEnvelope;
       if (!taskId || event.taskId === taskId) {
         const size = Buffer.byteLength(row.data, 'utf8') + 1;
         if (size > 768 * 1024)
           fail('FRAME_TOO_LARGE', 'Stored event exceeds the replay page limit');
-        if (bytes + size > 768 * 1024) break;
+        if (bytes + size > 768 * 1024) {
+          full = true;
+          break;
+        }
         bytes += size;
         events.push(event);
       }
       // Advance only past scanned records, never past an event deferred to the next page.
       cursor = String(row.cursor);
     }
+    // A task-filtered page that is not full returned every event of the task up to the last event;
+    // the other tasks' events after its own are not the reader's (SPEC-0024 E02).
+    if (taskId !== undefined && !full && BigInt(last.cursor) > BigInt(cursor))
+      cursor = String(last.cursor);
     return { events, cursor, storeId: this.storeId };
   }
   artifact(text: string): string {

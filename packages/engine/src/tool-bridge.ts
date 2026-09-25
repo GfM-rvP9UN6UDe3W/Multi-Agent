@@ -3,9 +3,9 @@ import { randomBytes, timingSafeEqual } from 'node:crypto';
 import { chmod, mkdtemp, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
+import { answerMcpMessage, toolErrorCode } from './mcp-server.ts';
 import { ORCHESTRATION_TOOLS, TOOL_NAMES, type RuntimeTools } from './tools.ts';
 import type { Json } from './types.ts';
-import { VERSION } from './version.ts';
 
 const MAX_FRAME = 1_048_576;
 type BridgeEnv = { AGENT_ORCH_BRIDGE_TOKEN: string; AGENT_ORCH_BRIDGE_SOCKET: string };
@@ -73,11 +73,7 @@ export async function createToolBridge(tools: RuntimeTools, signal: AbortSignal)
           socket.end(frame + '\n');
         } catch (error) {
           // Never echo private connection data or a callback exception into model-visible text.
-          const code =
-            object(error) && typeof error.code === 'string' && /^[A-Z_]{1,64}$/.test(error.code)
-              ? error.code
-              : 'TOOL_FAILED';
-          socket.end(JSON.stringify({ error: code }) + '\n');
+          socket.end(JSON.stringify({ error: toolErrorCode(error) }) + '\n');
         }
       })();
     });
@@ -192,46 +188,10 @@ export async function runToolBridge(): Promise<void> {
         );
         continue;
       }
-      if (value.id === undefined) continue;
-      const response: Record<string, unknown> = { jsonrpc: '2.0', id: value.id };
-      const params = object(value.params) ? value.params : {};
-      if (value.method === 'initialize')
-        response.result = {
-          protocolVersion: ['2024-11-05', '2025-03-26', '2025-06-18'].includes(
-            String(params.protocolVersion),
-          )
-            ? params.protocolVersion
-            : '2024-11-05',
-          capabilities: { tools: { listChanged: false } },
-          serverInfo: { name: 'agent_orch', version: VERSION },
-        };
-      else if (value.method === 'ping') response.result = {};
-      else if (value.method === 'tools/list') response.result = { tools: ORCHESTRATION_TOOLS };
-      else if (value.method === 'tools/call') {
-        try {
-          if (
-            typeof params.name !== 'string' ||
-            !TOOL_NAMES.includes(params.name as (typeof TOOL_NAMES)[number])
-          )
-            throw failure('UNKNOWN_TOOL');
-          if (
-            !object(params.arguments) ||
-            Object.keys(params.arguments).some((key) => key !== 'request') ||
-            !object(params.arguments.request)
-          )
-            throw failure('INVALID_REQUEST');
-          const result = await callToolBridge(env, params.name, params.arguments.request);
-          response.result = { content: [{ type: 'text', text: JSON.stringify(result) }] };
-        } catch (error) {
-          response.result = {
-            isError: true,
-            content: [
-              { type: 'text', text: error instanceof Error ? error.message : 'TOOL_FAILED' },
-            ],
-          };
-        }
-      } else response.error = { code: -32601, message: 'Unknown method' };
-      process.stdout.write(JSON.stringify(response) + '\n');
+      const answer = await answerMcpMessage(value, ORCHESTRATION_TOOLS, (name, request) =>
+        callToolBridge(env, name, request),
+      );
+      if (answer) process.stdout.write(JSON.stringify(answer) + '\n');
     }
   }
 }

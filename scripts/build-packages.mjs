@@ -69,7 +69,7 @@ function packageReadme(name, directory, version) {
     install,
     '```',
     '',
-    'A Claude application installs the SDK, the engine and the Claude adapter; use `@orchvia/adapter-codex` for Codex. The Claude adapter loads `@anthropic-ai/claude-agent-sdk` and `zod` 4.4.3 when they are installed, or takes host-supplied callbacks.',
+    'A Claude application installs the SDK, the engine and the Claude adapter; use `@orchvia/adapter-codex` for Codex. The Claude adapter loads `@anthropic-ai/claude-agent-sdk` when it is installed, or takes host-supplied callbacks. It needs no Zod.',
     '',
     '- Requires Node.js 22.18 or later. The packages are ESM-only.',
     '- Python applications use the [`orchvia`](https://pypi.org/project/orchvia/) package, which talks to a Node host from `@orchvia/cli`.',

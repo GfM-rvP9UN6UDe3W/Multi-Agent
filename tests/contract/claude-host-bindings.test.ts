@@ -5,6 +5,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createClaudeAdapter } from '../../packages/adapter-claude/src/index.ts';
 import { ORCHESTRATION_TOOLS } from '../../packages/engine/src/tools.ts';
+import { claudeProcess } from '../fixtures/claude-process.ts';
+import { connectMcp } from '../fixtures/mcp-transport.ts';
 
 test('D04 injected Claude query never implicitly resolves an inspection SDK', async () => {
   const adapter = createClaudeAdapter({
@@ -32,14 +34,39 @@ test('D04 injected Claude query never implicitly resolves an inspection SDK', as
   }
 });
 
-test('D04 injected Claude query requires matching MCP binding before submission', async () => {
+test('0026-Z06 an injected Claude query gets the adapter-owned MCP server', async () => {
   const root = await mkdtemp(join(tmpdir(), 'orch-host-binding-'));
   await mkdir(join(root, 'work'));
   await mkdir(join(root, 'state'));
-  let queryCalls = 0;
+  const servers: unknown[] = [];
+  const calls: string[] = [];
+  let listed: string[] = [];
+  let called: unknown;
   const adapter = createClaudeAdapter({
-    query: async function* () {
-      queryCalls++;
+    query(request) {
+      const server = (request.options as { mcpServers?: Record<string, unknown> }).mcpServers
+        ?.agent_orch;
+      servers.push(server);
+      const child = claudeProcess(request);
+      return {
+        async *[Symbol.asyncIterator]() {
+          yield { type: 'system', subtype: 'init', session_id: 'native' };
+          const mcp = await connectMcp(server);
+          listed = (await mcp.request('tools/list')).result.tools.map(
+            (tool: { name: string }) => tool.name,
+          );
+          called = (
+            await mcp.request('tools/call', {
+              name: 'work_read',
+              arguments: { request: { kind: 'task', id: 'task' } },
+            })
+          ).result;
+          yield { type: 'result', subtype: 'success', session_id: 'native', result: 'done' };
+        },
+        close() {
+          child.stdin.end();
+        },
+      };
     },
   });
   try {
@@ -57,18 +84,28 @@ test('D04 injected Claude query requires matching MCP binding before submission'
       signal: new AbortController().signal,
       orchestrationTools: {
         definitions: ORCHESTRATION_TOOLS,
-        async call() {
-          throw new Error('not called');
+        async call(name) {
+          calls.push(name);
+          return { ok: true };
         },
       },
     }))
       events.push(event);
-    assert.equal(queryCalls, 0);
-    assert.ok(
-      events.some(
-        (event) => event.type === 'error' && /config.createMcpServer/.test(event.message),
-      ),
-      JSON.stringify(events),
+    assert.equal(events.at(-1)?.type, 'result', JSON.stringify(events));
+    assert.equal(servers.length, 1);
+    assert.equal((servers[0] as { type?: unknown }).type, 'sdk');
+    assert.equal((servers[0] as { name?: unknown }).name, 'agent_orch');
+    assert.deepEqual(
+      listed,
+      ORCHESTRATION_TOOLS.map((tool) => tool.name),
+    );
+    assert.deepEqual(called, { content: [{ type: 'text', text: '{"ok":true}' }] });
+    assert.deepEqual(calls, ['work_read']);
+    // The binding still ends with the turn.
+    const late = await connectMcp(servers[0]);
+    assert.deepEqual(
+      (await late.request('tools/call', { name: 'work_read', arguments: { request: {} } })).result,
+      { isError: true, content: [{ type: 'text', text: 'STALE_GRANT' }] },
     );
     assert.equal(adapter.hasActiveResources('logical'), false);
   } finally {

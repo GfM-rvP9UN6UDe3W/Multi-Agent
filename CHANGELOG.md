@@ -2,6 +2,22 @@
 
 All notable changes to Orchvia are recorded here. Versions follow [Semantic Versioning](https://semver.org/); before 1.0, a minor version may change the API.
 
+## [Unreleased]
+
+### Fixed
+
+- `events.read` with `taskId`, which `events({ taskId })` uses in both SDKs, reads only that task's events, through its index, and a page that is not full moves the cursor to the store's last event. On a store with a long history a new task's first event had reached the iterator seconds late: 5 seconds behind 10,000 events of other tasks, 25 seconds behind 50,000 (SPEC-0024 E).
+- The engine finds pending approvals, persisted messages and pending handoffs through partial indexes instead of reading those whole tables before every call, in every scheduler pass and dispatch, and when a task is cancelled. Each call had cost about 22 ms more with 10,000 finished approvals and messages and 140 ms more with 50,000, and one idle event subscriber had kept the engine's thread up to 88% busy (SPEC-0024 X).
+- `orchvia host --socket` starts after a host that ended without closing, such as after SIGKILL: it removes the socket file it finds when no process accepts connections on it. It had refused with `SOCKET_IN_USE` until someone removed the file. Another process listening on the path, or a path that is not a socket, is still refused, now with a message that says which (SPEC-0025 S).
+- The embedded orchestrator of `createOrchestrator` rejects failed reads with `OrchestratorError`, whose details are in `data`, as a socket client does. It had rejected them with the engine's own error class (SPEC-0025 E).
+- `@orchvia/adapter-claude` no longer depends on Zod, so it installs next to any Zod, or none. Its optional `zod: 4.4.3` peer had made npm refuse an application with another Zod, such as 4.6.5, with `ERESOLVE`. The pin had been needed because the Claude Agent SDK converted the adapter's Zod schemas with the Zod bundled in each SDK release, and with SDK 0.3.274 or 0.3.281 and Zod 4.6.5 `tools/list` failed and the model got none of the four orchestration tools. The adapter's `agent_orch` MCP server now answers MCP itself, as the Codex bridge does (SPEC-0026).
+
+### Changed
+
+- After an internal failure stopped the host, `scheduler.get` lists `SCHEDULER_FAILED` besides `HOST_STOPPING`, and a refused write's `HOST_STOPPING` error names the failed step and holds `failure: {step, code, at}` in its data. A stop on request is unchanged (SPEC-0025 F).
+- Claude's model sees the same tool schemas as Codex's, with the description of the fields that each tool's `request` takes; Zod's conversion had dropped it. A host that supplies `query` no longer has to supply `createMcpServer` for orchestration tools, and `createClaudeMcpServer(tools)` ignores the `{ sdk, zod }` it took before (SPEC-0026).
+- The orchestration MCP servers of both adapters keep the protocol version 2025-11-25 when a client asks for it, and answer the latest version they know, instead of 2024-11-05, to a version they do not know (SPEC-0026 Z04).
+
 ## [0.1.2] - 2026-09-24
 
 The first release on PyPI and on GitHub Releases. It carries the changes of 0.1.1, which was tagged but not published.
