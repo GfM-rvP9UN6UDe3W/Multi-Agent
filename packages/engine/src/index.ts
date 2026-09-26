@@ -6,7 +6,14 @@ const requestIdentity = new AsyncLocalStorage<RetryIdentity>();
 import { randomUUID } from 'node:crypto';
 import { Store } from './store.ts';
 import { VERSION } from './version.ts';
+import {
+  closedSessionsWithMessages,
+  pendingRuntimeApprovals,
+  recoveryAction,
+  unfinishedOperations,
+} from './recovery.ts';
 import { OrchestrationError, fail } from './errors.ts';
+import { SHARED_READS, contextRefText, readCall, sessionSnapshot } from './reads.ts';
 import {
   object,
   fields,
@@ -38,6 +45,7 @@ import { estimateContext, moneyUnits, moneyString } from './accounting.ts';
 import type {
   Engine,
   EngineConfig,
+  EngineFailure,
   CallContext,
   CloseOptions,
   EngineCloseOptions,
@@ -77,6 +85,9 @@ export { OrchestrationError } from './errors.ts';
 export { createFakeAdapter } from './fake.ts';
 export { readRuntimeCapabilities, requireEngineRuntimeInput } from './runtime.ts';
 export { priceUsage, estimateStrategies, estimateContext } from './accounting.ts';
+export { validateWire } from './wire.ts';
+export type { WireTypes } from './wire.ts';
+export { openReadOnlyEngine, type ReadOnlyEngine, type ReadOnlyStoreInfo } from './read-only.ts';
 
 const terminalTasks = new Set(['completed', 'failed', 'cancelled']);
 const now = () => new Date().toISOString();
@@ -98,8 +109,6 @@ const realClock: EngineClock = {
   },
 };
 
-/** The inline limit of one context reference, for admission, the prompt and `context.checkRefs`. */
-const CONTEXT_REF_MAX_BYTES = 32768;
 function resultText(value: unknown): string {
   if (typeof value !== 'string' || value.length > 524288)
     fail(
@@ -174,7 +183,7 @@ class LocalEngine implements Engine {
   private flights = new Map<string, Flight>();
   private closing = false;
   /** The first internal failure that stopped this engine, if any (SPEC-0025 F01). */
-  private failure?: { step: string; code: string; at: string };
+  private failure?: EngineFailure;
   private closed = false;
   private scheduled = false;
   private shutdownId: string | undefined;
@@ -313,6 +322,7 @@ class LocalEngine implements Engine {
         } catch (error) {
           this.store.storageFailure(error);
           this.stopAfterFailure('storage collection', error);
+          process.emitWarning(`Storage collection failed; scheduler stopped: ${String(error)}`);
         }
       }, 3600000);
       this.storageTimer.unref();
@@ -326,11 +336,34 @@ class LocalEngine implements Engine {
   /** Stops new work after an internal failure and keeps the first one for clients (SPEC-0025 F01). */
   private stopAfterFailure(step: string, error: unknown): void {
     this.closing = true;
-    this.failure ??= {
+    if (this.failure) return;
+    const failure: EngineFailure = {
       step,
       code: error instanceof OrchestrationError ? error.code : 'INTERNAL_ERROR',
       at: this.time(),
     };
+    this.failure = failure;
+    // Outside the failing call's stack: the event first, where the store can still be written,
+    // then the host's callback (SPEC-0027 F01, F02).
+    queueMicrotask(() => this.announceFailure(failure));
+  }
+  private announceFailure(failure: EngineFailure): void {
+    if (
+      !this.closed &&
+      !this.store.isClosed &&
+      !this.store.degraded &&
+      !this.store.db.isTransaction
+    )
+      try {
+        this.store.event('scheduler.failed', { ...failure });
+      } catch {
+        // The failure that stopped the engine stays authoritative; the host still hears of it.
+      }
+    try {
+      this.config.onFatal?.({ ...failure });
+    } catch (error) {
+      process.emitWarning(`onFatal callback failed: ${String(error)}`);
+    }
   }
   private ensureOpen(): void {
     if (this.closed) fail('CLIENT_CLOSED', 'Engine is closed');
@@ -631,6 +664,8 @@ class LocalEngine implements Engine {
       source.writePaths ?? [],
       null,
       source.rootTaskId ?? task.rootTaskId ?? task.id,
+      // A fork takes its source's labels (SPEC-0027 L02).
+      { label: source.label, metadata: source.metadata },
     );
     session.forkSource = {
       sessionId: source.id,
@@ -646,6 +681,7 @@ class LocalEngine implements Engine {
     writePaths: string[],
     taskId: string | null,
     rootTaskId?: string,
+    labels: Pick<SessionSnapshot, 'label' | 'metadata'> = {},
   ): SessionSnapshot {
     const count = (
       this.store.db.prepare('SELECT COUNT(*) AS n FROM sessions').get() as { n: number }
@@ -670,6 +706,8 @@ class LocalEngine implements Engine {
       permissionProfile:
         this.config.providers?.[runtime.provider]?.permissionProfile ?? 'read-only',
       writePaths,
+      ...(labels.label !== undefined ? { label: labels.label } : {}),
+      ...(labels.metadata !== undefined ? { metadata: labels.metadata } : {}),
     };
   }
   /**
@@ -696,14 +734,7 @@ class LocalEngine implements Engine {
    * read failure that is not already an engine error becomes ARTIFACT_UNREADABLE.
    */
   private contextRefText(artifactRef: string): string {
-    try {
-      return this.store.artifactText(artifactRef, CONTEXT_REF_MAX_BYTES);
-    } catch (error) {
-      if (error instanceof OrchestrationError) throw error;
-      return fail('ARTIFACT_UNREADABLE', 'Context reference could not be read', {
-        ref: artifactRef,
-      });
-    }
+    return contextRefText(this.store, artifactRef);
   }
   private selectSession(
     spec: TaskSpec,
@@ -713,7 +744,11 @@ class LocalEngine implements Engine {
   ): { session: SessionSnapshot; routing?: RoutingDecision; fresh: boolean } {
     const plan = spec.contextPlan;
     if (!plan) {
-      const session = this.newSession(spec.runtime, writePaths, taskId, rootTaskId);
+      // A session the engine opens for a task takes the task's labels (SPEC-0027 L02).
+      const session = this.newSession(spec.runtime, writePaths, taskId, rootTaskId, {
+        label: spec.label,
+        metadata: spec.metadata,
+      });
       return {
         session,
         fresh: true,
@@ -748,7 +783,10 @@ class LocalEngine implements Engine {
             string(plan.snapshotRef, 'snapshotRef', 128),
           )
         : plan.requestedMode === 'fresh'
-          ? this.newSession(spec.runtime, writePaths, taskId, rootTaskId)
+          ? this.newSession(spec.runtime, writePaths, taskId, rootTaskId, {
+              label: spec.label,
+              metadata: spec.metadata,
+            })
           : this.session(plan.candidateSessionId!);
     if (
       session.provider !== spec.runtime.provider ||
@@ -1162,6 +1200,9 @@ class LocalEngine implements Engine {
                   acceptance: parent.spec.acceptance,
                   parentTaskId: parent.id,
                   contextPlan: plan,
+                  // A child the engine creates takes its parent's labels (SPEC-0027 L02).
+                  ...(parent.spec.label !== undefined ? { label: parent.spec.label } : {}),
+                  ...(parent.spec.metadata !== undefined ? { metadata: parent.spec.metadata } : {}),
                   ...(args.dependencyTaskIds !== undefined
                     ? { dependencyTaskIds: args.dependencyTaskIds }
                     : {}),
@@ -1378,18 +1419,7 @@ class LocalEngine implements Engine {
     this.stopQueue(task.id);
   }
   private sessionSnapshot(id: string): SessionSnapshot {
-    const session = this.session(id);
-    if (session.activeDispatchId) {
-      const d = this.store.require<Dispatch>('dispatches', session.activeDispatchId);
-      session.execution = {
-        dispatchId: d.id,
-        lease: d.executionLease,
-        quarantined: d.quarantined,
-        lastEvidence: d.lastEvidence,
-        ...(d.budget ? { budget: d.budget } : {}),
-      };
-    }
-    return session;
+    return sessionSnapshot(this.store, id);
   }
   private scheduler(): SchedulerSnapshot {
     const records = this.store.activeDispatches() as Dispatch[];
@@ -1714,7 +1744,10 @@ class LocalEngine implements Engine {
         );
       });
     } catch (error) {
-      if (!(error instanceof OrchestrationError)) this.stopAfterFailure('usage persistence', error);
+      if (!(error instanceof OrchestrationError)) {
+        this.stopAfterFailure('usage persistence', error);
+        process.emitWarning(`Usage persistence failed; scheduler stopped: ${String(error)}`);
+      }
       throw error;
     }
   }
@@ -1756,7 +1789,12 @@ class LocalEngine implements Engine {
   private taskEvent(task: TaskSnapshot, operationId?: string): void {
     this.store.event(
       `task.${task.status}`,
-      { status: task.status, reason: task.reason, revision: task.revision },
+      {
+        status: task.status,
+        reason: task.reason,
+        revision: task.revision,
+        ...(task.spec.label !== undefined ? { label: task.spec.label } : {}),
+      },
       { taskId: task.id, sessionId: task.sessionId, operationId },
     );
   }
@@ -1832,8 +1870,8 @@ class LocalEngine implements Engine {
   }
   private recover(): void {
     this.store.transaction(() => {
-      for (const approval of this.store.all<ApprovalRequest>('approvals')) {
-        if (approval.purpose !== 'runtime_permission' || approval.status !== 'pending') continue;
+      // Each step acts on the rows that recovery.ts selects (SPEC-0027 R05).
+      for (const approval of pendingRuntimeApprovals(this.store)) {
         approval.status = 'invalidated';
         approval.revision++;
         this.store.put('approvals', approval.approvalId, approval);
@@ -1850,14 +1888,11 @@ class LocalEngine implements Engine {
       }
       for (const task of this.store.all<TaskSnapshot>('tasks')) {
         const session = this.session(task.sessionId);
-        if (session.taskId !== task.id) {
-          if (task.status === 'queued') {
-            this.saveTask(task, 'paused', 'owner_restart');
-            this.taskEvent(task);
-          }
-          continue;
-        }
-        if (task.status === 'running' || task.status === 'verifying' || session.activeDispatchId) {
+        const action = recoveryAction(task, session);
+        if (action === 'pause_task') {
+          this.saveTask(task, 'paused', 'owner_restart');
+          this.taskEvent(task);
+        } else if (action === 'block') {
           const dispatchId = session.activeDispatchId;
           this.saveTask(
             task,
@@ -1887,45 +1922,38 @@ class LocalEngine implements Engine {
                 this.store.put('outbox', message.id, { ...outbox, status: 'outcome_unknown' });
             }
           this.taskEvent(task);
-        } else if (task.status === 'queued') {
+        } else if (action === 'pause') {
           this.saveTask(task, 'paused', 'owner_restart');
           this.saveSession(session, 'paused');
           this.taskEvent(task);
         }
       }
-      for (const op of this.store.operations())
-        if (op.status === 'persisted') {
-          if (op.method === 'storage.gc') {
-            op.status = 'failed';
-            op.error = {
-              code: 'GC_INTERRUPTED',
-              message: 'Recorded file actions recovered; batch completion was not recorded',
-            };
-            this.store.saveOperation(op);
-            continue;
-          }
-          op.status = 'outcome_unknown';
+      for (const op of unfinishedOperations(this.store)) {
+        if (op.method === 'storage.gc') {
+          op.status = 'failed';
           op.error = {
-            code: 'OUTCOME_UNKNOWN',
-            message: 'Previous owner exited before operation completion',
+            code: 'GC_INTERRUPTED',
+            message: 'Recorded file actions recovered; batch completion was not recorded',
           };
-          if (op.lifecycle && Date.parse(op.lifecycle.deadlineAt) <= this.clock.wallNow())
-            op.lifecycle.expiredAt ??= this.time();
           this.store.saveOperation(op);
-          this.store.event(
-            'operation.updated',
-            { status: op.status, reason: 'owner_restart' },
-            { operationId: op.id },
-          );
+          continue;
         }
+        op.status = 'outcome_unknown';
+        op.error = {
+          code: 'OUTCOME_UNKNOWN',
+          message: 'Previous owner exited before operation completion',
+        };
+        if (op.lifecycle && Date.parse(op.lifecycle.deadlineAt) <= this.clock.wallNow())
+          op.lifecycle.expiredAt ??= this.time();
+        this.store.saveOperation(op);
+        this.store.event(
+          'operation.updated',
+          { status: op.status, reason: 'owner_restart' },
+          { operationId: op.id },
+        );
+      }
       // Stores from rc.10 and earlier can hold pending messages to sessions already stopped.
-      for (const row of this.store.db
-        .prepare(
-          "SELECT DISTINCT json_extract(data,'$.toSessionId') AS id FROM messages WHERE json_extract(data,'$.status')='persisted'",
-        )
-        .all() as { id: string }[])
-        if (this.store.get<SessionSnapshot>('sessions', row.id)?.status === 'closed')
-          this.expireStoppedMessages(row.id);
+      for (const id of closedSessionsWithMessages(this.store)) this.expireStoppedMessages(id);
       this.admissionEvent();
     });
   }
@@ -2286,6 +2314,9 @@ class LocalEngine implements Engine {
       if (!['scheduler.get', 'scheduler.getConflict'].includes(method)) this.expireApprovals();
       this.expireMessages();
     }
+    // SPEC-0027 R03: the reads that a read-only view answers go through the same code.
+    if (SHARED_READS.has(method))
+      return readCall(this.store, method, p, { expireHandoffs: () => this.tryExpireHandoffs() });
     switch (method) {
       case 'storage.status':
         fields(p, []);
@@ -2400,6 +2431,7 @@ class LocalEngine implements Engine {
               runtimeRules: true,
               taskList: true,
               contextCheck: true,
+              labels: true,
             },
             providers: [...this.adapters.keys()],
             lifecycle: { version: 1, reconcile: 'owner-attestation', durableDeadlines: true },
@@ -2506,7 +2538,12 @@ class LocalEngine implements Engine {
             op.result = { taskId: id };
             this.store.event(
               'task.created',
-              { status: task.status, parentTaskId: spec.parentTaskId ?? null, rootTaskId },
+              {
+                status: task.status,
+                parentTaskId: spec.parentTaskId ?? null,
+                rootTaskId,
+                ...(spec.label !== undefined ? { label: spec.label } : {}),
+              },
               { taskId: id, sessionId, operationId: op.id },
             );
           },
@@ -2515,9 +2552,6 @@ class LocalEngine implements Engine {
         this.kick();
         return this.task(op.targetId);
       }
-      case 'tasks.get':
-        fields(p, ['taskId']);
-        return this.task(string(p.taskId, 'taskId', 128));
       case 'rules.register': {
         fields(p, ['rule', 'idempotencyKey']);
         if (!context.owner || context.runtimeActor)
@@ -2553,45 +2587,6 @@ class LocalEngine implements Engine {
           this.runtimeRuleKeys.add(key);
         }
         return op;
-      }
-      case 'handoffs.get':
-        fields(p, ['handoffId']);
-        this.tryExpireHandoffs();
-        return this.store.require<HandoffRequest>(
-          'handoffs',
-          string(p.handoffId, 'handoffId', 128),
-        );
-      case 'handoffs.list': {
-        fields(p, ['status', 'targetSessionId', 'limit', 'afterCursor']);
-        if (
-          p.status !== undefined &&
-          !['pending', 'accepted', 'rejected', 'expired', 'invalidated'].includes(
-            p.status as string,
-          )
-        )
-          fail('VALIDATION_ERROR', 'Unknown handoff status');
-        let after = 0;
-        if (p.afterCursor !== undefined) {
-          const raw = string(p.afterCursor, 'afterCursor', 19);
-          after = Number(raw);
-          if (!/^\d+$/.test(raw) || !Number.isSafeInteger(after))
-            fail('VALIDATION_ERROR', 'afterCursor must come from a previous page');
-        }
-        this.tryExpireHandoffs();
-        const page = this.store.listHandoffs(
-          {
-            ...(p.status !== undefined ? { status: p.status as string } : {}),
-            ...(p.targetSessionId !== undefined
-              ? { targetSessionId: string(p.targetSessionId, 'targetSessionId', 128) }
-              : {}),
-          },
-          after,
-          p.limit === undefined ? 50 : integer(p.limit, 'limit', 1, 100),
-        );
-        return {
-          handoffs: page.handoffs,
-          nextCursor: page.next === null ? null : String(page.next),
-        };
       }
       case 'handoffs.resolve': {
         fields(p, [
@@ -2661,31 +2656,6 @@ class LocalEngine implements Engine {
             source: this.runtimeRuleKeys.has(ruleKey(rule.id, rule.version)) ? 'runtime' : 'config',
           })),
         };
-      case 'tasks.list': {
-        fields(p, ['parentTaskId', 'sessionId', 'limit', 'afterCursor']);
-        if (p.parentTaskId !== undefined && p.sessionId !== undefined)
-          fail('VALIDATION_ERROR', 'Use at most one of parentTaskId and sessionId');
-        let after = 0;
-        if (p.afterCursor !== undefined) {
-          const raw = string(p.afterCursor, 'afterCursor', 19);
-          after = Number(raw);
-          if (!/^\d+$/.test(raw) || !Number.isSafeInteger(after))
-            fail('VALIDATION_ERROR', 'afterCursor must come from a previous page');
-        }
-        const page = this.store.listTasks(
-          p.parentTaskId !== undefined
-            ? { parentTaskId: string(p.parentTaskId, 'parentTaskId', 128) }
-            : p.sessionId !== undefined
-              ? { sessionId: string(p.sessionId, 'sessionId', 128) }
-              : {},
-          after,
-          p.limit === undefined ? 50 : integer(p.limit, 'limit', 1, 100),
-        );
-        return { tasks: page.tasks, nextCursor: page.next === null ? null : String(page.next) };
-      }
-      case 'sessions.get':
-        fields(p, ['sessionId']);
-        return this.sessionSnapshot(string(p.sessionId, 'sessionId', 128));
       case 'sessions.inspect': {
         fields(p, ['sessionId', 'timeoutMs', 'limit']);
         const session = this.session(string(p.sessionId, 'sessionId', 128));
@@ -2960,32 +2930,6 @@ class LocalEngine implements Engine {
         this.kick();
         return this.store.require<MessageSnapshot>('messages', op.targetId);
       }
-      case 'messages.get':
-        fields(p, ['messageId']);
-        return this.store.require<MessageSnapshot>(
-          'messages',
-          string(p.messageId, 'messageId', 128),
-        );
-      case 'operations.get':
-        fields(p, ['operationId']);
-        return this.store.operation(string(p.operationId, 'operationId', 128));
-      case 'operations.lookup': {
-        fields(p, ['method', 'scope', 'idempotencyKey']);
-        const result = this.store.findOperation(
-          string(p.method, 'method', 128),
-          string(p.scope, 'scope', 128),
-          string(p.idempotencyKey, 'idempotencyKey', 256),
-        );
-        if (!result) fail('NOT_FOUND', 'Idempotent operation not found');
-        this.store.assertDetails(result.operation);
-        return result.operation;
-      }
-      case 'approvals.get':
-        fields(p, ['approvalId']);
-        return this.store.require<ApprovalRequest>(
-          'approvals',
-          string(p.approvalId, 'approvalId', 128),
-        );
       case 'approvals.decide': {
         fields(p, ['approvalId', 'decision', 'idempotencyKey']);
         const id = string(p.approvalId, 'approvalId', 128),
@@ -3110,56 +3054,6 @@ class LocalEngine implements Engine {
         this.kick();
         return op;
       }
-      case 'events.read': {
-        fields(p, ['afterCursor', 'storeId', 'taskId', 'limit']);
-        return this.store.events(
-          p.afterCursor === undefined ? '0' : string(p.afterCursor, 'afterCursor', 30),
-          p.storeId === undefined ? undefined : string(p.storeId, 'storeId', 128),
-          p.taskId === undefined ? undefined : string(p.taskId, 'taskId', 128),
-          p.limit === undefined ? 100 : integer(p.limit, 'limit', 1, 1000),
-        );
-      }
-      case 'usage.get': {
-        fields(p, ['taskId']);
-        const id = string(p.taskId, 'taskId', 128);
-        this.task(id);
-        const records = this.store.all<UsageRecord>('usage').filter((r) => r.taskId === id);
-        return {
-          records,
-          completeness:
-            records.length &&
-            records.every((r) => r.inputTokens !== null && r.outputTokens !== null)
-              ? 'reported'
-              : 'unknown',
-        };
-      }
-      case 'costs.get': {
-        fields(p, ['taskId', 'scope']);
-        const scope = p.scope ?? 'direct';
-        if (!['direct', 'tree', 'host_overhead'].includes(String(scope)))
-          fail('VALIDATION_ERROR', 'Invalid cost scope');
-        return this.accounting.summary(
-          p.taskId === undefined ? undefined : string(p.taskId, 'taskId', 128),
-          scope as 'direct' | 'tree' | 'host_overhead',
-        );
-      }
-      case 'context.checkRefs': {
-        // SPEC-0020: what admission would decide for each reference now. Reads only; returns no content.
-        fields(p, ['contextRefs']);
-        return {
-          contextRefs: validateContextRefs(p.contextRefs, 1).map(({ artifactRef }) => {
-            const record = this.store.get<{ sizeBytes?: unknown }>('artifacts', artifactRef);
-            const bytes = typeof record?.sizeBytes === 'number' ? { bytes: record.sizeBytes } : {};
-            try {
-              this.contextRefText(artifactRef);
-              return { artifactRef, admissible: true, ...bytes };
-            } catch (error) {
-              if (!(error instanceof OrchestrationError)) throw error;
-              return { artifactRef, admissible: false, code: error.code, ...bytes };
-            }
-          }),
-        };
-      }
       case 'context.estimate': {
         fields(p, [
           'provider',
@@ -3237,13 +3131,6 @@ class LocalEngine implements Engine {
           },
         );
       }
-      case 'usage.getRecord': {
-        fields(p, ['usageRecordId']);
-        return this.store.require<UsageRecord>(
-          'usage',
-          string(p.usageRecordId, 'usageRecordId', 512),
-        );
-      }
       case 'capabilities.get': {
         fields(p, ['provider']);
         if (p.provider !== undefined) {
@@ -3266,7 +3153,7 @@ class LocalEngine implements Engine {
       case 'sessions.open': {
         fields(p, ['spec', 'idempotencyKey']);
         const raw = object(p.spec, 'spec');
-        fields(raw, ['runtime', 'writeScope', 'writePath']);
+        fields(raw, ['runtime', 'writeScope', 'writePath', 'label', 'metadata']);
         const spec = taskSpec({
           ...raw,
           goal: 'Open a logical session',
@@ -3283,7 +3170,10 @@ class LocalEngine implements Engine {
           raw,
           (op) => {
             this.admitWork();
-            const session = this.newSession(spec.runtime, this.writePaths(spec), null);
+            const session = this.newSession(spec.runtime, this.writePaths(spec), null, undefined, {
+              label: spec.label,
+              metadata: spec.metadata,
+            });
             this.store.put('sessions', session.id, session);
             op.targetId = session.id;
             op.result = { sessionId: session.id };
@@ -4446,9 +4336,17 @@ class LocalEngine implements Engine {
   ): Promise<void> {
     let terminal: Extract<RuntimeEvent, { type: 'result' | 'interrupted' | 'error' }> | undefined;
     try {
+      const task = this.task(flight.taskId);
       const input: EngineRuntimeInput = {
         taskId: flight.taskId,
         sessionId: flight.sessionId,
+        // The task chain and the host's labels, as detached frozen copies (SPEC-0027 L04).
+        parentTaskId: task.spec.parentTaskId ?? null,
+        rootTaskId: task.rootTaskId ?? task.id,
+        label: task.spec.label ?? null,
+        metadata: frozenCopy(task.spec.metadata),
+        sessionLabel: session.label ?? null,
+        sessionMetadata: frozenCopy(session.metadata),
         dispatchId: flight.dispatchId,
         providerSessionId: session.providerSessionId,
         model: session.model,
@@ -4980,6 +4878,18 @@ class LocalEngine implements Engine {
     Object.assign(error, { client: this, operationId: this.shutdownId });
     return error;
   }
+}
+/** A deep-frozen copy of host metadata, or null (SPEC-0027 L04). */
+function frozenCopy(value: { [key: string]: Json } | undefined): { [key: string]: Json } | null {
+  if (value === undefined) return null;
+  const freeze = (item: Json): Json => {
+    if (item && typeof item === 'object') {
+      for (const child of Object.values(item)) freeze(child);
+      Object.freeze(item);
+    }
+    return item;
+  };
+  return freeze(structuredClone(value)) as { [key: string]: Json };
 }
 export async function createEngine(config: EngineConfig): Promise<Engine> {
   return new LocalEngine(config);

@@ -10,7 +10,7 @@ import type {
 import { performance } from 'node:perf_hooks';
 import { randomUUID } from 'node:crypto';
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
-import { observeRuntimeStop } from '../../engine/src/stop-observation.ts';
+import { observeRuntimeStop, requireStopProof } from '../../engine/src/stop-observation.ts';
 import { adapterProviderName } from '../../engine/src/runtime.ts';
 import {
   buildClaudeOptions,
@@ -221,6 +221,7 @@ export function createClaudeAdapter<Extra extends object = object>(
   const initialOptions = copyClaudeOptions(config.options ?? ({} as ClaudeHostOptions<Extra>));
   const coversExecution =
     profile === 'read-only' && config.options === undefined && config.extendOptions === undefined;
+  requireStopProof('Claude adapter', coversExecution, config);
   const requestTimeoutMs = deadlineOption(config.requestTimeoutMs, 'requestTimeoutMs', 30_000);
   const turnTimeoutMs = deadlineOption(config.turnTimeoutMs, 'turnTimeoutMs', 1_800_000);
   const cleanupTimeoutMs = deadlineOption(config.cleanupTimeoutMs, 'cleanupTimeoutMs', 1_000);

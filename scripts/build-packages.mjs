@@ -44,6 +44,16 @@ const packageNames = {
   'adapter-codex': '@orchvia/adapter-codex',
   cli: '@orchvia/cli',
 };
+/** Each package's exported source modules and their public names: `engine/types` -> `@orchvia/engine/types`. */
+const publicEntries = {};
+for (const [directory, name] of Object.entries(packageNames)) {
+  const manifest = JSON.parse(
+    await readFile(join(root, 'packages', directory, 'package.json'), 'utf8'),
+  );
+  for (const [key, value] of Object.entries(manifest.exports ?? {}))
+    publicEntries[`${directory}/${value.replace(/^\.\/src\//, '').replace(/\.ts$/, '')}`] =
+      key === '.' ? name : `${name}/${key.slice(2)}`;
+}
 const descriptions = {
   engine:
     'Orchvia engine: one local scheduler with durable SQLite state for Claude Code and Codex agents.',
@@ -130,7 +140,13 @@ try {
       }
     const mapSpecifier = (value) => {
       const match = value.match(/^\.\.\/\.\.\/([^/]+)\/src\/(.+)\.(?:ts|js)$/);
-      if (match && packageNames[match[1]]) return `${packageNames[match[1]]}/internal/${match[2]}`;
+      // SPEC-0027 T03: a module that a package exports keeps its public name, such as
+      // @orchvia/engine/types, so that declarations refer to internal modules only when they must.
+      if (match && packageNames[match[1]])
+        return (
+          publicEntries[`${match[1]}/${match[2]}`] ??
+          `${packageNames[match[1]]}/internal/${match[2]}`
+        );
       return value.replace(/^(\.\.?\/.*)\.ts$/, '$1.js');
     };
     for (const path of await files(destination))

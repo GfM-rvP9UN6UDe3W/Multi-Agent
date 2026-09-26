@@ -164,6 +164,8 @@ Codex accepts `permissionProfile`, `networkAccess` (default false), and `webSear
 
 For extended Claude options or either write profile, `observeExecutionStop({ target, terminal, signal, remainingMs })` must observe complete remote/background stop for the exact dispatch/generation/native IDs. Return true only after actual host observation. False, rejection, absence, and timeout retain unknown execution. Waiting is bounded by cleanup time; late true evidence is retained without clearing business quarantine or resubmitting. Local child-process exit is independently required. With an observer configured, `terminalCoversExecution` denotes this combined proof; native-terminal evidence retains `remoteExecution: unknown` until host confirmation.
 
+Without an observer, no dispatch of such an adapter could release its execution lease, and the engine would stop dispatching once capacity ran out. So `createClaudeAdapter` given `options`, `extendOptions` or `permissionProfile: 'workspace-write'`, and `createCodexAdapter` given `workspace-write`, fail at once with `INVALID_ADAPTER_CONFIG` unless the host gives `observeExecutionStop` or chooses `executionStop: 'owner-reconcile'`. The second keeps leases held until the owner reconciles each dispatch with `sessions.reconcile`; it cannot be combined with an observer ([SPEC-0027](./specs/0027-read-only-access-and-host-corrections.md) A01 to A03).
+
 On macOS and Linux each Claude Code process leads its own process group, which its descendants share, and the context also lists `processes: [{ pid, processGroupId }]` for the dispatch (SPEC-0023 P). `processGroupsStopped(context)` from `@orchvia/adapter-claude` returns true only when none of those groups has a member left, and any unexpected error counts as not stopped. It does not see a descendant that left its group, for example a daemon that called `setsid`, or remote work, so an observer combines it with its own checks:
 
 ```ts
@@ -228,6 +230,25 @@ Python uses the same `sessions.control` / `messages.send` / `tasks.resume` flow 
 A message waits for the target session's next dispatch until its TTL (`messages.ttlMs`, 24 hours by default). `message.expired` reports a TTL expiry without a `reason`, a cancelled task with `reason: "task_cancelled_before_submission"` and a stopped session with `reason: "session_stopped"`. Stopping a session expires every message still waiting for it, when the session actually closes: at once without a running dispatch, otherwise when that dispatch ends. Messages that the last dispatch carried keep that dispatch's outcome. `messages.send` to a stopped session fails with `SESSION_CLOSED` ([SPEC-0017](./specs/0017-audit-corrections.md) A05).
 
 `interruptTimeoutMs` defaults to 30000 and starts at the cancellation request, including startup waiting. It cannot extend acceptance/turn budgets or the host's `timeouts.interruptMs`. An expired host operation remains outcome_unknown/blocked even if late terminal/usage/exit evidence later releases execution capacity. No blind resend occurs. [Verification evidence](./tdd/0008-claude-interruption.md) separates real local processes and installed native SDK transport from the still-unverified real CLI/model boundary.
+
+### 5.4 Host labels and the task chain
+
+A host can give each task and each opened session a `label`, a string of 1 to 256 UTF-8 bytes that it can filter by, and `metadata`, a JSON object of at most 4096 bytes when encoded and 16 levels deep that the engine only stores and returns ([SPEC-0027](./specs/0027-read-only-access-and-host-corrections.md) L). Both are part of the request digest, and `initialize` lists `workflow.labels` when a host accepts them.
+
+```ts
+const task = await orch.tasks.create({
+  goal: 'Review the change',
+  runtime: { provider: 'claude', model: 'claude-sonnet-5' },
+  acceptance: { mode: 'human', criteria: ['A reviewer read the answer'] },
+  label: 'conversation:42',
+  metadata: { agent: 'reviewer' },
+});
+const page = await orch.tasks.list({ label: 'conversation:42' });
+```
+
+What the host creates carries what the host passed. What the engine creates inherits: a child that `work_delegate` creates takes its parent's `label` and `metadata`, a session that the engine opens for a task takes the task's, and a fork takes its source session's. A task that a handoff hands over is created by the host, so the host labels it. `tasks.list({ label })` pages in creation order through an index; give at most one of `parentTaskId`, `sessionId` and `label`. `task.*` events carry the task's `label` in their data.
+
+Each dispatch's `RuntimeInput` carries `parentTaskId` (null for a root task), `rootTaskId`, `label`, `metadata`, `sessionLabel` and `sessionMetadata`, each null when absent, so that a Claude adapter's `extendOptions` can choose a system prompt or tools without calling the engine. The metadata values are deep-frozen copies.
 
 ## 6. Local Python wiring
 
@@ -468,9 +489,11 @@ context.estimate reports per-request keep/compact scenarios for continued cache 
 
 Every mutation uses expectedStoreId. TS receipts/errors expose retryIdentity; Python exposes retry_identity. Preserve `(storeId, method, scope, idempotencyKey, digestVersion, requestDigest)` with the original request. SDK retry reuses this identity and rejects changed payloads. `refresh()` intentionally observes the current active namespace; it never rewrites an old retry. An old key sent into a new store must fail before mutation.
 
+The engine commits nothing for a request it rejects, and each SDK forgets the identity of a key that the rejected call claimed, so the same key with a corrected request is sent. It keeps the identity when the key held one before the call, when the request failed in the SDK or its transport (a timeout, a lost connection, an abort) and after the engine errors that can follow a commit or leave it unknown: `RESOURCE_CLEANUP_INCOMPLETE`, `ROLLOVER_IN_PROGRESS`, `ROLLOVER_BLOCKED`, `STORE_SWITCH_IN_PROGRESS`, `SHUTDOWN_INCOMPLETE`, `OUTCOME_UNKNOWN`, `OPERATION_HISTORY_EXPIRED`, `IDEMPOTENCY_CONFLICT`, `INTERNAL_ERROR`, `STORAGE_DEGRADED` and an error without a code. `forgetIdempotencyKey(key)` (Python `forget_idempotency_key`) removes a key's identities; the engine still refuses another request under a key it committed. Each client keeps at most 10,000 identities; a retry of an evicted key is still checked by the engine, but is no longer bound to the store of its first attempt ([SPEC-0027](./specs/0027-read-only-access-and-host-corrections.md) K).
+
 Read operations.lookup in the original store. After rollover, use archives.lookup with the original storeId/method/scope/key and optional requestDigest. Expired details produce OPERATION_HISTORY_EXPIRED while lifetime tombstones preserve deduplication. ARCHIVE_UNAVAILABLE, ARCHIVE_CORRUPT and ARCHIVE_NOT_FOUND are distinct and are never proof of non-execution.
 
-Save event cursor with storeId. CURSOR_EXPIRED requires state.snapshot: retain its snapshotId/cursor, read bounded pages using nextOffset, rebuild visible state, release the lease and resume events exclusively after the captured cursor. The snapshot is fixed, lasts at most 60 seconds, and does not reconstruct deleted audit history. Expiry requires a new snapshot rather than mixing pages.
+Save event cursor with storeId. A cursor other than `0` without its `storeId`, or one that is not a decimal cursor, fails with `VALIDATION_ERROR`: the caller must fix the request. `CURSOR_EXPIRED` means that the reader must resynchronize, and its data says why: `reason` is `store_changed` when `storeId` names another store (after a rollover or an import), `below_retention_floor` when events after the cursor were collected, and `ahead_of_store` when the store has fewer events than the cursor (after restoring an older copy); the data also holds `retentionFloorCursor`, `lastCursor` and `currentStoreId` ([SPEC-0027](./specs/0027-read-only-access-and-host-corrections.md) C). CURSOR_EXPIRED requires state.snapshot: retain its snapshotId/cursor, read bounded pages using nextOffset, rebuild visible state, release the lease and resume events exclusively after the captured cursor. The snapshot is fixed, lasts at most 60 seconds, and does not reconstruct deleted audit history. Expiry requires a new snapshot rather than mixing pages.
 
 Owner storage APIs expose status/configure/collect/pin/unpin/backup. Protected references override retention. GC operates in bounded batches; inspect oversizedArtifacts and pressure instead of assuming one call removes all eligible data. Policy changes are audited and do not initiate destructive rollover automatically. Full/I/O errors stop admission and release emergency reserve for bounded recovery; degraded public close releases owned resources and reports STORAGE_DEGRADED_CLOSED with durableReceipt=false if it could not save a shutdown receipt.
 
@@ -661,6 +684,29 @@ async def resolve_reviewed_conflict(owner, conflict_id, evidence, idempotency_ke
 ```
 
 Resolve by durable conflictId even if activeDispatchId cleared. Reject stale revision, active handles, or insufficient proof. Resolve every conflict, then satisfy normal capacity/close gates before dispatch. This does not rewrite business outcomes, original unknown, or acceptance history. Idempotency uses method=scheduler.resolveConflict, scope=conflictId. Recover lost receipts by original-key lookup; do not substitute a new revision under that key.
+
+### 11.6 When an internal failure stops the engine
+
+A failure the engine cannot persist around, such as a result it cannot write, stops it from accepting work: `scheduler.get` lists `SCHEDULER_FAILED` and writes fail with `HOST_STOPPING` and `failure: {step, code, at}` ([SPEC-0025](./specs/0025-operability-and-sdk-errors.md) F). An embedding host hears of it at once through `EngineConfig.onFatal(failure)`, which runs once, in a microtask after the failure was recorded, and never for a requested close. Where the store can still be written, the engine first commits the event `scheduler.failed` with the same data, which socket and stdio clients read; a degraded store gets no event, but the callback still runs. `orchvia host` writes one line to its error output ([SPEC-0027](./specs/0027-read-only-access-and-host-corrections.md) F). Restart the host to recover.
+
+### 11.7 Reading a store while its engine is stopped
+
+`openOrchestratorReadOnly({ stateDir })` reads a store without an engine: it takes no lock, runs no recovery, starts no scheduler or adapter, writes no reserve and migrates nothing ([SPEC-0027](./specs/0027-read-only-access-and-host-corrections.md) R). It answers `tasks.get`, `tasks.list`, `sessions.get`, `usage.get`, `usage.getRecord`, `events.read`, `operations.get`, `operations.lookup`, `approvals.get`, `messages.get`, `handoffs.get`, `handoffs.list`, `costs.get`, `context.checkRefs` and `rules.list` through the same code as an engine; everything else fails with `READ_ONLY`.
+
+```ts
+import { openOrchestratorReadOnly } from '@orchvia/sdk';
+
+const reader = await openOrchestratorReadOnly({ stateDir });
+const { recoveryPending } = await reader.info();
+const usage = await reader.usage.get(taskId);
+await reader.close();
+```
+
+- **Files.** `store.sqlite`, an existing write-ahead log, `owner.sqlite` and every other file stay unchanged. SQLite may create or update the WAL index `store.sqlite-shm`, and create an empty `store.sqlite-wal`, to read a store in WAL mode. A log left by an engine that did not close is read in full.
+- **No recovery, no expiry.** Rows read as they were last written: a crash's running tasks stay `running`, and due approvals, messages and handoffs stay pending. `info().recoveryPending` is true when starting an engine would change rows during recovery.
+- **Other stores.** A store of another schema fails with `SCHEMA_MISMATCH`; an older one needs one start of a full engine to migrate. Retired, archived and standby stores can be read. `rules.list` returns only the rules registered at runtime, because a configuration's rules are unknown offline.
+- **Alongside an engine.** An open reader does not keep an engine from starting on the same directory, and its next call sees what the engine committed. Each call reads one snapshot.
+- **Python and other languages.** `orchvia host --read-only --state-dir <absolute path> --stdio` serves the same methods without a configuration file, and `initialize` lists `readOnly: { version: 1 }`. From Python: `Orchestrator.local(engine_command=["orchvia", "host", "--read-only", "--state-dir", state_dir, "--stdio"])`.
 
 ## 12. Layered acceptance
 

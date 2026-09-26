@@ -1,4 +1,4 @@
-import { mkdtemp, mkdir, writeFile, readFile, rm, realpath } from 'node:fs/promises';
+import { mkdtemp, mkdir, writeFile, readFile, readdir, rm, realpath } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -72,6 +72,21 @@ try {
     assert.match(entry.resolved, /^file:/);
     assert.match(entry.integrity, /^sha512-/);
   }
+  // SPEC-0027 T03: the SDK's declarations name only public engine modules.
+  const declarations = async (directory) => {
+    const found = [];
+    for (const entry of await readdir(directory, { withFileTypes: true }))
+      if (entry.isDirectory()) found.push(...(await declarations(join(directory, entry.name))));
+      else if (entry.name.endsWith('.d.ts')) found.push(join(directory, entry.name));
+    return found;
+  };
+  const internal = [];
+  for (const file of await declarations(join(base, 'node_modules/@orchvia/sdk/dist')))
+    for (const match of (await readFile(file, 'utf8')).matchAll(
+      /@orchvia\/[a-z-]+\/internal\/[\w/.-]+/g,
+    ))
+      internal.push(`${file.slice(base.length + 1)}: ${match[0]}`);
+  assert.deepEqual(internal, [], 'The SDK declarations must not name internal modules');
   // SPEC-0021 P01 and R10: the archives can be published as built, and describe themselves.
   const packed = (file, path) => run('tar', ['-xzOf', join(release, file), `package/${path}`]);
   for (const pkg of manifest.packages) {

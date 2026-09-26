@@ -52,7 +52,9 @@ Package exports are ESM-only. The package smoke verifies CJS and ESM single-file
 | TypeScript | Embedded owner or Unix-socket client; generated wire types and bounded schema validator |
 | Python | Standard-library async client; owned Node stdio host or Unix connection; equivalent methods, generated wire types and validator |
 | Local protocol | Wire 2.0, immutable expectedStoreId on mutations, JSON-RPC 2.0, 1 MiB frames; per-connection and host-wide resource limits |
-| CLI | host, doctor, submit, run, attach, status, approve, control; private tool-bridge |
+| CLI | host, doctor, submit, run, attach, status, approve, control; `host --read-only` for offline reads; private tool-bridge |
+| Offline reads | `openOrchestratorReadOnly` and `host --read-only` read tasks, usage, events and operations of a store whose engine is not running, without a lock, recovery or writes |
+| Host labels | `label` and `metadata` on tasks and sessions, inherited by what the engine creates, filterable with `tasks.list({ label })` and passed to runtimes with the task chain |
 | Delivery | Five local npm tarballs, Python wheel/sdist, clean-install smoke script, configured macOS/Linux version matrix |
 | Routing layer | Optional SDK layer, `@orchvia/sdk/routing` and `orchvia.routing`: a judge you choose, such as the built-in TypeSafe Jev adapter, proposes which agent in a group takes a request and which results it carries; the engine validates and executes the declaration |
 
@@ -135,6 +137,8 @@ const orch = await createOrchestrator({
   limits: { maxActiveSessions: 2, maxTurnsPerTask: 20, maxQuarantinedDispatches: 32 },
 });
 ```
+
+`createOrchestrator` also takes `onFatal(failure)`, which is called once when an internal failure stops the engine ([guide §11.6](guide.md#116-when-an-internal-failure-stops-the-engine)); `openOrchestratorReadOnly({ stateDir })` reads a store while no engine runs ([guide §11.7](guide.md#117-reading-a-store-while-its-engine-is-stopped)).
 
 This snippet only creates the orchestrator with an explicit offline fake adapter. The complete repository example uses source imports and handles task creation, approval and shutdown. A timeout or cancellation of `task.wait({timeoutMs, signal})` stops only the local wait; remote cancellation requires an explicit `tasks.cancel`. Inspect and resolve paused/blocked states rather than waiting indefinitely for completion.
 

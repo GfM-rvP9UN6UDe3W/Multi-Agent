@@ -70,13 +70,19 @@ A dispatch gets one total budget, 1,800 seconds by default, from the smaller of 
 
 **Plainly:** sending the same request twice does the work once.
 
-Each change carries an idempotency key. The engine stores `(storeId, method, scope, key, digest)`, so a retry returns the first result, and a different request with the same key is refused. `operations.lookup` finds the result later.
+Each change carries an idempotency key. The engine stores `(storeId, method, scope, key, digest)`, so a retry returns the first result, and a different request with the same key is refused. `operations.lookup` finds the result later. A request the engine rejects is not stored, so its key can carry a corrected request.
+
+## Labels and metadata
+
+**Plainly:** the host's own name tag and notes on a task or a session.
+
+A `label` is a short string the host can list tasks by, such as a conversation; `metadata` is a small JSON object the engine only stores and returns, such as which agent a task is for. What the engine creates for a task, such as a delegated child or a new session, inherits them, and each dispatch hands them to the runtime together with the parent and root task.
 
 ## Store, state directory and rollover
 
 **Plainly:** where the engine keeps its data, and how it starts a fresh one without losing the old.
 
-The state directory holds the SQLite store and the result artifacts. It must be private and outside the workspace. A rollover closes a finished store and starts a new namespace; an archive keeps the old one readable. Old data is collected by bounded retention rules, never deleted wholesale.
+The state directory holds the SQLite store and the result artifacts. It must be private and outside the workspace. A rollover closes a finished store and starts a new namespace; an archive keeps the old one readable. Old data is collected by bounded retention rules, never deleted wholesale. While no engine runs, a store can be opened read-only to read tasks, usage and events; that opens no lock and writes nothing.
 
 ## Context references
 

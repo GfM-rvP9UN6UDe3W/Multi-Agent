@@ -1,4 +1,4 @@
-import type { RetryIdentity } from '../../engine/src/identity.ts';
+import type { RetryIdentity } from '../../engine/src/types.ts';
 import { createConnection, type Socket } from 'node:net';
 
 export const MAX_FRAME_BYTES = 1024 * 1024;

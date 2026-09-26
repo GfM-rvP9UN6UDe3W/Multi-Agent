@@ -85,6 +85,7 @@ test('AC-P01 host options preserve native callbacks, tools, MCP/settings and app
     managedSettings: { permissions: { deny: ['Read(//private/fixture/**)'] } },
   };
   const adapter = makeAdapter({
+    executionStop: 'owner-reconcile',
     options,
     query: withClaudeProcess((request) => {
       captured = request.options as unknown as NativeOptions;
@@ -132,6 +133,7 @@ test('AC-P01 ownership overrides and malformed native policy fail without a quer
     assert.throws(
       () =>
         makeAdapter({
+          executionStop: 'owner-reconcile',
           options,
           query: () => {
             throw new Error('query must not run');
@@ -161,6 +163,7 @@ test('AC-P02 async option extension consumes the original budget before submissi
     remainingTurnMs: () => Math.max(0, 30 - (performance.now() - started)),
   };
   const adapter = makeAdapter({
+    executionStop: 'owner-reconcile',
     extendOptions: async (ctx: { input: RuntimeInput }) => {
       context = ctx;
       await new Promise((resolve) => setTimeout(resolve, 60));
@@ -188,6 +191,7 @@ test('AC-P02 extension ownership overrides fail before process/query creation', 
   const paths = await directories(t);
   let called = false;
   const adapter = makeAdapter({
+    executionStop: 'owner-reconcile',
     extendOptions: () => ({ cwd: '/wrong' }),
     query: () => {
       called = true;
@@ -211,6 +215,7 @@ test('AC-P03 workspace-write passes sandbox policy and blocks unsafe native tool
   await symlink(paths.stateDir, join(paths.workspace, 'state-link'));
   let captured!: NativeOptions;
   const adapter = makeAdapter({
+    executionStop: 'owner-reconcile',
     permissionProfile: 'workspace-write',
     query: withClaudeProcess((request) => {
       captured = request.options as unknown as NativeOptions;
@@ -279,6 +284,7 @@ test('AC-P03 weakening the write sandbox is rejected before a query', async (t) 
   ]) {
     let called = false;
     const adapter = makeAdapter({
+      executionStop: 'owner-reconcile',
       permissionProfile: 'workspace-write',
       options: { sandbox },
       query: () => {
@@ -316,7 +322,7 @@ for (const proof of [true, false, 'late', 'missing', 'throws'] as const) {
       // cleanup to finish first; 300 ms was too little on a loaded CI runner.
       cleanupTimeoutMs: proof === 'late' ? 300 : 5000,
       ...(proof === 'missing'
-        ? {}
+        ? { executionStop: 'owner-reconcile' }
         : {
             observeExecutionStop: (context: {
               target: { dispatchId: string; generation: number; providerSessionId: string };
@@ -388,6 +394,7 @@ test('AC-P02 policy arrays and hook containers are isolated between dispatches',
   };
   let calls = 0;
   const adapter = makeAdapter({
+    executionStop: 'owner-reconcile',
     options,
     query: withClaudeProcess((request) => {
       const current = request.options as unknown as NativeOptions;
@@ -422,6 +429,7 @@ test('AC-P02 rejected and aborted extensions never submit or expose private erro
     const controller = new AbortController();
     let called = false;
     const adapter = makeAdapter({
+      executionStop: 'owner-reconcile',
       extendOptions: async () => {
         if (abort) {
           controller.abort();

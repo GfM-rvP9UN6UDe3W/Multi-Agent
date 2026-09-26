@@ -1,13 +1,29 @@
-export { validateWire } from '../../engine/src/wire.ts';
-export type * as WireTypes from '../../engine/src/generated/wire.ts';
-import type { ContextRefCheck } from '../../engine/src/generated/wire.ts';
-import { requestDigest, type RetryIdentity } from '../../engine/src/identity.ts';
+// Everything public comes from the engine's public entries, so that the declarations refer to no
+// internal module (SPEC-0027 T03).
+export { validateWire } from '../../engine/src/index.ts';
+export type { WireTypes } from '../../engine/src/index.ts';
+import { requestDigest } from '../../engine/src/identity.ts';
 import { randomUUID } from 'node:crypto';
-import { createEngine } from '../../engine/src/index.ts';
+import {
+  createEngine,
+  openReadOnlyEngine,
+  type ReadOnlyStoreInfo,
+} from '../../engine/src/index.ts';
 import { VERSION } from '../../engine/src/version.ts';
 import type {
   ApprovalRequest,
   CloseOptions,
+  ContextEstimateInput,
+  ContextEstimateResult,
+  ContextRefCheck,
+  CostSummary,
+  RetryIdentity,
+  RolloverRecord,
+  SessionControlCommand,
+  StateSnapshotPage,
+  StoragePolicy,
+  StorageStatus,
+  TaskSpecInput,
   Engine,
   EngineConfig,
   EventEnvelope,
@@ -72,6 +88,24 @@ export interface UsageResult {
 }
 const taskTerminal = new Set(['completed', 'failed', 'cancelled']);
 const operationTerminal = new Set(['completed', 'noop', 'rejected', 'failed', 'outcome_unknown']);
+/**
+ * Engine errors that can follow a commit, or whose commit is unknown: a retry identity that meets
+ * one is kept, so that a retry goes to the original request's store (SPEC-0027 K04).
+ */
+const KEEP_IDENTITY = new Set([
+  'RESOURCE_CLEANUP_INCOMPLETE',
+  'ROLLOVER_IN_PROGRESS',
+  'ROLLOVER_BLOCKED',
+  'STORE_SWITCH_IN_PROGRESS',
+  'SHUTDOWN_INCOMPLETE',
+  'OUTCOME_UNKNOWN',
+  'OPERATION_HISTORY_EXPIRED',
+  'IDEMPOTENCY_CONFLICT',
+  'INTERNAL_ERROR',
+  'STORAGE_DEGRADED',
+]);
+/** Retry identities kept per client; the least recently used goes first (SPEC-0027 K03). */
+const MAX_IDENTITIES = 10_000;
 
 function key(options: MutationOptions = {}) {
   return options.idempotencyKey ?? randomUUID();
@@ -246,8 +280,11 @@ export class Orchestrator {
       );
     const requestedKey = options?.retryIdentity?.idempotencyKey ?? key(options);
     const identityKey = JSON.stringify([method, scope, requestedKey]);
+    const existing = this.identities.get(identityKey);
+    // This call claims the key only when nothing held it before (SPEC-0027 K01, K02).
+    const claimed = !options?.retryIdentity && !existing;
     const identity: RetryIdentity = options?.retryIdentity ??
-      this.identities.get(identityKey) ?? {
+      existing ?? {
         storeId: this.info.storeId,
         method,
         scope,
@@ -255,7 +292,12 @@ export class Orchestrator {
         digestVersion: 1,
         requestDigest: requestDigest(method, params),
       };
-    this.identities.set(identityKey, { ...identity });
+    const stored = { ...identity };
+    // Re-inserting marks the identity as the most recently used one.
+    this.identities.delete(identityKey);
+    this.identities.set(identityKey, stored);
+    if (this.identities.size > MAX_IDENTITIES)
+      this.identities.delete(this.identities.keys().next().value!);
     const idempotencyKey = identity.idempotencyKey;
     try {
       if (
@@ -289,6 +331,17 @@ export class Orchestrator {
           : original.details && typeof original.details === 'object'
             ? (original.details as Record<string, unknown>)
             : {};
+      // An engine error carries its code in its data too; the SDK's and the transport's own errors
+      // do not. The engine committed nothing for a rejection outside KEEP_IDENTITY, so the key this
+      // call claimed is free again for a corrected request (SPEC-0027 K01).
+      if (
+        claimed &&
+        typeof original.code === 'string' &&
+        data.code === original.code &&
+        !KEEP_IDENTITY.has(original.code) &&
+        this.identities.get(identityKey) === stored
+      )
+        this.identities.delete(identityKey);
       // Each failed request gets its own error: transport disconnect may reject many calls together.
       const failure = new OrchestratorError(
         typeof original.code === 'string' ? original.code : 'REQUEST_FAILED',
@@ -321,6 +374,20 @@ export class Orchestrator {
       ...options,
       retryIdentity: { ...identity },
     });
+  }
+  /**
+   * Forgets the retry identities of `idempotencyKey` for every method and scope, and returns how
+   * many there were. The engine still refuses another request under a key it committed
+   * (SPEC-0027 K03).
+   */
+  forgetIdempotencyKey(idempotencyKey: string): number {
+    let removed = 0;
+    for (const [identityKey, identity] of [...this.identities])
+      if (identity.idempotencyKey === idempotencyKey) {
+        this.identities.delete(identityKey);
+        removed++;
+      }
+    return removed;
   }
   private async operation(
     method: string,
@@ -379,8 +446,9 @@ export class Orchestrator {
       throw new OrchestratorError('UNSUPPORTED_CAPABILITY', `Host does not support ${feature}`);
   }
   readonly tasks = {
-    create: async (spec: TaskSpec, options?: MutationOptions) => {
+    create: async (spec: TaskSpecInput, options?: MutationOptions) => {
       if (spec.writePath !== undefined) this.requireWorkflow('writePath');
+      if (spec.label !== undefined || spec.metadata !== undefined) this.requireWorkflow('labels');
       return new TaskHandle(
         this,
         await this.mutation<TaskSnapshot>('tasks.create', 'local', { spec }, options),
@@ -388,17 +456,20 @@ export class Orchestrator {
     },
     get: (taskId: string, options?: RequestOptions) =>
       this.call<TaskSnapshot>('tasks.get', { taskId }, options),
-    /** Creation-ordered page; set at most one of parentTaskId and sessionId. */
+    /** Creation-ordered page; set at most one of parentTaskId, sessionId and label. */
     list: async (
       query: {
         parentTaskId?: string;
         sessionId?: string;
+        /** SPEC-0027 L03: the tasks with this label. */
+        label?: string;
         limit?: number;
         afterCursor?: string;
       } = {},
       options?: RequestOptions,
     ) => {
       this.requireWorkflow('taskList');
+      if (query.label !== undefined) this.requireWorkflow('labels');
       return this.call<TaskListResult>('tasks.list', query, options);
     },
     resume: (taskId: string, options?: MutationOptions) =>
@@ -417,7 +488,7 @@ export class Orchestrator {
       this.call<SessionSnapshot>('sessions.get', { sessionId }, options),
     control: (
       target: SessionControlTarget,
-      command: { action: string; mode?: 'drain' | 'interrupt' },
+      command: SessionControlCommand,
       options?: MutationOptions,
     ) => this.operation('sessions.control', target.sessionId, { target, command }, options),
     reconcile: async (
@@ -445,6 +516,7 @@ export class Orchestrator {
     },
     open: async (spec: SessionOpenSpec, options?: MutationOptions) => {
       if (spec.writePath !== undefined) this.requireWorkflow('writePath');
+      if (spec.label !== undefined || spec.metadata !== undefined) this.requireWorkflow('labels');
       const capability = this.info.capabilities.sessionLifecycle as { open?: boolean } | undefined;
       if (capability?.open !== true)
         throw new OrchestratorError(
@@ -496,8 +568,9 @@ export class Orchestrator {
       ),
   };
   readonly costs = {
+    /** Money totals of registered-price estimates, not token counts and not a provider bill. */
     get: (taskId?: string, scope: 'direct' | 'tree' | 'host_overhead' = 'direct') =>
-      this.call('costs.get', { ...(taskId ? { taskId } : {}), scope }),
+      this.call<CostSummary>('costs.get', { ...(taskId ? { taskId } : {}), scope }),
     recordOverhead: (
       record: {
         billingId: string;
@@ -510,12 +583,8 @@ export class Orchestrator {
     ) => this.operation('costs.recordOverhead', 'host', record, options),
   };
   readonly context = {
-    estimate: (
-      input: Omit<
-        Parameters<typeof import('../../engine/src/accounting.ts').estimateContext>[0],
-        'pricing'
-      > & { provider: string; model: string },
-    ) => this.call('context.estimate', input),
+    estimate: (input: ContextEstimateInput, options?: RequestOptions) =>
+      this.call<ContextEstimateResult>('context.estimate', { ...input }, options),
     /**
      * What task admission would decide now for each context reference (SPEC-0020). Read-only; the
      * content is never returned, and admission checks again when a task is submitted.
@@ -613,25 +682,11 @@ export class Orchestrator {
   };
   readonly stores = {
     rollover: (options?: MutationOptions) =>
-      this.mutation<import('../../engine/src/control-plane.ts').RolloverRecord>(
-        'stores.rollover',
-        'local',
-        {},
-        options,
-      ),
+      this.mutation<RolloverRecord>('stores.rollover', 'local', {}, options),
     importBackup: (backupId: string, options?: MutationOptions) =>
-      this.mutation<import('../../engine/src/control-plane.ts').RolloverRecord>(
-        'stores.import',
-        'local',
-        { backupId },
-        options,
-      ),
+      this.mutation<RolloverRecord>('stores.import', 'local', { backupId }, options),
     rolloverStatus: (rolloverId: string, options?: RequestOptions) =>
-      this.call<import('../../engine/src/control-plane.ts').RolloverRecord>(
-        'rollovers.get',
-        { rolloverId },
-        options,
-      ),
+      this.call<RolloverRecord>('rollovers.get', { rolloverId }, options),
   };
   readonly archives = {
     lookup: (
@@ -662,12 +717,9 @@ export class Orchestrator {
         {},
         options,
       ),
-    status: (options?: RequestOptions) =>
-      this.call<Record<string, unknown>>('storage.status', {}, options),
-    configure: (
-      policy: Partial<import('../../engine/src/storage.ts').StoragePolicy>,
-      options?: MutationOptions,
-    ) => this.operation('storage.configure', 'local', { policy }, options),
+    status: (options?: RequestOptions) => this.call<StorageStatus>('storage.status', {}, options),
+    configure: (policy: Partial<StoragePolicy>, options?: MutationOptions) =>
+      this.operation('storage.configure', 'local', { policy }, options),
     collect: (options?: MutationOptions) => this.operation('storage.gc', 'local', {}, options),
     pin: (ref: string, reason: string, options?: MutationOptions) =>
       this.operation('storage.pin', 'local', { ref, reason }, options),
@@ -678,12 +730,7 @@ export class Orchestrator {
     snapshot: (
       query: { snapshotId?: string; offset?: number; limit?: number } = {},
       options?: RequestOptions,
-    ) =>
-      this.call<ReturnType<import('../../engine/src/storage.ts').StorageGovernance['snapshot']>>(
-        'state.snapshot',
-        query,
-        options,
-      ),
+    ) => this.call<StateSnapshotPage>('state.snapshot', query, options),
     releaseSnapshot: (snapshotId: string, options?: RequestOptions) =>
       this.call<{ released: boolean }>('state.releaseSnapshot', { snapshotId }, options),
   };
@@ -863,6 +910,135 @@ export async function createOrchestrator(config: EngineConfig): Promise<Orchestr
     await engine.close({ mode: 'interrupt', timeoutMs: 1000 }).catch(() => {});
     throw error;
   }
+}
+/**
+ * Reads of a store whose engine is not running: no lock, recovery, scheduler, adapters or writes.
+ * Its methods are the reads of Orchestrator; `info()` describes the store (SPEC-0027 R).
+ */
+export class ReadOnlyOrchestrator {
+  readonly storeId: string;
+  private caller: Caller;
+  private shut: () => Promise<unknown>;
+  private closed = false;
+  constructor(caller: Caller, storeId: string, close: () => Promise<unknown>) {
+    this.caller = caller;
+    this.storeId = storeId;
+    this.shut = close;
+  }
+  private call<T>(
+    method: string,
+    params: Record<string, unknown> = {},
+    options: RequestOptions = {},
+  ) {
+    if (this.closed)
+      return Promise.reject<T>(new OrchestratorError('CLIENT_CLOSED', 'Client is closed'));
+    return this.caller.call<T>(method, params, options);
+  }
+  /** The store's identity and role, and whether an engine start would recover rows (R05). */
+  info(options?: RequestOptions) {
+    return this.call<ReadOnlyStoreInfo>('store.info', {}, options);
+  }
+  readonly tasks = {
+    get: (taskId: string, options?: RequestOptions) =>
+      this.call<TaskSnapshot>('tasks.get', { taskId }, options),
+    list: (
+      query: {
+        parentTaskId?: string;
+        sessionId?: string;
+        label?: string;
+        limit?: number;
+        afterCursor?: string;
+      } = {},
+      options?: RequestOptions,
+    ) => this.call<TaskListResult>('tasks.list', query, options),
+  };
+  readonly sessions = {
+    get: (sessionId: string, options?: RequestOptions) =>
+      this.call<SessionSnapshot>('sessions.get', { sessionId }, options),
+  };
+  readonly usage = {
+    getRecord: (usageRecordId: string, options?: RequestOptions) =>
+      this.call<UsageRecord>('usage.getRecord', { usageRecordId }, options),
+    get: (query: { taskId: string } | string, options?: RequestOptions) =>
+      this.call<UsageResult>(
+        'usage.get',
+        typeof query === 'string' ? { taskId: query } : query,
+        options,
+      ),
+  };
+  readonly events = {
+    read: (options: Omit<EventOptions, 'signal' | 'timeoutMs'> = {}, request?: RequestOptions) =>
+      this.call<EventPage>('events.read', options, request),
+  };
+  readonly operations = {
+    get: (operationId: string, options?: RequestOptions) =>
+      this.call<OperationSnapshot>('operations.get', { operationId }, options),
+    lookup: (
+      query: { method: string; scope: string; idempotencyKey: string },
+      options?: RequestOptions,
+    ) => this.call<OperationSnapshot>('operations.lookup', query, options),
+  };
+  readonly approvals = {
+    get: (approvalId: string, options?: RequestOptions) =>
+      this.call<ApprovalRequest>('approvals.get', { approvalId }, options),
+  };
+  readonly messages = {
+    get: (messageId: string, options?: RequestOptions) =>
+      this.call<MessageSnapshot>('messages.get', { messageId }, options),
+  };
+  readonly handoffs = {
+    get: (handoffId: string, options?: RequestOptions) =>
+      this.call<HandoffRequest>('handoffs.get', { handoffId }, options),
+    list: (
+      query: {
+        status?: HandoffRequest['status'];
+        targetSessionId?: string;
+        limit?: number;
+        afterCursor?: string;
+      } = {},
+      options?: RequestOptions,
+    ) => this.call<HandoffListResult>('handoffs.list', query, options),
+  };
+  readonly costs = {
+    get: (taskId?: string, scope: 'direct' | 'tree' | 'host_overhead' = 'direct') =>
+      this.call<CostSummary>('costs.get', { ...(taskId ? { taskId } : {}), scope }),
+  };
+  readonly context = {
+    checkRefs: (contextRefs: ContextPlan['contextRefs'], options?: RequestOptions) =>
+      this.call<ContextRefCheck>('context.checkRefs', { contextRefs }, options),
+  };
+  readonly rules = {
+    /** Only the rules registered at runtime; a configuration's rules are unknown offline. */
+    list: (options?: RequestOptions) =>
+      this.call<{ rules: RegisteredVerificationRule[] }>('rules.list', {}, options),
+  };
+  async close(): Promise<void> {
+    if (this.closed) return;
+    this.closed = true;
+    await this.shut();
+  }
+}
+/** Opens a store read-only, without starting an engine (SPEC-0027 R01). */
+export async function openOrchestratorReadOnly(options: {
+  stateDir: string;
+}): Promise<ReadOnlyOrchestrator> {
+  const engine = await openReadOnlyEngine({ stateDir: options.stateDir });
+  const caller: Caller = {
+    call: async <T>(
+      method: string,
+      params: Record<string, unknown> = {},
+      request: RequestOptions = {},
+    ) => {
+      aborted(request.signal);
+      try {
+        return (await engine.call(method, params, { owner: true, signal: request.signal })) as T;
+      } catch (error) {
+        throw hostError(error);
+      }
+    },
+    disconnect() {},
+  };
+  return new ReadOnlyOrchestrator(caller, engine.storeId, () => engine.close());
 }
 export async function connectOrchestrator(options: {
   socketPath: string;

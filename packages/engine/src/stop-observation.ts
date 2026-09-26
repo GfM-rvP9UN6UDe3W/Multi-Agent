@@ -50,3 +50,27 @@ export async function observeRuntimeStop(
     controller.abort();
   }
 }
+
+/**
+ * SPEC-0027 A01 to A03: an adapter that cannot vouch that its terminal event ends execution needs
+ * an observer that proves it, or the explicit choice of owner reconciliation. Otherwise no dispatch
+ * could release its execution lease.
+ */
+export function requireStopProof(
+  adapter: string,
+  coversExecution: boolean,
+  config: { observeExecutionStop?: unknown; executionStop?: unknown },
+): void {
+  const invalid = (message: string) =>
+    Object.assign(new Error(message), { code: 'INVALID_ADAPTER_CONFIG' });
+  if (config.executionStop !== undefined && config.executionStop !== 'owner-reconcile')
+    throw invalid(`${adapter}: executionStop must be 'owner-reconcile'`);
+  if (config.executionStop !== undefined && config.observeExecutionStop !== undefined)
+    throw invalid(
+      `${adapter}: give observeExecutionStop or executionStop: 'owner-reconcile', not both`,
+    );
+  if (!coversExecution && config.observeExecutionStop === undefined && !config.executionStop)
+    throw invalid(
+      `${adapter}: this configuration cannot prove that a dispatch stopped, so no execution lease could be released. Give observeExecutionStop (on macOS and Linux, processGroupsStopped from @orchvia/adapter-claude can serve), or set executionStop: 'owner-reconcile' to release leases by owner reconciliation`,
+    );
+}
