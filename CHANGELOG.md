@@ -2,7 +2,7 @@
 
 All notable changes to Orchvia are recorded here. Versions follow [Semantic Versioning](https://semver.org/); before 1.0, a minor version may change the API.
 
-## [Unreleased]
+## [0.1.5] - 2026-09-26
 
 For hosts that show many tasks at once or run on a desktop: queries that answer from indexes, events that carry what a host shows, why a task waits, a close that marks what it paused, rules that can be retired, and an engine start that does not block its thread.
 
