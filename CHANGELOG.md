@@ -2,7 +2,7 @@
 
 All notable changes to Orchvia are recorded here. Versions follow [Semantic Versioning](https://semver.org/); before 1.0, a minor version may change the API.
 
-## [Unreleased]
+## [0.1.4] - 2026-09-26
 
 For hosts that embed the engine: reading a store while its engine is stopped, the host's own labels on tasks and sessions, and an immediate notice when an internal failure stops the engine.
 
