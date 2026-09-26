@@ -1,6 +1,14 @@
 import { fail } from './errors.ts';
 import { fields, integer, object, string } from './validation.ts';
-import type { Json, Pricing, MoneyBudget, UsageRecord } from './types.ts';
+import type {
+  ContextEstimateInput,
+  ContextEstimateResult,
+  ContextEstimateScenario,
+  Json,
+  Pricing,
+  MoneyBudget,
+  UsageRecord,
+} from './types.ts';
 const SCALE = 18;
 export function moneyUnits(value: string, scale = SCALE): bigint {
   if (typeof value !== 'string' || value.length > 64 || !/^(0|[1-9]\d*)(\.\d+)?$/.test(value))
@@ -169,18 +177,9 @@ export function estimateStrategies(input: {
 }
 
 /** Produce separate sustained-hit, TTL-rebuild and partial-prefix paths with explicit growth. */
-export function estimateContext(input: {
-  pricing: Pricing;
-  keepHistoryTokens: number;
-  compactHistoryTokens: number;
-  requests: number | null;
-  growthTokens: number;
-  outputTokens: number;
-  retainedPrefixTokens: number;
-  compaction: TokenUsage;
-  intervalsMs: (number | null)[];
-  ttlMs: number;
-}): Json {
+export function estimateContext(
+  input: Omit<ContextEstimateInput, 'provider' | 'model'> & { pricing: Pricing },
+): ContextEstimateResult {
   if (input.requests === null)
     return { status: 'unknown', reason: 'unknown_future_request_count', automaticSelection: false };
   for (const key of [
@@ -196,9 +195,12 @@ export function estimateContext(input: {
   if (!Array.isArray(input.intervalsMs) || input.intervalsMs.length !== input.requests)
     fail('VALIDATION_ERROR', 'One observed/predicted interval is required per request');
   for (const value of input.intervalsMs) if (value !== null) integer(value, 'intervalMs', 0);
-  const scenarios: Record<string, Json> = {};
-  const ranges: Record<string, bigint[]> = { keep: [], compact: [] };
-  for (const scenario of ['sustained_hit', 'ttl_rebuild', 'partial_prefix']) {
+  const scenarios = {} as Record<
+    'sustained_hit' | 'ttl_rebuild' | 'partial_prefix',
+    ContextEstimateScenario
+  >;
+  const ranges: Record<'keep' | 'compact', bigint[]> = { keep: [], compact: [] };
+  for (const scenario of ['sustained_hit', 'ttl_rebuild', 'partial_prefix'] as const) {
     const sequence = (history: number, compact: boolean): TokenUsage[] =>
       Array.from({ length: input.requests! }, (_, i) => {
         const total = history + i * input.growthTokens;
@@ -229,26 +231,19 @@ export function estimateContext(input: {
     });
     for (const key of ['keep', 'compact'] as const)
       if (comparison[key].amount !== null) ranges[key].push(moneyUnits(comparison[key].amount));
-    scenarios[scenario] = {
-      ...comparison,
-      keepRequests: keep as unknown as Json,
-      compactRequests: compact as unknown as Json,
-    };
+    scenarios[scenario] = { ...comparison, keepRequests: keep, compactRequests: compact };
   }
+  const range = (values: bigint[]) =>
+    values.length !== 3
+      ? null
+      : {
+          min: moneyString(values.reduce((a, b) => (a < b ? a : b))),
+          max: moneyString(values.reduce((a, b) => (a > b ? a : b))),
+          currency: input.pricing.currency,
+        };
   return {
     scenarios,
-    range: Object.fromEntries(
-      Object.entries(ranges).map(([key, values]) => [
-        key,
-        values.length !== 3
-          ? null
-          : {
-              min: moneyString(values.reduce((a, b) => (a < b ? a : b))),
-              max: moneyString(values.reduce((a, b) => (a > b ? a : b))),
-              currency: input.pricing.currency,
-            },
-      ]),
-    ),
+    range: { keep: range(ranges.keep), compact: range(ranges.compact) },
     assumptions: input as unknown as Json,
     automaticSelection: false,
     cacheHitsGuaranteed: false,

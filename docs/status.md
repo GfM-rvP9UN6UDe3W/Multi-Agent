@@ -72,6 +72,11 @@ Each specification has a matching TDD record of observed failures before the cha
 | [SPEC-0020](specs/0020-context-check.md) | Checking context references before submitting |
 | [SPEC-0021](specs/0021-open-source-readiness.md) | Open-source readiness |
 | [SPEC-0022](specs/0022-close-interrupt-and-verification-feedback.md) | Interrupting close and verification feedback |
+| [SPEC-0023](specs/0023-corrections-before-0.1.2.md) | Corrections before 0.1.2 |
+| [SPEC-0024](specs/0024-read-path-performance.md) | Read-path performance |
+| [SPEC-0025](specs/0025-operability-and-sdk-errors.md) | A crashed host's socket, in-process errors and a failed scheduler |
+| [SPEC-0026](specs/0026-claude-mcp-without-zod.md) | A Claude MCP server without Zod |
+| [SPEC-0027](specs/0027-read-only-access-and-host-corrections.md) | Read-only access, host labels and host-facing corrections (not yet released) |
 
 ## Claude and Codex baselines
 

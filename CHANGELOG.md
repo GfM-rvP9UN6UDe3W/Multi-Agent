@@ -2,6 +2,29 @@
 
 All notable changes to Orchvia are recorded here. Versions follow [Semantic Versioning](https://semver.org/); before 1.0, a minor version may change the API.
 
+## [Unreleased]
+
+For hosts that embed the engine: reading a store while its engine is stopped, the host's own labels on tasks and sessions, and an immediate notice when an internal failure stops the engine.
+
+### Added
+
+- `openOrchestratorReadOnly({ stateDir })` in `@orchvia/sdk`, `openReadOnlyEngine` in `@orchvia/engine`, and `orchvia host --read-only --state-dir DIR --stdio` read tasks, sessions, usage, events, operations, approvals, messages, handoffs, costs, context checks and runtime rules of a store whose engine is not running. They take no lock, run no recovery, start no scheduler or adapter and write nothing; SQLite may create or update only its WAL index. A log left by an engine that did not close is read in full, `info().recoveryPending` says whether a start would recover rows, and other methods fail with `READ_ONLY` (SPEC-0027 R).
+- `label` and `metadata` on `TaskSpec` and `SessionOpenSpec`, returned in snapshots. A child that `work_delegate` creates, a session the engine opens for a task and a fork inherit them. `tasks.list({ label })` lists a label's tasks through an index, `task.*` events carry the label, and each dispatch's `RuntimeInput` carries `parentTaskId`, `rootTaskId`, `label`, `metadata`, `sessionLabel` and `sessionMetadata`, so a Claude adapter's `extendOptions` sees them. `initialize` lists `workflow.labels` (SPEC-0027 L).
+- `EngineConfig.onFatal(failure)`, called once in a microtask when an internal failure stops the engine, after the event `scheduler.failed` with the same `{ step, code, at }` was committed where the store could still be written. `orchvia host` writes one line when this happens, and a failed storage collection or usage write now also emits a process warning (SPEC-0027 F).
+- `forgetIdempotencyKey(key)` in the TypeScript SDK and `forget_idempotency_key(key)` in Python (SPEC-0027 K03).
+- Public types for the results that were `unknown` or internal: `TaskSpecInput` and `ContextPlanInput` for `tasks.create`, `CostSummary`, `ContextEstimateInput`, `ContextEstimateResult`, `StorageStatus`, `StateSnapshotPage`, `StoragePolicy`, `RolloverRecord` and `SessionControlCommand`, all from `@orchvia/engine/types` and `@orchvia/sdk` (SPEC-0027 T).
+
+### Changed
+
+- `events.read` answers a caller's mistake, a cursor other than `0` without its `storeId` or a cursor that is not decimal, with `VALIDATION_ERROR` instead of `CURSOR_EXPIRED`. `CURSOR_EXPIRED` now means that the reader must resynchronize, and its data holds `reason` (`store_changed`, `below_retention_floor` or `ahead_of_store`), `retentionFloorCursor`, `lastCursor` and `currentStoreId` (SPEC-0027 C).
+- `createClaudeAdapter` with `options`, `extendOptions` or `permissionProfile: 'workspace-write'`, and `createCodexAdapter` with `workspace-write`, fail with `INVALID_ADAPTER_CONFIG` unless the host gives `observeExecutionStop` or sets `executionStop: 'owner-reconcile'`. Before, such an adapter was accepted although none of its dispatches could release its execution lease, and the engine stopped dispatching when capacity ran out (SPEC-0027 A).
+- `sessions.control` takes the action `'pause' | 'resume' | 'stop'` in TypeScript, and `tasks.create` takes a `TaskSpecInput`, whose plan fields are optional as on the wire (SPEC-0027 T).
+
+### Fixed
+
+- A request that the engine rejected can be corrected under the same idempotency key. The SDKs had kept every key's first request and refused the corrected one themselves with `IDEMPOTENCY_CONFLICT`, although the engine records nothing for a rejected request. They now forget the key when the engine rejected the call that claimed it, keep it after transport failures and after the errors that can follow a commit, and keep at most 10,000 keys (SPEC-0027 K).
+- The declarations of `@orchvia/sdk` refer to `@orchvia/engine`, `@orchvia/engine/types` and no internal module; the build had given every cross-package import an `internal` path (SPEC-0027 T03).
+
 ## [0.1.3] - 2026-09-25
 
 Corrections from a review of 0.1.2: the Claude adapter installs next to any Zod, reads stay fast on a store with a long history, and a socket host starts again after a crash.

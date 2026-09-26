@@ -1,0 +1,231 @@
+import { costSummary } from './cost-ledger.ts';
+import { OrchestrationError, fail } from './errors.ts';
+import {
+  contextRefs as validateContextRefs,
+  fields,
+  integer,
+  label,
+  string,
+} from './validation.ts';
+import type { Store } from './store.ts';
+import type {
+  ApprovalRequest,
+  EventPage,
+  HandoffListResult,
+  HandoffRequest,
+  MessageSnapshot,
+  SessionSnapshot,
+  TaskListResult,
+  TaskSnapshot,
+  UsageRecord,
+} from './types.ts';
+
+// Reads that a running engine and a read-only view answer through the same code (SPEC-0027 R03).
+
+/** The inline limit of one context reference, for admission, the prompt and `context.checkRefs`. */
+export const CONTEXT_REF_MAX_BYTES = 32768;
+
+/**
+ * Reads one context reference as admission, the prompt and `context.checkRefs` do (SPEC-0020). A
+ * read failure that is not already an engine error becomes ARTIFACT_UNREADABLE.
+ */
+export function contextRefText(store: Store, artifactRef: string): string {
+  try {
+    return store.artifactText(artifactRef, CONTEXT_REF_MAX_BYTES);
+  } catch (error) {
+    if (error instanceof OrchestrationError) throw error;
+    return fail('ARTIFACT_UNREADABLE', 'Context reference could not be read', {
+      ref: artifactRef,
+    });
+  }
+}
+
+/** A session with its active dispatch's execution state. */
+export function sessionSnapshot(store: Store, id: string): SessionSnapshot {
+  const session = store.require<SessionSnapshot>('sessions', id);
+  if (session.activeDispatchId) {
+    const d = store.require<{
+      id: string;
+      executionLease: NonNullable<SessionSnapshot['execution']>['lease'];
+      quarantined: boolean;
+      lastEvidence: string;
+      budget?: NonNullable<SessionSnapshot['execution']>['budget'];
+    }>('dispatches', session.activeDispatchId);
+    session.execution = {
+      dispatchId: d.id,
+      lease: d.executionLease,
+      quarantined: d.quarantined,
+      lastEvidence: d.lastEvidence,
+      ...(d.budget ? { budget: d.budget } : {}),
+    };
+  }
+  return session;
+}
+
+function pageCursor(value: unknown): number {
+  if (value === undefined) return 0;
+  const raw = string(value, 'afterCursor', 19);
+  const after = Number(raw);
+  if (!/^\d+$/.test(raw) || !Number.isSafeInteger(after))
+    fail('VALIDATION_ERROR', 'afterCursor must come from a previous page');
+  return after;
+}
+
+export const SHARED_READS = new Set([
+  'tasks.get',
+  'tasks.list',
+  'sessions.get',
+  'usage.get',
+  'usage.getRecord',
+  'events.read',
+  'operations.get',
+  'operations.lookup',
+  'approvals.get',
+  'messages.get',
+  'handoffs.get',
+  'handoffs.list',
+  'costs.get',
+  'context.checkRefs',
+]);
+
+/**
+ * Answers one of SHARED_READS from `store`. A running engine passes `expireHandoffs`, which runs
+ * where handoff reads have always expired due handoffs; a read-only view expires nothing.
+ */
+export function readCall(
+  store: Store,
+  method: string,
+  p: Record<string, unknown>,
+  hooks: { expireHandoffs?: () => void } = {},
+): unknown {
+  switch (method) {
+    case 'tasks.get':
+      fields(p, ['taskId']);
+      return store.require<TaskSnapshot>('tasks', string(p.taskId, 'taskId', 128));
+    case 'tasks.list': {
+      fields(p, ['parentTaskId', 'sessionId', 'label', 'limit', 'afterCursor']);
+      if ([p.parentTaskId, p.sessionId, p.label].filter((v) => v !== undefined).length > 1)
+        fail('VALIDATION_ERROR', 'Use at most one of parentTaskId, sessionId and label');
+      const after = pageCursor(p.afterCursor);
+      const page = store.listTasks(
+        p.parentTaskId !== undefined
+          ? { parentTaskId: string(p.parentTaskId, 'parentTaskId', 128) }
+          : p.sessionId !== undefined
+            ? { sessionId: string(p.sessionId, 'sessionId', 128) }
+            : p.label !== undefined
+              ? { label: label(p.label) }
+              : {},
+        after,
+        p.limit === undefined ? 50 : integer(p.limit, 'limit', 1, 100),
+      );
+      return {
+        tasks: page.tasks,
+        nextCursor: page.next === null ? null : String(page.next),
+      } satisfies TaskListResult;
+    }
+    case 'sessions.get':
+      fields(p, ['sessionId']);
+      return sessionSnapshot(store, string(p.sessionId, 'sessionId', 128));
+    case 'usage.get': {
+      fields(p, ['taskId']);
+      const id = string(p.taskId, 'taskId', 128);
+      store.require('tasks', id);
+      const records = store.all<UsageRecord>('usage').filter((r) => r.taskId === id);
+      return {
+        records,
+        completeness:
+          records.length && records.every((r) => r.inputTokens !== null && r.outputTokens !== null)
+            ? 'reported'
+            : 'unknown',
+      };
+    }
+    case 'usage.getRecord':
+      fields(p, ['usageRecordId']);
+      return store.require<UsageRecord>('usage', string(p.usageRecordId, 'usageRecordId', 512));
+    case 'events.read':
+      fields(p, ['afterCursor', 'storeId', 'taskId', 'limit']);
+      return store.events(
+        p.afterCursor === undefined ? '0' : string(p.afterCursor, 'afterCursor', 30),
+        p.storeId === undefined ? undefined : string(p.storeId, 'storeId', 128),
+        p.taskId === undefined ? undefined : string(p.taskId, 'taskId', 128),
+        p.limit === undefined ? 100 : integer(p.limit, 'limit', 1, 1000),
+      ) satisfies EventPage;
+    case 'operations.get':
+      fields(p, ['operationId']);
+      return store.operation(string(p.operationId, 'operationId', 128));
+    case 'operations.lookup': {
+      fields(p, ['method', 'scope', 'idempotencyKey']);
+      const result = store.findOperation(
+        string(p.method, 'method', 128),
+        string(p.scope, 'scope', 128),
+        string(p.idempotencyKey, 'idempotencyKey', 256),
+      );
+      if (!result) fail('NOT_FOUND', 'Idempotent operation not found');
+      store.assertDetails(result.operation);
+      return result.operation;
+    }
+    case 'approvals.get':
+      fields(p, ['approvalId']);
+      return store.require<ApprovalRequest>('approvals', string(p.approvalId, 'approvalId', 128));
+    case 'messages.get':
+      fields(p, ['messageId']);
+      return store.require<MessageSnapshot>('messages', string(p.messageId, 'messageId', 128));
+    case 'handoffs.get':
+      fields(p, ['handoffId']);
+      hooks.expireHandoffs?.();
+      return store.require<HandoffRequest>('handoffs', string(p.handoffId, 'handoffId', 128));
+    case 'handoffs.list': {
+      fields(p, ['status', 'targetSessionId', 'limit', 'afterCursor']);
+      if (
+        p.status !== undefined &&
+        !['pending', 'accepted', 'rejected', 'expired', 'invalidated'].includes(p.status as string)
+      )
+        fail('VALIDATION_ERROR', 'Unknown handoff status');
+      const after = pageCursor(p.afterCursor);
+      hooks.expireHandoffs?.();
+      const page = store.listHandoffs(
+        {
+          ...(p.status !== undefined ? { status: p.status as string } : {}),
+          ...(p.targetSessionId !== undefined
+            ? { targetSessionId: string(p.targetSessionId, 'targetSessionId', 128) }
+            : {}),
+        },
+        after,
+        p.limit === undefined ? 50 : integer(p.limit, 'limit', 1, 100),
+      );
+      return {
+        handoffs: page.handoffs,
+        nextCursor: page.next === null ? null : String(page.next),
+      } satisfies HandoffListResult;
+    }
+    case 'costs.get': {
+      fields(p, ['taskId', 'scope']);
+      const scope = p.scope ?? 'direct';
+      if (!['direct', 'tree', 'host_overhead'].includes(String(scope)))
+        fail('VALIDATION_ERROR', 'Invalid cost scope');
+      return costSummary(
+        store,
+        p.taskId === undefined ? undefined : string(p.taskId, 'taskId', 128),
+        scope as 'direct' | 'tree' | 'host_overhead',
+      );
+    }
+    case 'context.checkRefs':
+      // SPEC-0020: what admission would decide for each reference now. Reads only; returns no content.
+      fields(p, ['contextRefs']);
+      return {
+        contextRefs: validateContextRefs(p.contextRefs, 1).map(({ artifactRef }) => {
+          const record = store.get<{ sizeBytes?: unknown }>('artifacts', artifactRef);
+          const bytes = typeof record?.sizeBytes === 'number' ? { bytes: record.sizeBytes } : {};
+          try {
+            contextRefText(store, artifactRef);
+            return { artifactRef, admissible: true, ...bytes };
+          } catch (error) {
+            if (!(error instanceof OrchestrationError)) throw error;
+            return { artifactRef, admissible: false, code: error.code, ...bytes };
+          }
+        }),
+      };
+    default:
+      return fail('NOT_FOUND', `Not a shared read: ${method}`);
+  }
+}

@@ -46,6 +46,10 @@ export interface TaskSpec {
   contextPlan?: ContextPlan;
   budget?: MoneyBudget;
   contextEstimate?: { inputTokens: number; outputReserveTokens: number; toolReserveTokens: number };
+  /** The host's own filterable label, 1 to 256 UTF-8 bytes (SPEC-0027 L01). */
+  label?: string;
+  /** The host's own JSON object, at most 4096 bytes when encoded (SPEC-0027 L01). */
+  metadata?: { [key: string]: Json };
 }
 export interface MoneyBudget {
   currency: string;
@@ -71,6 +75,18 @@ export interface ContextPlan {
   fallbackModes: RoutingMode[];
   maxQueueWaitMs: number;
 }
+/** What `tasks.create` accepts as `contextPlan`; the engine completes the rest (SPEC-0027 T01). */
+export interface ContextPlanInput {
+  requestedMode: RoutingMode;
+  independent: boolean;
+  dependencyTaskIds?: string[];
+  contextRefs?: { artifactRef: string; version: 1 }[];
+  candidateSessionId?: string;
+  snapshotRef?: string;
+  fallbackModes?: RoutingMode[];
+  /** Defaults to the host's `limits.defaultMaxQueueWaitMs`. */
+  maxQueueWaitMs?: number;
+}
 export interface RoutingDecision {
   policyVersion: 1;
   mode: RoutingMode;
@@ -88,6 +104,8 @@ export interface SessionOpenSpec {
   runtime: RuntimeSpec;
   writeScope?: string;
   writePath?: string;
+  label?: string;
+  metadata?: { [key: string]: Json };
 }
 export interface RuleReference {
   id: string;
@@ -141,6 +159,138 @@ export interface HandoffListResult {
 export interface RegisteredVerificationRule extends FrozenVerificationRule {
   source: 'config' | 'runtime';
 }
+/** What `tasks.create` accepts; task snapshots hold the completed `TaskSpec` (SPEC-0027 T01). */
+export interface TaskSpecInput extends Omit<TaskSpec, 'contextPlan'> {
+  contextPlan?: ContextPlanInput;
+}
+/** The command of `sessions.control`; the engine accepts no other action (SPEC-0027 T02). */
+export interface SessionControlCommand {
+  action: 'pause' | 'resume' | 'stop';
+  mode?: 'drain' | 'interrupt';
+}
+/** Storage limits and retention; `storage.configure` takes a part of it (SPEC-0009). */
+export interface StoragePolicy {
+  quotaBytes: number;
+  minFreeBytes: number;
+  emergencyBytes: number;
+  maxRecords: number;
+  settlementReserveRecords: number;
+  maxSettlementPerTarget: number;
+  eventDays: number;
+  detailDays: number;
+  usageDays: number;
+}
+/** The result of `storage.status` (SPEC-0027 T02). */
+export interface StorageStatus {
+  storeId: string;
+  policy: StoragePolicy;
+  bytes: number;
+  availableBytes: number;
+  records: number;
+  reservedRecords: number;
+  warning: boolean;
+  backpressured: boolean;
+  reasons: string[];
+  retentionFloorCursor: string;
+}
+/** One page of `state.snapshot` (SPEC-0027 T02). */
+export interface StateSnapshotPage {
+  snapshotId: string;
+  storeId: string;
+  cursor: string;
+  retentionFloorCursor: string;
+  expiresAt: string;
+  items: { kind: 'tasks' | 'sessions' | 'approvals'; value: Json }[];
+  nextOffset: number;
+  done: boolean;
+}
+/** A registered-price cost record; `amount` is null when the price or the usage is unknown. */
+export interface CostRecord {
+  id: string;
+  usageRecordId: string | null;
+  dispatchId: string | null;
+  costOwnerTaskId: string | null;
+  rootTaskId: string | null;
+  category: 'task' | 'host_overhead';
+  currency: string | null;
+  amount: string | null;
+  amountUnits: string | null;
+  createdAt: string;
+  [field: string]: Json;
+}
+/** A budget reservation held for a dispatch until its costs settle. */
+export interface CostReservation {
+  id: string;
+  taskId: string;
+  rootTaskId: string;
+  currency: string;
+  initialUnits: string;
+  remainingUnits: string;
+  status: 'held' | 'settled';
+  remaining: string;
+}
+/**
+ * The result of `costs.get`: money totals of registered-price estimates per currency, not token
+ * counts and not a provider bill (SPEC-0027 T02).
+ */
+export interface CostSummary {
+  scope: 'direct' | 'tree' | 'host_overhead';
+  totals: Record<string, string>;
+  unknownRecords: number;
+  records: CostRecord[];
+  recordsTruncated: boolean;
+  recordCount: number;
+  reservations: CostReservation[];
+  reservationsTruncated: boolean;
+  basis: string;
+  settlementIncomplete: boolean;
+}
+export type TokenCounts = Pick<
+  UsageRecord,
+  'inputTokens' | 'cachedInputTokens' | 'cacheWriteInputTokens' | 'outputTokens'
+>;
+/** The input of `context.estimate`; the engine adds the registered price (SPEC-0027 T02). */
+export interface ContextEstimateInput {
+  provider: string;
+  model: string;
+  keepHistoryTokens: number;
+  compactHistoryTokens: number;
+  /** Null when the number of future requests is unknown. */
+  requests: number | null;
+  growthTokens: number;
+  outputTokens: number;
+  retainedPrefixTokens: number;
+  compaction: TokenCounts;
+  intervalsMs: (number | null)[];
+  ttlMs: number;
+}
+export interface ContextEstimateStrategy {
+  amount: string | null;
+  requests: number;
+}
+export interface ContextEstimateScenario {
+  keep: ContextEstimateStrategy;
+  compact: ContextEstimateStrategy;
+  automaticSelection: false;
+  reason: string;
+  keepRequests: TokenCounts[];
+  compactRequests: TokenCounts[];
+}
+/** The result of `context.estimate` (SPEC-0027 T02). */
+export type ContextEstimateResult =
+  | { status: 'unknown'; reason: 'unknown_future_request_count'; automaticSelection: false }
+  | {
+      scenarios: Record<
+        'sustained_hit' | 'ttl_rebuild' | 'partial_prefix',
+        ContextEstimateScenario
+      >;
+      range: Record<'keep' | 'compact', { min: string; max: string; currency: string } | null>;
+      assumptions: Json;
+      automaticSelection: false;
+      cacheHitsGuaranteed: false;
+    };
+export type { RolloverPhase, RolloverRecord, StoreDirectories } from './control-plane.ts';
+export type { ContextRefCheck } from './generated/wire.ts';
 /** SPEC-0014 host workflow controls, advertised by `initialize`. */
 export type WorkflowFeature =
   | 'dependencyResults'
@@ -151,7 +301,9 @@ export type WorkflowFeature =
   | 'runtimeRules'
   | 'taskList'
   /** SPEC-0020 `context.checkRefs`. */
-  | 'contextCheck';
+  | 'contextCheck'
+  /** SPEC-0027 L01 `label` and `metadata` on tasks and sessions. */
+  | 'labels';
 /** A model's request that the host hand work to a session outside its subtree (SPEC-0014 H). */
 export interface HandoffRequest {
   handoffId: string;
@@ -185,6 +337,9 @@ export interface SessionSnapshot {
   activeDispatchId: string | null;
   /** Durable control provenance; absent old-store pauses are treated as client-owned. */
   pauseOrigin?: 'client' | 'runtime';
+  /** From `sessions.open`, the task the engine opened it for, or a fork's source (SPEC-0027 L02). */
+  label?: string;
+  metadata?: { [key: string]: Json };
   taskIds?: string[];
   rootTaskId?: string;
   permissionProfile?: 'read-only' | 'workspace-write';
@@ -454,6 +609,14 @@ export interface RuntimeInput {
   nativeAction?: 'compact';
   orchestrationTools?: RuntimeTools;
   requestPermission?: (request: RuntimePermissionRequest) => Promise<boolean>;
+  /** The task chain and the host's labels; the engine always sets them (SPEC-0027 L04). */
+  parentTaskId?: string | null;
+  rootTaskId?: string;
+  label?: string | null;
+  /** A deep-frozen copy: changing it cannot change what is stored. */
+  metadata?: { readonly [key: string]: Json } | null;
+  sessionLabel?: string | null;
+  sessionMetadata?: { readonly [key: string]: Json } | null;
 }
 export interface RuntimePermissionRequest {
   requestId: string;
@@ -552,10 +715,22 @@ export interface RuntimeInspection {
   execution: 'unknown';
   detail: string;
 }
+/** The first internal failure that stopped an engine: its step, error code and time (SPEC-0025 F01). */
+export interface EngineFailure {
+  step: string;
+  code: string;
+  at: string;
+}
 export interface EngineConfig {
-  storage?: Partial<import('./storage.ts').StoragePolicy>;
+  storage?: Partial<StoragePolicy>;
   stores?: import('./control-plane.ts').StoreDirectories;
   storageFault?: (point: string) => void;
+  /**
+   * Called once, in a microtask, when an internal failure stopped the engine, with the failure
+   * that `HOST_STOPPING` reports. In-process only; socket and stdio clients read the
+   * `scheduler.failed` event (SPEC-0027 F01, F02).
+   */
+  onFatal?: (failure: EngineFailure) => void;
   workspace: string;
   stateDir: string;
   adapters: RuntimeAdapter[];

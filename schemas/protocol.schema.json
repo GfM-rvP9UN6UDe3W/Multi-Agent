@@ -127,6 +127,16 @@
           "minLength": 1,
           "maxLength": 4096,
           "description": "An existing workspace path inside writeScope; requires writeScope."
+        },
+        "label": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "description": "The host's own filterable label, 1 to 256 UTF-8 bytes (SPEC-0027 L01)."
+        },
+        "metadata": {
+          "type": "object",
+          "description": "The host's own JSON object, at most 4096 bytes when encoded and 16 levels deep (SPEC-0027 L01)."
         }
       }
     },
@@ -588,6 +598,16 @@
             "additionalProperties": false
           },
           "maxItems": 1000000
+        },
+        "label": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "description": "The host's own filterable label, 1 to 256 UTF-8 bytes (SPEC-0027 L01)."
+        },
+        "metadata": {
+          "type": "object",
+          "description": "The host's own JSON object, at most 4096 bytes when encoded and 16 levels deep (SPEC-0027 L01)."
         }
       }
     },
@@ -2074,6 +2094,16 @@
           "minLength": 1,
           "maxLength": 4096,
           "description": "An existing workspace path inside writeScope; requires writeScope."
+        },
+        "label": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "description": "The host's own filterable label, 1 to 256 UTF-8 bytes (SPEC-0027 L01)."
+        },
+        "metadata": {
+          "type": "object",
+          "description": "The host's own JSON object, at most 4096 bytes when encoded and 16 levels deep (SPEC-0027 L01)."
         }
       },
       "required": ["runtime"],
@@ -2137,6 +2167,16 @@
             },
             "workflow": {
               "$ref": "#/$defs/WorkflowCapability"
+            },
+            "readOnly": {
+              "type": "object",
+              "description": "A host that answers reads from a store opened read-only (SPEC-0027 R09).",
+              "properties": {
+                "version": {
+                  "const": 1
+                }
+              },
+              "required": ["version"]
             }
           }
         }
@@ -2664,6 +2704,12 @@
           "minLength": 1,
           "maxLength": 128
         },
+        "label": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "description": "The tasks with this label (SPEC-0027 L03)."
+        },
         "limit": {
           "type": "integer",
           "minimum": 1,
@@ -2674,9 +2720,23 @@
           "pattern": "^[0-9]{1,19}$"
         }
       },
-      "not": {
-        "required": ["parentTaskId", "sessionId"]
-      },
+      "allOf": [
+        {
+          "not": {
+            "required": ["parentTaskId", "sessionId"]
+          }
+        },
+        {
+          "not": {
+            "required": ["parentTaskId", "label"]
+          }
+        },
+        {
+          "not": {
+            "required": ["sessionId", "label"]
+          }
+        }
+      ],
       "additionalProperties": false
     },
     "TaskListResult": {
@@ -3082,6 +3142,9 @@
           "const": true
         },
         "contextCheck": {
+          "const": true
+        },
+        "labels": {
           "const": true
         }
       },

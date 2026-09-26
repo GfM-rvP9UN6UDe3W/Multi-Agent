@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 import { readFile } from 'node:fs/promises';
+import { isAbsolute } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { createEngine } from '../../engine/src/index.ts';
+import { createEngine, openReadOnlyEngine } from '../../engine/src/index.ts';
 import type { CloseOptions } from '../../engine/src/types.ts';
 import { connectOrchestrator } from '../../sdk-typescript/src/index.ts';
 import { doctor } from './doctor.ts';
@@ -20,7 +21,7 @@ function flags(args: string[], allowed: string[]): Record<string, string | true>
       fail('INVALID_ARGUMENT', `Unknown argument: ${name}`);
     const key = name.slice(2);
     if (key in result) fail('INVALID_ARGUMENT', `Duplicate argument: ${name}`);
-    if (['stdio', 'interactive', 'follow'].includes(key)) result[key] = true;
+    if (['stdio', 'interactive', 'follow', 'read-only'].includes(key)) result[key] = true;
     else {
       const value = args[++i];
       if (!value || value.startsWith('--')) fail('INVALID_ARGUMENT', `Missing value for ${name}`);
@@ -102,7 +103,7 @@ export async function main(argv = process.argv.slice(2)): Promise<void> {
   }
   if (command === '--help' || command === 'help') {
     process.stdout.write(
-      'orchvia host --config FILE [--stdio | --socket PATH]\norchvia doctor --config FILE | --socket PATH\norchvia submit --socket PATH --task FILE [--idempotency-key KEY]\norchvia status --socket PATH --task TASK_ID\norchvia run --socket PATH --task FILE [--interactive] [--follow] [--timeout-ms N] [--idempotency-key KEY]\norchvia attach --socket PATH --task TASK_ID [--interactive] [--follow] [--after-cursor N] [--timeout-ms N]\norchvia control --socket PATH --target FILE --action pause|resume|stop|compact|rotate [--mode drain|interrupt] [--idempotency-key KEY]\norchvia approve --socket PATH --approval ID --revision N --decision approve|deny [--idempotency-key KEY]\norchvia --version\n',
+      'orchvia host --config FILE [--stdio | --socket PATH]\norchvia host --read-only --state-dir DIR --stdio\norchvia doctor --config FILE | --socket PATH\norchvia submit --socket PATH --task FILE [--idempotency-key KEY]\norchvia status --socket PATH --task TASK_ID\norchvia run --socket PATH --task FILE [--interactive] [--follow] [--timeout-ms N] [--idempotency-key KEY]\norchvia attach --socket PATH --task TASK_ID [--interactive] [--follow] [--after-cursor N] [--timeout-ms N]\norchvia control --socket PATH --target FILE --action pause|resume|stop|compact|rotate [--mode drain|interrupt] [--idempotency-key KEY]\norchvia approve --socket PATH --approval ID --revision N --decision approve|deny [--idempotency-key KEY]\norchvia --version\n',
     );
     return;
   }
@@ -113,18 +114,48 @@ export async function main(argv = process.argv.slice(2)): Promise<void> {
     return;
   }
   if (command === 'host') {
-    const options = flags(args, ['config', 'stdio', 'socket']);
+    const options = flags(args, ['config', 'stdio', 'socket', 'read-only', 'state-dir']);
     if (options.stdio && options.socket)
       fail('INVALID_ARGUMENT', '--stdio and --socket are mutually exclusive');
     // Runtime diagnostics must never corrupt the stdio wire stream.
     console.log = console.info = console.debug = (...values: unknown[]) => console.error(...values);
+    if (options['read-only'] || options['state-dir'] !== undefined) {
+      // SPEC-0027 R09: read a store over stdio without a configuration or an engine.
+      if (!options['read-only']) fail('INVALID_ARGUMENT', '--state-dir needs --read-only');
+      if (options.config !== undefined || options.socket !== undefined || !options.stdio)
+        fail('INVALID_ARGUMENT', '--read-only takes --state-dir and --stdio only');
+      const stateDir = required(options, 'state-dir');
+      if (!isAbsolute(stateDir)) fail('INVALID_ARGUMENT', '--state-dir must be an absolute path');
+      const reader = await openReadOnlyEngine({ stateDir });
+      const signals = hostSignals();
+      try {
+        const connection = startStdioHost(reader);
+        signals.attach(connection.shutdown, {});
+        await connection.closed;
+      } finally {
+        signals.remove();
+        await reader.close();
+      }
+      return;
+    }
     const config = await loadConfig(required(options, 'config'));
     const socketPath =
       typeof options.socket === 'string' ? options.socket : config.transport?.socketPath;
     const stdio = options.stdio === true || (!options.socket && config.transport?.mode === 'stdio');
     if (!stdio && !socketPath)
       fail('INVALID_ARGUMENT', 'Use --stdio, --socket PATH, or configure transport.socketPath');
-    const engine = await createEngine(await engineConfig(config));
+    const engine = await createEngine({
+      ...(await engineConfig(config)),
+      // SPEC-0027 F03: one line when an internal failure stops the engine.
+      onFatal: (failure) =>
+        process.stderr.write(
+          JSON.stringify({
+            code: 'SCHEDULER_FAILED',
+            message: `The engine stopped after ${failure.step} failed`,
+            failure,
+          }) + '\n',
+        ),
+    });
     const shutdown = {
       mode: config.shutdown?.mode ?? 'interrupt',
       timeoutMs: config.shutdown?.timeoutMs ?? (stdio ? OWNER_EOF_TIMEOUT_MS : 1000),
@@ -205,7 +236,10 @@ export async function main(argv = process.argv.slice(2)): Promise<void> {
             ? await client.sessions.rotate(target, mutation)
             : await client.sessions.control(
                 target,
-                { action, ...(mode ? { mode: mode as 'drain' | 'interrupt' } : {}) },
+                {
+                  action: action as 'pause' | 'resume' | 'stop',
+                  ...(mode ? { mode: mode as 'drain' | 'interrupt' } : {}),
+                },
                 mutation,
               );
       print(operation.initial);

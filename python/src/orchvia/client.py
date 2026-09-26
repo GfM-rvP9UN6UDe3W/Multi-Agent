@@ -56,6 +56,17 @@ class OperationHandle(Snapshot):
         return await self._client._wait(lambda: self._client.operations.get(self.id), _OPERATION_TERMINAL, timeout)
 
 
+# Engine errors that can follow a commit, or whose commit is unknown: a retry identity that meets
+# one is kept, so that a retry goes to the original request's store (SPEC-0027 K04).
+_KEEP_IDENTITY = frozenset({
+    "RESOURCE_CLEANUP_INCOMPLETE", "ROLLOVER_IN_PROGRESS", "ROLLOVER_BLOCKED", "STORE_SWITCH_IN_PROGRESS",
+    "SHUTDOWN_INCOMPLETE", "OUTCOME_UNKNOWN", "OPERATION_HISTORY_EXPIRED", "IDEMPOTENCY_CONFLICT",
+    "INTERNAL_ERROR", "STORAGE_DEGRADED",
+})
+# Retry identities kept per client; the least recently used goes first (SPEC-0027 K03).
+_MAX_IDENTITIES = 10_000
+
+
 class _Tasks:
     def __init__(self, client: "Orchestrator"):
         self._client = client
@@ -64,17 +75,22 @@ class _Tasks:
         wire = to_wire(spec)
         if "writePath" in wire:
             await self._client._require_workflow("write_path")
+        if "label" in wire or "metadata" in wire:
+            await self._client._require_workflow("labels")
         return TaskHandle(self._client, await self._client._mutate("tasks.create", {"spec": wire}, idempotency_key))
 
     async def get(self, task_id: str) -> Snapshot:
         return await self._client._call("tasks.get", {"taskId": task_id})
 
     async def list(self, *, parent_task_id: str | None = None, session_id: str | None = None,
-                   limit: int | None = None, after_cursor: str | None = None) -> Snapshot:
-        """A creation-ordered page; set at most one of parent_task_id and session_id."""
+                   label: str | None = None, limit: int | None = None,
+                   after_cursor: str | None = None) -> Snapshot:
+        """A creation-ordered page; set at most one of parent_task_id, session_id and label."""
         await self._client._require_workflow("task_list")
-        params = {"parentTaskId": parent_task_id, "sessionId": session_id, "limit": limit,
-                  "afterCursor": after_cursor}
+        if label is not None:
+            await self._client._require_workflow("labels")
+        params = {"parentTaskId": parent_task_id, "sessionId": session_id, "label": label,
+                  "limit": limit, "afterCursor": after_cursor}
         return await self._client._call("tasks.list", {k: v for k, v in params.items() if v is not None})
 
     async def resume(self, task_id: str, *, idempotency_key: str | None = None) -> OperationHandle:
@@ -123,6 +139,8 @@ class _Sessions:
         wire = to_wire(spec)
         if "writePath" in wire:
             await self._client._require_workflow("write_path")
+        if "label" in wire or "metadata" in wire:
+            await self._client._require_workflow("labels")
         return await self._client._mutate("sessions.open", {"spec": wire}, idempotency_key)
 
     async def fork(self, target: Mapping[str, Any], snapshot_ref: str | None = None, *, model: str | None = None,
@@ -557,10 +575,18 @@ class Orchestrator:
             scope = "host"
         await self.start()
         identity_key = (method, scope, key)
-        identity = dict(retry_identity) if retry_identity is not None else self._identities.get(identity_key) or {
+        existing = self._identities.get(identity_key)
+        # This call claims the key only when nothing held it before (SPEC-0027 K01, K02).
+        claimed = retry_identity is None and existing is None
+        identity = dict(retry_identity) if retry_identity is not None else existing or {
             "storeId": self.info.store_id, "method": method, "scope": scope,
             "idempotencyKey": key, "digestVersion": 1, "requestDigest": request_digest(method, params)}
-        self._identities[identity_key] = dict(identity)
+        stored = dict(identity)
+        # Re-inserting marks the identity as the most recently used one (SPEC-0027 K03).
+        self._identities.pop(identity_key, None)
+        self._identities[identity_key] = stored
+        if len(self._identities) > _MAX_IDENTITIES:
+            self._identities.pop(next(iter(self._identities)))
         key = identity["idempotencyKey"]
         try:
             if (identity["method"] != method or identity["scope"] != scope or identity["digestVersion"] != 1
@@ -573,6 +599,12 @@ class Orchestrator:
             # Keep the original immutable identity on every receipt.
             return Snapshot({"method": method, "scope": scope, **result, "idempotency_key": key, "retry_identity": snapshot(identity)})
         except OrchestrationError as error:
+            # An engine error carries its code in its data too; the SDK's and the transport's own
+            # errors do not. The engine committed nothing for a rejection outside _KEEP_IDENTITY, so
+            # the key this call claimed is free again for a corrected request (SPEC-0027 K01).
+            if (claimed and error.data.get("code") == error.code and error.code not in _KEEP_IDENTITY
+                    and self._identities.get(identity_key) is stored):
+                del self._identities[identity_key]
             error.retry_identity = dict(identity)
             if isinstance(error, OrchestrationError):
                 error.data["retryIdentity"] = dict(identity)
@@ -596,6 +628,16 @@ class Orchestrator:
             raise OrchestrationError("PROTOCOL_MISMATCH", "Refreshed host lacks namespace support")
         self.info = info
         return info
+
+    def forget_idempotency_key(self, idempotency_key: str) -> int:
+        """Forget the retry identities of a key for every method and scope; return how many there were.
+
+        The engine still refuses another request under a key it committed (SPEC-0027 K03)."""
+        forgotten = [key for key, identity in self._identities.items()
+                     if identity.get("idempotencyKey") == idempotency_key]
+        for key in forgotten:
+            del self._identities[key]
+        return len(forgotten)
 
     async def retry(self, identity: Mapping[str, Any], params: Mapping[str, Any]) -> Snapshot:
         """Retry the exact original wire payload without rebinding its store."""

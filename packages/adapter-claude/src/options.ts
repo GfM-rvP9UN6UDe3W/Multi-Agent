@@ -92,7 +92,16 @@ export interface ClaudeAdapterConfig<Extra extends object = object> {
   extendOptions?: (
     context: ClaudeOptionsContext<Extra>,
   ) => ClaudeHostOptions<Extra> | Promise<ClaudeHostOptions<Extra>>;
+  /**
+   * Proves that a dispatch's execution stopped. Required with `options`, `extendOptions` or the
+   * `workspace-write` profile, unless `executionStop` is `'owner-reconcile'` (SPEC-0027 A01).
+   */
   observeExecutionStop?: RuntimeStopObserver;
+  /**
+   * `'owner-reconcile'`: without an observer, leases are released only by the owner's
+   * reconciliation, as before SPEC-0027. Cannot be combined with `observeExecutionStop` (A02).
+   */
+  executionStop?: 'owner-reconcile';
   requestTimeoutMs?: number;
   turnTimeoutMs?: number;
   cleanupTimeoutMs?: number;

@@ -20,7 +20,7 @@ import type {
   RuntimeStopObserver,
   RuntimeUsageEvent,
 } from '../../engine/src/types.ts';
-import { observeRuntimeStop } from '../../engine/src/stop-observation.ts';
+import { observeRuntimeStop, requireStopProof } from '../../engine/src/stop-observation.ts';
 import { adapterProviderName } from '../../engine/src/runtime.ts';
 import { workspacePath } from '../../engine/src/verification.ts';
 import { createToolBridge } from '../../engine/src/tool-bridge.ts';
@@ -258,7 +258,10 @@ export interface CodexAdapterConfig {
   permissionProfile?: RuntimeInput['permissionProfile'];
   networkAccess?: boolean;
   webSearch?: 'disabled' | 'cached' | 'live';
+  /** Required with `workspace-write`, unless `executionStop` is `'owner-reconcile'` (SPEC-0027 A03). */
   observeExecutionStop?: RuntimeStopObserver;
+  /** Release leases by owner reconciliation only; excludes `observeExecutionStop` (SPEC-0027 A02). */
+  executionStop?: 'owner-reconcile';
   command?: string;
   args?: string[];
   env?: NodeJS.ProcessEnv;
@@ -363,6 +366,7 @@ export function createCodexAdapter(config: CodexAdapterConfig = {}): RuntimeAdap
       code: 'INVALID_ADAPTER_CONFIG',
     });
   const coversExecution = profile === 'read-only';
+  requireStopProof('Codex adapter', coversExecution, config);
   const acceptanceCapMs = timeout(config.requestTimeoutMs, 0) || null;
   const turnCapMs = timeout(config.turnTimeoutMs, 0) || null;
   const owned = new Map<string, Set<AppServerConnection>>();

@@ -36,6 +36,9 @@ class TaskSpec:
     context_plan: dict[str, Any] | None = None
     budget: dict[str, Any] | None = None
     context_estimate: dict[str, Any] | None = None
+    # The host's own filterable label and JSON object (SPEC-0027 L01); metadata keys are sent as written.
+    label: str | None = None
+    metadata: dict[str, Any] | None = None
 
 
 @dataclass(frozen=True)
@@ -199,7 +202,9 @@ def to_wire(value: Any) -> Any:
     elif is_dataclass(value) and not isinstance(value, type):
         value = asdict(value)
     if isinstance(value, Mapping):
-        return {_PYTHON_TO_WIRE.get(key, key): to_wire(item) for key, item in value.items()}
+        # Host metadata is opaque JSON: its keys are never renamed (SPEC-0027 L01).
+        return {_PYTHON_TO_WIRE.get(key, key): item if key == "metadata" else to_wire(item)
+                for key, item in value.items()}
     if isinstance(value, (list, tuple)):
         return [to_wire(item) for item in value]
     return value

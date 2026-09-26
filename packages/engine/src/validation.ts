@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { validateBudget } from './accounting.ts';
 import { fail } from './errors.ts';
-import type { TaskSpec, MessageSpec, ContextPlan, RoutingMode } from './types.ts';
+import type { TaskSpec, MessageSpec, ContextPlan, RoutingMode, Json } from './types.ts';
 
 export function object(value: unknown, name = 'params'): Record<string, unknown> {
   if (!value || typeof value !== 'object' || Array.isArray(value))
@@ -31,6 +31,32 @@ export function strings(value: unknown, name: string, min = 0, max = 100): strin
   if (!Array.isArray(value) || value.length < min || value.length > max)
     fail('VALIDATION_ERROR', `${name} must contain ${min}..${max} strings`);
   return value.map((v: unknown) => string(v, name));
+}
+/** A host label: a string of 1 to 256 UTF-8 bytes (SPEC-0027 L01). */
+export function label(value: unknown, name = 'label'): string {
+  if (typeof value !== 'string' || !value || Buffer.byteLength(value) > 256)
+    fail('VALIDATION_ERROR', `${name} must be a string of 1 to 256 UTF-8 bytes`);
+  return value;
+}
+/** Host metadata: a JSON object of at most 4096 bytes when encoded and 16 levels (SPEC-0027 L01). */
+export function metadata(value: unknown, name = 'metadata'): { [key: string]: Json } {
+  let encoded: string | undefined;
+  try {
+    encoded = JSON.stringify(value);
+  } catch {
+    // Not JSON: refused below.
+  }
+  const copy = encoded === undefined ? undefined : (JSON.parse(encoded) as unknown);
+  if (!copy || typeof copy !== 'object' || Array.isArray(copy))
+    fail('VALIDATION_ERROR', `${name} must be a JSON object`);
+  if (Buffer.byteLength(encoded!) > 4096)
+    fail('VALIDATION_ERROR', `${name} must be at most 4096 bytes when encoded as JSON`);
+  const depth = (item: unknown): number =>
+    item && typeof item === 'object'
+      ? 1 + Math.max(0, ...Object.values(item).map((child) => depth(child)))
+      : 0;
+  if (depth(copy) > 16) fail('VALIDATION_ERROR', `${name} must be at most 16 levels deep`);
+  return copy as { [key: string]: Json };
 }
 /** The longest queue wait a task or the host default may request (SPEC-0015 Q03). */
 export const MAX_QUEUE_WAIT_MS = 604800000;
@@ -106,6 +132,8 @@ export function taskSpec(value: unknown, defaultQueueWaitMs?: number): TaskSpec 
     'contextPlan',
     'budget',
     'contextEstimate',
+    'label',
+    'metadata',
   ]);
   const runtime = object(s.runtime, 'runtime');
   fields(runtime, ['provider', 'model']);
@@ -170,6 +198,8 @@ export function taskSpec(value: unknown, defaultQueueWaitMs?: number): TaskSpec 
         })()
       : {}),
     ...(plan ? { contextPlan: plan } : {}),
+    ...(s.label !== undefined ? { label: label(s.label) } : {}),
+    ...(s.metadata !== undefined ? { metadata: metadata(s.metadata) } : {}),
     ...(s.budget !== undefined ? { budget: validateBudget(s.budget) } : {}),
     ...(s.contextEstimate !== undefined
       ? {

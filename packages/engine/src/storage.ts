@@ -19,20 +19,15 @@ import { Store, type Table } from './store.ts';
 import { syncDirectory, isCodexHelperLink } from './durable-files.ts';
 import { fail } from './errors.ts';
 import { fields, integer, object, string } from './validation.ts';
-import type { OperationSnapshot } from './types.ts';
+import type {
+  OperationSnapshot,
+  StateSnapshotPage,
+  StoragePolicy,
+  StorageStatus,
+} from './types.ts';
+export type { StoragePolicy } from './types.ts';
 
 const DAY = 86400000;
-export interface StoragePolicy {
-  quotaBytes: number;
-  minFreeBytes: number;
-  emergencyBytes: number;
-  maxRecords: number;
-  settlementReserveRecords: number;
-  maxSettlementPerTarget: number;
-  eventDays: number;
-  detailDays: number;
-  usageDays: number;
-}
 const defaults: StoragePolicy = {
   quotaBytes: 10 * 1024 ** 3,
   minFreeBytes: 1024 ** 3,
@@ -127,7 +122,7 @@ export class StorageGovernance {
     }
     syncDirectory(this.store.stateDir);
   }
-  status() {
+  status(): StorageStatus {
     const directoryBytes = (path: string): number =>
       readdirSync(path).reduce((sum, name) => {
         const child = join(path, name),
@@ -178,7 +173,7 @@ export class StorageGovernance {
       status.backpressured ||
       status.records + status.reservedRecords + extraRecords > this.policy.maxRecords
     )
-      fail('STORAGE_BACKPRESSURE', 'New work cannot consume settlement capacity', status);
+      fail('STORAGE_BACKPRESSURE', 'New work cannot consume settlement capacity', { ...status });
     if (
       this.policy.emergencyBytes > 0 &&
       !existsSync(join(this.store.stateDir, 'emergency.reserve'))
@@ -255,7 +250,9 @@ export class StorageGovernance {
       .get(id, this.store.now() - this.policy.detailDays * DAY);
     return !!row;
   }
-  snapshot(params: { snapshotId?: string; offset?: number; limit?: number } = {}) {
+  snapshot(
+    params: { snapshotId?: string; offset?: number; limit?: number } = {},
+  ): StateSnapshotPage {
     const limit = integer(params.limit ?? 64, 'limit', 1, 128),
       offset = integer(params.offset ?? 0, 'offset');
     if (!params.snapshotId && offset !== 0)
@@ -315,7 +312,7 @@ export class StorageGovernance {
       )
       .all(id, offset, limit + 1) as { ordinal: number; data: string }[];
     let bytes = 0;
-    const items: { kind: string; value: any }[] = [];
+    const items: StateSnapshotPage['items'] = [];
     for (const row of rows.slice(0, limit)) {
       const size = Buffer.byteLength(row.data);
       if (bytes + size > 768 * 1024) break;

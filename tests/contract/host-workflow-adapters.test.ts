@@ -157,6 +157,8 @@ async function guardOf(
   const events: RuntimeEvent[] = [];
   const adapter = createClaudeAdapter({
     permissionProfile: profile,
+    // The read fence is what these cases check; leases are the owner's (SPEC-0027 A02).
+    executionStop: 'owner-reconcile',
     ...config,
     ...(config.readRoots === 'extra' ? { readRoots: [extra] } : {}),
     query: withClaudeProcess((request) => {

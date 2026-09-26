@@ -70,20 +70,90 @@ export interface StoreOptions {
   fence?: () => void;
   allowStandby?: boolean;
 }
+
+/**
+ * Opens `stateDir/store.sqlite` for reading only: no lock, no directory, table, index, metadata or
+ * migration. SQLite may create or update the WAL index `store.sqlite-shm`, and create an empty
+ * `store.sqlite-wal`, to read a store in WAL mode; no other file changes (SPEC-0027 R01, R02, R07).
+ */
+function openForReading(stateDir: string) {
+  if (!isAbsolute(stateDir)) fail('VALIDATION_ERROR', 'stateDir must be absolute');
+  let directory: string;
+  try {
+    directory = realpathSync(stateDir);
+  } catch {
+    return fail('NOT_FOUND', 'The state directory does not exist', { stateDir });
+  }
+  if (!lstatSync(directory).isDirectory())
+    fail('NOT_FOUND', 'The state directory does not exist', { stateDir });
+  const path = join(directory, 'store.sqlite');
+  let file: ReturnType<typeof lstatSync>;
+  try {
+    file = lstatSync(path);
+  } catch {
+    return fail('NOT_FOUND', 'The state directory holds no store', { stateDir });
+  }
+  if (!file.isFile() || realpathSync(path) !== path)
+    fail('UNTRUSTED_PATH', 'Store database must be a regular file');
+  const db = new DatabaseSync(path, { readOnly: true });
+  try {
+    db.exec('PRAGMA query_only=1');
+    if (!db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='metadata'").get())
+      fail('NOT_FOUND', 'The state directory holds no store', { stateDir });
+    const meta = (key: string) =>
+      (
+        db.prepare('SELECT value FROM metadata WHERE key=?').get(key) as
+          | { value: string }
+          | undefined
+      )?.value;
+    const version = meta('schemaVersion');
+    if (version !== '3')
+      fail(
+        'SCHEMA_MISMATCH',
+        version && /^[12]$/.test(version)
+          ? `Store schema ${version} is older than 3; opening it once with a full engine migrates it`
+          : `Unsupported store schema ${version ?? '(none)'}`,
+      );
+    const storeId = meta('storeId');
+    const workspace = meta('workspace');
+    if (!storeId || !workspace) fail('SCHEMA_MISMATCH', 'Store metadata is incomplete');
+    return { db, storeId, workspace, stateDir: directory };
+  } catch (error) {
+    db.close();
+    throw error;
+  }
+}
 export class Store {
   readonly db: DatabaseSync;
-  readonly lock: DatabaseSync;
+  /** Held for the whole life of a writable store; a read-only store takes no lock (SPEC-0027 R01). */
+  readonly lock: DatabaseSync | undefined;
   readonly storeId: string;
   readonly workspace: string;
   readonly stateDir: string;
+  readonly readOnly: boolean;
   private closed = false;
   readonly now: () => number;
   readonly options: StoreOptions;
   degraded = false;
 
-  constructor(workspace: string, stateDir: string, options: StoreOptions = {}) {
+  /** A store for reads only, such as a read-only view of an engine that is not running. */
+  static openReadOnly(stateDir: string): Store {
+    return new Store('', stateDir, {}, true);
+  }
+
+  constructor(workspace: string, stateDir: string, options: StoreOptions = {}, readOnly = false) {
     this.options = options;
     this.now = options.now ?? Date.now;
+    this.readOnly = readOnly;
+    if (readOnly) {
+      const opened = openForReading(stateDir);
+      this.db = opened.db;
+      this.lock = undefined;
+      this.storeId = opened.storeId;
+      this.workspace = opened.workspace;
+      this.stateDir = opened.stateDir;
+      return;
+    }
     if (!isAbsolute(workspace) || !isAbsolute(stateDir))
       fail('VALIDATION_ERROR', 'workspace and stateDir must be absolute');
     this.workspace = realpathSync(workspace);
@@ -219,6 +289,9 @@ export class Store {
           "CREATE INDEX IF NOT EXISTS tasks_session ON tasks(json_extract(data, '$.sessionId'))",
         );
         this.db.exec(
+          "CREATE INDEX IF NOT EXISTS tasks_label ON tasks(json_extract(data,'$.spec.label'))",
+        );
+        this.db.exec(
           "CREATE INDEX IF NOT EXISTS dispatches_task ON dispatches(json_extract(data, '$.taskId'))",
         );
         this.db.exec(
@@ -306,6 +379,7 @@ export class Store {
   }
   assertWritable(): void {
     if (this.closed) fail('CLIENT_CLOSED', 'Store is closed');
+    if (this.readOnly) fail('READ_ONLY', 'This store was opened for reading only');
     this.options.fence?.();
     if (this.metadata('role') === 'retired' || this.metadata('role') === 'archive')
       fail('STORE_RETIRED', 'Store is read-only');
@@ -508,7 +582,7 @@ export class Store {
   }
   /** One creation-ordered page; `next` is the last returned rowid when more rows follow. */
   listTasks(
-    filter: { parentTaskId?: string; sessionId?: string },
+    filter: { parentTaskId?: string; sessionId?: string; label?: string },
     after: number,
     limit: number,
   ): { tasks: TaskSnapshot[]; next: number | null } {
@@ -517,7 +591,10 @@ export class Store {
         ? ["json_extract(data,'$.spec.parentTaskId')=? AND ", [filter.parentTaskId]]
         : filter.sessionId !== undefined
           ? ["json_extract(data,'$.sessionId')=? AND ", [filter.sessionId]]
-          : ['', []];
+          : filter.label !== undefined
+            ? // The expression of tasks_label (SPEC-0027 L03).
+              ["json_extract(data,'$.spec.label')=? AND ", [filter.label]]
+            : ['', []];
     const rows = this.db
       .prepare(
         `SELECT rowid AS ordinal,data FROM tasks WHERE ${where}rowid>? ORDER BY rowid LIMIT ?`,
@@ -686,18 +763,29 @@ export class Store {
     taskId: string | undefined,
     limit: number,
   ): EventPage {
+    // A caller's mistake is a validation error; CURSOR_EXPIRED means that the reader must
+    // resynchronize, and says why (SPEC-0027 C01, C02).
+    if (!/^\d+$/.test(after))
+      fail('VALIDATION_ERROR', 'afterCursor must be a decimal cursor from events.read');
+    if (after !== '0' && storeId === undefined)
+      fail('VALIDATION_ERROR', 'A cursor other than 0 needs the storeId of the page it came from');
     const last = this.db.prepare('SELECT COALESCE(MAX(cursor),0) AS cursor FROM events').get() as {
       cursor: number;
     };
-    if (
-      (storeId !== undefined && storeId !== this.storeId) ||
-      (after !== '0' && storeId === undefined) ||
-      !/^\d+$/.test(after) ||
-      BigInt(after) < BigInt(this.metadata('retentionFloorCursor') ?? '0') ||
-      BigInt(after) >
-        BigInt(Math.max(last.cursor, Number(this.metadata('retentionFloorCursor') ?? 0)))
-    )
-      fail('CURSOR_EXPIRED', 'Cursor must belong to this store and retained log');
+    const floor = this.metadata('retentionFloorCursor') ?? '0';
+    const expired = (reason: string, message: string) =>
+      fail('CURSOR_EXPIRED', message, {
+        reason,
+        retentionFloorCursor: floor,
+        lastCursor: String(last.cursor),
+        currentStoreId: this.storeId,
+      });
+    if (storeId !== undefined && storeId !== this.storeId)
+      expired('store_changed', 'Cursor belongs to another store; resynchronize from this one');
+    if (BigInt(after) < BigInt(floor))
+      expired('below_retention_floor', 'Events after this cursor were collected; resynchronize');
+    if (BigInt(after) > BigInt(Math.max(last.cursor, Number(floor))))
+      expired('ahead_of_store', 'This store has fewer events than the cursor; resynchronize');
     // A task's events come from the (taskId, cursor) index, so other tasks' events cost nothing
     // (SPEC-0024 E01).
     const rows = (
@@ -793,6 +881,6 @@ export class Store {
     if (this.closed) return;
     this.closed = true;
     this.db.close();
-    this.lock.close();
+    this.lock?.close();
   }
 }

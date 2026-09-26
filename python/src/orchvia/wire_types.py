@@ -1,4 +1,4 @@
-"""Generated from schemas/protocol.schema.json; SHA-256 e0a94dcbbad31c521575780b3af75d3e586a9b9ec184f48160554d715a44e082. Do not edit.
+"""Generated from schemas/protocol.schema.json; SHA-256 e4f3b665b6370efbf49e7575a5f65c349096b7ee50a9e231f1baaee3c04ff058. Do not edit.
 Wire dictionaries use camelCase. Use the SDK dataclasses for snake_case requests.
 """
 from __future__ import annotations
@@ -21,6 +21,9 @@ class TaskSpecAcceptanceChoice2(TypedDict):
     ruleRefs: list[TaskSpecAcceptanceChoice2RuleRefsItem]
     maxRepairs: NotRequired[int]
 
+class TaskSpecMetadata(TypedDict):
+    pass
+
 class TaskSpec(TypedDict):
     goal: str
     runtime: RuntimeSpec
@@ -32,6 +35,8 @@ class TaskSpec(TypedDict):
     budget: NotRequired[MoneyBudget]
     contextEstimate: NotRequired[ContextEstimate]
     writePath: NotRequired[str]
+    label: NotRequired[str]
+    metadata: NotRequired[TaskSpecMetadata]
 
 class TaskSnapshotRevisionRequest(TypedDict):
     approvalId: str
@@ -115,6 +120,9 @@ class SessionSnapshotGenerationsItem(TypedDict):
     nativeCheckpoint: NotRequired[str]
     artifactRef: str
 
+class SessionSnapshotMetadata(TypedDict):
+    pass
+
 class SessionSnapshot(TypedDict):
     id: str
     taskId: str | None
@@ -135,6 +143,8 @@ class SessionSnapshot(TypedDict):
     nativeCheckpoint: NotRequired[str]
     forkSource: NotRequired[SessionSnapshotForkSource]
     generations: NotRequired[list[SessionSnapshotGenerationsItem]]
+    label: NotRequired[str]
+    metadata: NotRequired[SessionSnapshotMetadata]
 
 class EngineLimits(TypedDict):
     maxActiveSessions: NotRequired[int]
@@ -443,10 +453,15 @@ class FrozenVerificationRule(TypedDict):
     baselinePaths: NotRequired[list[str]]
     digest: str
 
+class SessionOpenSpecMetadata(TypedDict):
+    pass
+
 class SessionOpenSpec(TypedDict):
     runtime: RuntimeSpec
     writeScope: NotRequired[str]
     writePath: NotRequired[str]
+    label: NotRequired[str]
+    metadata: NotRequired[SessionOpenSpecMetadata]
 
 class InitializeParams(TypedDict):
     protocolVersion: Literal["2.0"]
@@ -457,9 +472,13 @@ class InitializeResultCapabilitiesStoreNamespaces(TypedDict):
     expectedStoreId: NotRequired[Literal[True]]
     digestVersion: NotRequired[Literal[1]]
 
+class InitializeResultCapabilitiesReadOnly(TypedDict):
+    version: Literal[1]
+
 class InitializeResultCapabilities(TypedDict):
     storeNamespaces: InitializeResultCapabilitiesStoreNamespaces
     workflow: NotRequired[WorkflowCapability]
+    readOnly: NotRequired[InitializeResultCapabilitiesReadOnly]
 
 class InitializeResult(TypedDict):
     protocolVersion: Literal["2.0"]
@@ -596,6 +615,7 @@ class ApprovalDecisionParams(TypedDict):
 class TaskListParams(TypedDict):
     parentTaskId: NotRequired[str]
     sessionId: NotRequired[str]
+    label: NotRequired[str]
     limit: NotRequired[int]
     afterCursor: NotRequired[str]
 
@@ -683,6 +703,7 @@ class WorkflowCapability(TypedDict):
     runtimeRules: NotRequired[Literal[True]]
     taskList: NotRequired[Literal[True]]
     contextCheck: NotRequired[Literal[True]]
+    labels: NotRequired[Literal[True]]
 
 TaskStatus: TypeAlias = Literal["queued", "running", "waiting_approval", "paused", "blocked", "completed", "failed", "cancelled", "waiting_dependency", "verifying"]
 SessionStatus: TypeAlias = Literal["idle", "running", "pausing", "paused", "closed", "outcome_unknown"]

@@ -1,4 +1,4 @@
-// Generated from schemas/protocol.schema.json; SHA-256 e0a94dcbbad31c521575780b3af75d3e586a9b9ec184f48160554d715a44e082. Do not edit.
+// Generated from schemas/protocol.schema.json; SHA-256 e4f3b665b6370efbf49e7575a5f65c349096b7ee50a9e231f1baaee3c04ff058. Do not edit.
 // Structural types; validateWire enforces numeric and conditional constraints.
 export type RuntimeSpec = { provider: string; model: string };
 export type TaskSpec = {
@@ -14,6 +14,10 @@ export type TaskSpec = {
   budget?: MoneyBudget;
   contextEstimate?: ContextEstimate;
   writePath?: string;
+  label?: string;
+  metadata?: {
+    [key: string]: unknown;
+  };
 };
 export type TaskStatus =
   | 'queued'
@@ -133,6 +137,10 @@ export type SessionSnapshot = {
     nativeCheckpoint?: string;
     artifactRef: string;
   }>;
+  label?: string;
+  metadata?: {
+    [key: string]: unknown;
+  };
   [key: string]: unknown;
 };
 export type OperationStatus =
@@ -451,7 +459,15 @@ export type FrozenVerificationRule = {
   baselinePaths?: Array<string>;
   digest: string;
 };
-export type SessionOpenSpec = { runtime: RuntimeSpec; writeScope?: string; writePath?: string };
+export type SessionOpenSpec = {
+  runtime: RuntimeSpec;
+  writeScope?: string;
+  writePath?: string;
+  label?: string;
+  metadata?: {
+    [key: string]: unknown;
+  };
+};
 export type InitializeParams = { protocolVersion: '2.0'; sdkVersion: string };
 export type InitializeResult = {
   protocolVersion: '2.0';
@@ -467,6 +483,7 @@ export type InitializeResult = {
       [key: string]: unknown;
     };
     workflow?: WorkflowCapability;
+    readOnly?: { version: 1; [key: string]: unknown };
     [key: string]: unknown;
   };
   [key: string]: unknown;
@@ -583,12 +600,15 @@ export type ApprovalDecisionParams = {
   idempotencyKey: string;
   requestDigest?: string;
 };
-export type TaskListParams = {
-  parentTaskId?: string;
-  sessionId?: string;
-  limit?: number;
-  afterCursor?: string;
-};
+export type TaskListParams = unknown &
+  unknown &
+  unknown & {
+    parentTaskId?: string;
+    sessionId?: string;
+    label?: string;
+    limit?: number;
+    afterCursor?: string;
+  };
 export type TaskListResult = { tasks: Array<TaskSnapshot>; nextCursor: string | null };
 export type HandoffRequest = {
   handoffId: string;
@@ -657,5 +677,6 @@ export type WorkflowCapability = {
   runtimeRules?: true;
   taskList?: true;
   contextCheck?: true;
+  labels?: true;
   [key: string]: unknown;
 };

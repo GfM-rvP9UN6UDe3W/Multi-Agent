@@ -7,19 +7,16 @@ import {
   validatePricing,
 } from './accounting.ts';
 import { fail } from './errors.ts';
-import type { EngineConfig, TaskSnapshot, Pricing, UsageRecord, Json } from './types.ts';
-interface Cost extends Record<string, Json> {
-  id: string;
-  usageRecordId: string | null;
-  dispatchId: string | null;
-  costOwnerTaskId: string | null;
-  rootTaskId: string | null;
-  category: 'task' | 'host_overhead';
-  currency: string | null;
-  amount: string | null;
-  amountUnits: string | null;
-  createdAt: string;
-}
+import type {
+  CostRecord,
+  CostSummary,
+  EngineConfig,
+  TaskSnapshot,
+  Pricing,
+  UsageRecord,
+  Json,
+} from './types.ts';
+type Cost = CostRecord;
 interface Reservation {
   id: string;
   taskId: string;
@@ -199,57 +196,67 @@ export class CostLedger {
           ).toString();
     this.store.put('budget_reservations', dispatchId, reserve);
   }
-  summary(taskId: string | undefined, scope: 'direct' | 'tree' | 'host_overhead'): Json {
-    if (taskId) this.store.require('tasks', taskId);
-    const descendants = new Set<string>(taskId ? [taskId] : []);
-    if (taskId && scope === 'tree') {
-      const tasks = this.store.all<TaskSnapshot>('tasks');
-      let changed = true;
-      while (changed) {
-        changed = false;
-        for (const task of tasks)
-          if (
-            task.spec.parentTaskId &&
-            descendants.has(task.spec.parentTaskId) &&
-            !descendants.has(task.id)
-          ) {
-            descendants.add(task.id);
-            changed = true;
-          }
-      }
+  summary(taskId: string | undefined, scope: 'direct' | 'tree' | 'host_overhead'): CostSummary {
+    return costSummary(this.store, taskId, scope);
+  }
+}
+/** The result of `costs.get`, for the engine and a read-only view (SPEC-0027 R03). */
+export function costSummary(
+  store: Store,
+  taskId: string | undefined,
+  scope: 'direct' | 'tree' | 'host_overhead',
+): CostSummary {
+  if (taskId) store.require('tasks', taskId);
+  const descendants = new Set<string>(taskId ? [taskId] : []);
+  if (taskId && scope === 'tree') {
+    const tasks = store.all<TaskSnapshot>('tasks');
+    let changed = true;
+    while (changed) {
+      changed = false;
+      for (const task of tasks)
+        if (
+          task.spec.parentTaskId &&
+          descendants.has(task.spec.parentTaskId) &&
+          !descendants.has(task.id)
+        ) {
+          descendants.add(task.id);
+          changed = true;
+        }
     }
-    const rows = this.costs().filter((row) =>
+  }
+  const rows = store
+    .all<Cost>('costs')
+    .filter((row) =>
       scope === 'host_overhead'
         ? row.category === 'host_overhead'
         : row.category === 'task' && (!taskId || descendants.has(row.costOwnerTaskId!)),
     );
-    const totals: Record<string, bigint> = {};
-    for (const row of rows)
-      if (row.amountUnits !== null && row.currency)
-        totals[row.currency] = (totals[row.currency] ?? 0n) + BigInt(row.amountUnits);
-    const reservations = this.store
-      .all<Reservation>('budget_reservations')
-      .filter(
-        (row) =>
-          scope !== 'host_overhead' &&
-          (!taskId || descendants.has(row.taskId)) &&
-          row.status === 'held',
-      );
-    return {
-      scope,
-      totals: Object.fromEntries(
-        Object.entries(totals).map(([currency, n]) => [currency, moneyString(n)]),
-      ),
-      unknownRecords: rows.filter((row) => row.amountUnits === null).length,
-      records: rows.slice(0, 500),
-      recordsTruncated: rows.length > 500,
-      recordCount: rows.length,
-      reservations: reservations
-        .slice(0, 100)
-        .map((row) => ({ ...row, remaining: moneyString(BigInt(row.remainingUnits)) })),
-      reservationsTruncated: reservations.length > 100,
-      basis: 'registered-price estimate; not a provider bill',
-      settlementIncomplete: reservations.length > 0,
-    };
-  }
+  const totals: Record<string, bigint> = {};
+  for (const row of rows)
+    if (row.amountUnits !== null && row.currency)
+      totals[row.currency] = (totals[row.currency] ?? 0n) + BigInt(row.amountUnits);
+  const reservations = store
+    .all<Reservation>('budget_reservations')
+    .filter(
+      (row) =>
+        scope !== 'host_overhead' &&
+        (!taskId || descendants.has(row.taskId)) &&
+        row.status === 'held',
+    );
+  return {
+    scope,
+    totals: Object.fromEntries(
+      Object.entries(totals).map(([currency, n]) => [currency, moneyString(n)]),
+    ),
+    unknownRecords: rows.filter((row) => row.amountUnits === null).length,
+    records: rows.slice(0, 500),
+    recordsTruncated: rows.length > 500,
+    recordCount: rows.length,
+    reservations: reservations
+      .slice(0, 100)
+      .map((row) => ({ ...row, remaining: moneyString(BigInt(row.remainingUnits)) })),
+    reservationsTruncated: reservations.length > 100,
+    basis: 'registered-price estimate; not a provider bill',
+    settlementIncomplete: reservations.length > 0,
+  };
 }

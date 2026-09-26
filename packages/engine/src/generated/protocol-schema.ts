@@ -1,4 +1,4 @@
-// Generated from schemas/protocol.schema.json; SHA-256 e0a94dcbbad31c521575780b3af75d3e586a9b9ec184f48160554d715a44e082. Do not edit.
+// Generated from schemas/protocol.schema.json; SHA-256 e4f3b665b6370efbf49e7575a5f65c349096b7ee50a9e231f1baaee3c04ff058. Do not edit.
 export const protocolSchema = {
   $schema: 'https://json-schema.org/draft/2020-12/schema',
   $id: 'urn:agent-orch:protocol:2.0',
@@ -129,6 +129,17 @@ export const protocolSchema = {
           minLength: 1,
           maxLength: 4096,
           description: 'An existing workspace path inside writeScope; requires writeScope.',
+        },
+        label: {
+          type: 'string',
+          minLength: 1,
+          maxLength: 256,
+          description: "The host's own filterable label, 1 to 256 UTF-8 bytes (SPEC-0027 L01).",
+        },
+        metadata: {
+          type: 'object',
+          description:
+            "The host's own JSON object, at most 4096 bytes when encoded and 16 levels deep (SPEC-0027 L01).",
         },
       },
     },
@@ -593,6 +604,17 @@ export const protocolSchema = {
             additionalProperties: false,
           },
           maxItems: 1000000,
+        },
+        label: {
+          type: 'string',
+          minLength: 1,
+          maxLength: 256,
+          description: "The host's own filterable label, 1 to 256 UTF-8 bytes (SPEC-0027 L01).",
+        },
+        metadata: {
+          type: 'object',
+          description:
+            "The host's own JSON object, at most 4096 bytes when encoded and 16 levels deep (SPEC-0027 L01).",
         },
       },
     },
@@ -2076,6 +2098,17 @@ export const protocolSchema = {
           maxLength: 4096,
           description: 'An existing workspace path inside writeScope; requires writeScope.',
         },
+        label: {
+          type: 'string',
+          minLength: 1,
+          maxLength: 256,
+          description: "The host's own filterable label, 1 to 256 UTF-8 bytes (SPEC-0027 L01).",
+        },
+        metadata: {
+          type: 'object',
+          description:
+            "The host's own JSON object, at most 4096 bytes when encoded and 16 levels deep (SPEC-0027 L01).",
+        },
       },
       required: ['runtime'],
       additionalProperties: false,
@@ -2138,6 +2171,17 @@ export const protocolSchema = {
             },
             workflow: {
               $ref: '#/$defs/WorkflowCapability',
+            },
+            readOnly: {
+              type: 'object',
+              description:
+                'A host that answers reads from a store opened read-only (SPEC-0027 R09).',
+              properties: {
+                version: {
+                  const: 1,
+                },
+              },
+              required: ['version'],
             },
           },
         },
@@ -2665,6 +2709,12 @@ export const protocolSchema = {
           minLength: 1,
           maxLength: 128,
         },
+        label: {
+          type: 'string',
+          minLength: 1,
+          maxLength: 256,
+          description: 'The tasks with this label (SPEC-0027 L03).',
+        },
         limit: {
           type: 'integer',
           minimum: 1,
@@ -2675,9 +2725,23 @@ export const protocolSchema = {
           pattern: '^[0-9]{1,19}$',
         },
       },
-      not: {
-        required: ['parentTaskId', 'sessionId'],
-      },
+      allOf: [
+        {
+          not: {
+            required: ['parentTaskId', 'sessionId'],
+          },
+        },
+        {
+          not: {
+            required: ['parentTaskId', 'label'],
+          },
+        },
+        {
+          not: {
+            required: ['sessionId', 'label'],
+          },
+        },
+      ],
       additionalProperties: false,
     },
     TaskListResult: {
@@ -3084,6 +3148,9 @@ export const protocolSchema = {
           const: true,
         },
         contextCheck: {
+          const: true,
+        },
+        labels: {
           const: true,
         },
       },
