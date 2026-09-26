@@ -106,13 +106,22 @@ function completeness(records: UsageRecord[]): 'reported' | 'unknown' {
 }
 function totals(records: UsageRecord[]): UsageTotals {
   const sum = (
-    key: 'inputTokens' | 'cachedInputTokens' | 'cacheWriteInputTokens' | 'outputTokens',
+    key:
+      | 'inputTokens'
+      | 'cachedInputTokens'
+      | 'cacheWriteInputTokens'
+      | 'cacheWrite5mInputTokens'
+      | 'cacheWrite1hInputTokens'
+      | 'outputTokens',
   ) => records.reduce((total, record) => total + (record[key] ?? 0), 0);
   return {
     records: records.length,
     inputTokens: sum('inputTokens'),
     cachedInputTokens: sum('cachedInputTokens'),
     cacheWriteInputTokens: sum('cacheWriteInputTokens'),
+    // SPEC-0030 A04: over the records that split them; the rest of the cache writes has no split.
+    cacheWrite5mInputTokens: sum('cacheWrite5mInputTokens'),
+    cacheWrite1hInputTokens: sum('cacheWrite1hInputTokens'),
     outputTokens: sum('outputTokens'),
     unknownRecords: records.filter((r) => r.inputTokens === null || r.outputTokens === null).length,
   };

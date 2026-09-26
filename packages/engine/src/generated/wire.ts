@@ -1,4 +1,4 @@
-// Generated from schemas/protocol.schema.json; SHA-256 7ed691885c36c4278051fd3947051363a2d8822b9325f081b15b820c29b2de5f. Do not edit.
+// Generated from schemas/protocol.schema.json; SHA-256 33cc883970a3efc11a6b128c0e3700daaac3c36c6e9ddf414b53b7ebd1756423. Do not edit.
 // Structural types; validateWire enforces numeric and conditional constraints.
 export type RuntimeSpec = { provider: string; model: string };
 export type TaskSpec = {
@@ -107,6 +107,8 @@ export type UsageRecordedData = {
   inputTokens?: number | null;
   cachedInputTokens?: number | null;
   cacheWriteInputTokens?: number | null;
+  cacheWrite5mInputTokens?: number;
+  cacheWrite1hInputTokens?: number;
   outputTokens?: number | null;
   model?: string;
   rootTaskId?: string;
@@ -120,6 +122,8 @@ export type UsageRecord = {
   inputTokens: number | null;
   cachedInputTokens: number | null;
   cacheWriteInputTokens: number | null;
+  cacheWrite5mInputTokens?: number;
+  cacheWrite1hInputTokens?: number;
   outputTokens: number | null;
   raw: unknown;
   sessionId?: string;
@@ -134,6 +138,8 @@ export type UsageTotals = {
   inputTokens: number;
   cachedInputTokens: number;
   cacheWriteInputTokens: number;
+  cacheWrite5mInputTokens: number;
+  cacheWrite1hInputTokens: number;
   outputTokens: number;
   unknownRecords: number;
 };
@@ -144,6 +150,8 @@ export type UsageModelTotals = {
   inputTokens: number;
   cachedInputTokens: number;
   cacheWriteInputTokens: number;
+  cacheWrite5mInputTokens: number;
+  cacheWrite1hInputTokens: number;
   outputTokens: number;
   unknownRecords: number;
 };

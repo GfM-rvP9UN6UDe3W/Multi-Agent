@@ -27,11 +27,26 @@ export function usageRecord(
     'cacheWriteInputTokens',
     'outputTokens',
   ] as const;
-  if (Object.keys(event.usage).some((key) => ![...keys, 'raw'].includes(key))) invalid();
+  const durations = ['cacheWrite5mInputTokens', 'cacheWrite1hInputTokens'] as const;
+  if (Object.keys(event.usage).some((key) => ![...keys, ...durations, 'raw'].includes(key)))
+    invalid();
   for (const key of keys) {
     const value = event.usage[key];
     if (value !== null && (!Number.isSafeInteger(value) || value < 0)) invalid();
   }
+  // SPEC-0030 A02: both durations or neither, and together they are the cache writes. A missing
+  // one is not a safe integer, so one duration alone is refused as well.
+  const split = durations.some((key) => event.usage[key] !== undefined);
+  if (
+    split &&
+    (durations.some((key) => !Number.isSafeInteger(event.usage[key]) || event.usage[key]! < 0) ||
+      event.usage.cacheWrite5mInputTokens! + event.usage.cacheWrite1hInputTokens! !==
+        event.usage.cacheWriteInputTokens)
+  )
+    fail(
+      'INVALID_RUNTIME_CONTRACT',
+      'Cache writes by duration must be two counts that add up to cacheWriteInputTokens',
+    );
   const ancestors = new Set<object>();
   let count = 0;
   function copy(value: unknown, depth = 0): Json {
@@ -73,6 +88,12 @@ export function usageRecord(
     inputTokens: event.usage.inputTokens,
     cachedInputTokens: event.usage.cachedInputTokens,
     cacheWriteInputTokens: event.usage.cacheWriteInputTokens,
+    ...(split
+      ? {
+          cacheWrite5mInputTokens: event.usage.cacheWrite5mInputTokens,
+          cacheWrite1hInputTokens: event.usage.cacheWrite1hInputTokens,
+        }
+      : {}),
     outputTokens: event.usage.outputTokens,
     raw,
   };

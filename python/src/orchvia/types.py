@@ -124,6 +124,8 @@ _WIRE_TO_PYTHON = {
     "afterCursor": "after_cursor", "timeoutMs": "timeout_ms",
     "inputTokens": "input_tokens", "cachedInputTokens": "cached_input_tokens",
     "cacheWriteInputTokens": "cache_write_input_tokens", "outputTokens": "output_tokens",
+    "cacheWrite5mInputTokens": "cache_write_5m_input_tokens",
+    "cacheWrite1hInputTokens": "cache_write_1h_input_tokens",
     "durableDeadlines": "durable_deadlines", "enteredAt": "entered_at",
     "deadlineAt": "deadline_at", "expiredAt": "expired_at", "policyVersion": "policy_version",
     "mayHaveBeenSent": "may_have_been_sent", "lastEvidence": "last_evidence",

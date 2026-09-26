@@ -624,6 +624,12 @@ export interface UsageRecord {
   inputTokens: number | null;
   cachedInputTokens: number | null;
   cacheWriteInputTokens: number | null;
+  /**
+   * The cache writes that live five minutes and one hour, which together are
+   * `cacheWriteInputTokens`. Only a runtime that splits them reports them (SPEC-0030 A02).
+   */
+  cacheWrite5mInputTokens?: number;
+  cacheWrite1hInputTokens?: number;
   outputTokens: number | null;
   raw: Json;
   /** Written from SPEC-0028 E01 on; absent from earlier records. */
@@ -640,6 +646,12 @@ export interface UsageTotals {
   inputTokens: number;
   cachedInputTokens: number;
   cacheWriteInputTokens: number;
+  /**
+   * Sums over the records that split their cache writes by duration (SPEC-0030 A04);
+   * `cacheWriteInputTokens` minus both is the cache writes of the records without a split.
+   */
+  cacheWrite5mInputTokens: number;
+  cacheWrite1hInputTokens: number;
   outputTokens: number;
   /** Records whose input or output count is null. */
   unknownRecords: number;

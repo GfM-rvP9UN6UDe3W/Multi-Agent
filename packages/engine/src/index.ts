@@ -91,7 +91,6 @@ export type { WireTypes } from './wire.ts';
 export { openReadOnlyEngine, type ReadOnlyEngine, type ReadOnlyStoreInfo } from './read-only.ts';
 
 const terminalTasks = new Set(['completed', 'failed', 'cancelled']);
-const now = () => new Date().toISOString();
 const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 const defaultTimeouts: Required<LifecycleTimeouts> = {
   acceptanceMs: 30_000,
@@ -390,8 +389,15 @@ class LocalEngine implements Engine {
   private ensureOpen(): void {
     if (this.closed) fail('CLIENT_CLOSED', 'Engine is closed');
   }
+  /**
+   * The engine's wall time: inside a transaction the reading it began with, so that every time
+   * written in one transaction is one (SPEC-0030 B01), and a new reading outside one.
+   */
+  private wall(): number {
+    return this.store.wallTime();
+  }
   private time(): string {
-    return new Date(this.clock.wallNow()).toISOString();
+    return new Date(this.wall()).toISOString();
   }
   /** The queue wait of a task whose plan does not set one (SPEC-0015 Q04). */
   private get defaultQueueWaitMs(): number {
@@ -399,7 +405,7 @@ class LocalEngine implements Engine {
   }
   private deadline(session: SessionSnapshot, kind: OperationLifecycle['kind']): OperationLifecycle {
     const duration = kind === 'shutdown' ? 30000 : this.timeouts[`${kind}Ms`];
-    const enteredAt = this.clock.wallNow();
+    const enteredAt = this.wall();
     return {
       enteredAt: new Date(enteredAt).toISOString(),
       deadlineAt: new Date(enteredAt + duration).toISOString(),
@@ -862,7 +868,7 @@ class LocalEngine implements Engine {
           candidateSessionId: session.id,
           expectedGeneration: 1,
           enqueuedAt: this.time(),
-          deadlineAt: new Date(this.clock.wallNow() + this.defaultQueueWaitMs).toISOString(),
+          deadlineAt: new Date(this.wall() + this.defaultQueueWaitMs).toISOString(),
           maxQueueWaitMs: this.defaultQueueWaitMs,
           fallbackModes: [],
           reasonCode: 'ROOT_SESSION',
@@ -921,7 +927,7 @@ class LocalEngine implements Engine {
         candidateSessionId: session.id,
         expectedGeneration: session.generation,
         enqueuedAt: this.time(),
-        deadlineAt: new Date(this.clock.wallNow() + plan.maxQueueWaitMs).toISOString(),
+        deadlineAt: new Date(this.wall() + plan.maxQueueWaitMs).toISOString(),
         maxQueueWaitMs: plan.maxQueueWaitMs,
         fallbackModes: [...plan.fallbackModes],
         reasonCode: 'DECLARED_ROUTING',
@@ -950,10 +956,7 @@ class LocalEngine implements Engine {
       return;
     const remaining = Math.max(
       0,
-      Math.min(
-        task.routing.maxQueueWaitMs,
-        Date.parse(task.routing.deadlineAt) - this.clock.wallNow(),
-      ),
+      Math.min(task.routing.maxQueueWaitMs, Date.parse(task.routing.deadlineAt) - this.wall()),
     );
     const deadline = this.clock.monotonicNow() + remaining;
     const record = { cancel: () => {}, deadline };
@@ -1008,23 +1011,7 @@ class LocalEngine implements Engine {
     if (existing) return receipt(existing);
     this.tryExpireHandoffs();
     const rootTaskId = parent.rootTaskId ?? parent.id;
-    const record: HandoffRequest = {
-      handoffId,
-      status: 'pending',
-      revision: 1,
-      fromTaskId: parent.id,
-      fromSessionId: flight.sessionId,
-      fromDispatchId: flight.dispatchId,
-      fromGeneration: flight.generation,
-      rootTaskId,
-      targetSessionId: target.id,
-      goal,
-      contextRefs,
-      createdAt: this.time(),
-      expiresAt: new Date(
-        this.clock.wallNow() + (this.config.tools?.handoffTtlMs ?? 86400000),
-      ).toISOString(),
-    };
+    let record!: HandoffRequest;
     this.store.transaction(() => {
       const pending = (
         this.store.db
@@ -1035,6 +1022,24 @@ class LocalEngine implements Engine {
       ).n;
       if (pending >= 100)
         fail('HANDOFF_LIMIT', 'This root task already has 100 pending handoff requests');
+      // Its times are the transaction's, as its event's is (SPEC-0030 B01).
+      record = {
+        handoffId,
+        status: 'pending',
+        revision: 1,
+        fromTaskId: parent.id,
+        fromSessionId: flight.sessionId,
+        fromDispatchId: flight.dispatchId,
+        fromGeneration: flight.generation,
+        rootTaskId,
+        targetSessionId: target.id,
+        goal,
+        contextRefs,
+        createdAt: this.time(),
+        expiresAt: new Date(
+          this.wall() + (this.config.tools?.handoffTtlMs ?? 86400000),
+        ).toISOString(),
+      };
       this.store.put('handoffs', handoffId, record);
       this.store.event(
         'handoff.requested',
@@ -1070,7 +1075,7 @@ class LocalEngine implements Engine {
     this.handoffTimer = undefined;
     let next: number | undefined;
     try {
-      const now = this.clock.wallNow();
+      const now = this.wall();
       const due: HandoffRequest[] = [];
       // Through handoffs_pending_expiry, in creation order (SPEC-0024 X01, X02).
       for (const row of (
@@ -1095,7 +1100,7 @@ class LocalEngine implements Engine {
         this.handoffTimer = undefined;
         this.kick();
       },
-      Math.min(Math.max(0, next - this.clock.wallNow()), 2147483647),
+      Math.min(Math.max(0, next - this.wall()), 2147483647),
     );
   }
   private inSubtree(taskId: string, rootId: string): boolean {
@@ -1856,6 +1861,13 @@ class LocalEngine implements Engine {
             inputTokens: record.inputTokens,
             cachedInputTokens: record.cachedInputTokens,
             cacheWriteInputTokens: record.cacheWriteInputTokens,
+            // SPEC-0030 A03: the split travels only when the runtime reported it.
+            ...(record.cacheWrite5mInputTokens !== undefined
+              ? {
+                  cacheWrite5mInputTokens: record.cacheWrite5mInputTokens,
+                  cacheWrite1hInputTokens: record.cacheWrite1hInputTokens!,
+                }
+              : {}),
             outputTokens: record.outputTokens,
             model: record.model!,
             rootTaskId: record.rootTaskId!,
@@ -1886,7 +1898,7 @@ class LocalEngine implements Engine {
       task.routing &&
       !task.routing.submittedAt
     ) {
-      const wall = this.clock.wallNow();
+      const wall = this.wall();
       task.routing.enqueuedAt = new Date(wall).toISOString();
       task.routing.deadlineAt = new Date(wall + task.routing.maxQueueWaitMs).toISOString();
       delete task.routing.expiredAt;
@@ -1898,7 +1910,7 @@ class LocalEngine implements Engine {
     // A close's mark lasts while the pause it describes lasts (SPEC-0029 D03).
     if (status && status !== 'paused') delete task.pausedByClose;
     task.revision++;
-    task.updatedAt = now();
+    task.updatedAt = this.time();
     if (delivered) task.deliveredAt = task.updatedAt;
     this.store.put('tasks', task.id, task);
   }
@@ -2071,7 +2083,7 @@ class LocalEngine implements Engine {
           code: 'OUTCOME_UNKNOWN',
           message: 'Previous owner exited before operation completion',
         };
-        if (op.lifecycle && Date.parse(op.lifecycle.deadlineAt) <= this.clock.wallNow())
+        if (op.lifecycle && Date.parse(op.lifecycle.deadlineAt) <= this.wall())
           op.lifecycle.expiredAt ??= this.time();
         this.store.saveOperation(op);
         this.store.event(
@@ -2244,7 +2256,7 @@ class LocalEngine implements Engine {
           },
           summary: `Permission requested for ${request.toolName}`,
           evidenceRefs: [],
-          expiresAt: new Date(this.clock.wallNow() + ttl).toISOString(),
+          expiresAt: new Date(this.wall() + ttl).toISOString(),
         };
         this.store.put('approvals', id, approval);
         this.store.event('approval.requested', approval as unknown as Record<string, Json>, {
@@ -2281,9 +2293,7 @@ class LocalEngine implements Engine {
       },
       summary: task.result ?? '',
       evidenceRefs: [...task.artifactRefs],
-      expiresAt: new Date(
-        this.clock.wallNow() + (this.config.approvalTtlMs ?? 86400000),
-      ).toISOString(),
+      expiresAt: new Date(this.wall() + (this.config.approvalTtlMs ?? 86400000)).toISOString(),
     };
     this.store.put('approvals', id, approval);
     this.taskEvent(task);
@@ -3115,7 +3125,7 @@ class LocalEngine implements Engine {
             .prepare(
               "SELECT count(*) AS count FROM messages WHERE json_extract(data,'$.fromSessionId')=? AND json_extract(data,'$.createdAt')>=?",
             )
-            .get(sender, new Date(this.clock.wallNow() - 60000).toISOString()) as { count: number };
+            .get(sender, new Date(this.wall() - 60000).toISOString()) as { count: number };
           if (recent.count >= (this.config.messages?.maxPerMinute ?? 120))
             fail('MESSAGE_RATE_LIMIT', 'Message rate limit reached');
           const sourceIds = context.runtimeActor
@@ -3151,7 +3161,7 @@ class LocalEngine implements Engine {
             status: 'persisted',
             createdAt: this.time(),
             expiresAt: new Date(
-              this.clock.wallNow() +
+              this.wall() +
                 Math.min(
                   spec.ttlMs ?? this.config.messages?.ttlMs ?? 86400000,
                   this.config.messages?.ttlMs ?? 86400000,
@@ -3211,7 +3221,7 @@ class LocalEngine implements Engine {
                 session.id !== target.sessionId ||
                 session.generation !== target.generation ||
                 session.activeDispatchId !== target.dispatchId ||
-                Date.parse(approval.expiresAt) <= this.clock.wallNow() ||
+                Date.parse(approval.expiresAt) <= this.wall() ||
                 !this.permissionWaits.has(id)
               )
                 fail('STALE_TARGET', 'Runtime permission request is no longer current');
@@ -3748,7 +3758,7 @@ class LocalEngine implements Engine {
   }
   private pendingMessages(sessionId: string): MessageSnapshot[] {
     return this.persistedMessages('toSessionId', sessionId).filter(
-      (m) => !m.expiresAt || Date.parse(m.expiresAt) > this.clock.wallNow(),
+      (m) => !m.expiresAt || Date.parse(m.expiresAt) > this.wall(),
     );
   }
   /** A closed session never runs again, so no message to it stays pending (SPEC-0017 A05). */
@@ -4239,7 +4249,7 @@ class LocalEngine implements Engine {
             attempts++
           ) {
             const remaining = Math.min(
-              Date.parse(task.routing.deadlineAt) - this.clock.wallNow(),
+              Date.parse(task.routing.deadlineAt) - this.wall(),
               (this.queueTimers.get(task.id)?.deadline ?? this.clock.monotonicNow()) -
                 this.clock.monotonicNow(),
             );
@@ -4351,7 +4361,7 @@ class LocalEngine implements Engine {
     }
     const cap = capabilities.executionBudget;
     const enteredMono = this.clock.monotonicNow(),
-      enteredWall = this.clock.wallNow();
+      enteredWall = this.wall();
     const effectiveTurnMs = Math.min(
       this.timeouts.turnMs,
       cap.turnCapMs ?? Infinity,
@@ -4438,7 +4448,7 @@ class LocalEngine implements Engine {
         generation: session.generation,
         status: 'dispatching',
         messageIds: flight.messageIds,
-        createdAt: now(),
+        createdAt: this.time(),
         ...budgetSummary,
         budget: budgetSummary,
         provider: adapter.provider,
@@ -4993,7 +5003,7 @@ class LocalEngine implements Engine {
       const op = this.store.operation(this.shutdownId!);
       op.lifecycle = {
         enteredAt: op.lifecycle?.enteredAt ?? this.time(),
-        deadlineAt: new Date(this.clock.wallNow() + timeout).toISOString(),
+        deadlineAt: new Date(this.wall() + timeout).toISOString(),
         policyVersion: 1,
         kind: 'shutdown',
         expectedGeneration: null,

@@ -134,6 +134,8 @@ export class Store {
   readonly readOnly: boolean;
   private closed = false;
   readonly now: () => number;
+  /** The clock reading of the transaction in progress (SPEC-0030 B01). */
+  private commitTime: number | undefined;
   readonly options: StoreOptions;
   degraded = false;
 
@@ -372,6 +374,8 @@ export class Store {
   transaction<T>(fn: () => T): T {
     this.assertWritable();
     this.db.exec('BEGIN IMMEDIATE');
+    // One reading for the whole transaction: every time written in it is this one (SPEC-0030 B01).
+    this.commitTime = this.now();
     try {
       const result = fn();
       this.db.exec('COMMIT');
@@ -380,7 +384,13 @@ export class Store {
       if (this.db.isTransaction) this.db.exec('ROLLBACK');
       this.storageFailure(error);
       throw error;
+    } finally {
+      this.commitTime = undefined;
     }
+  }
+  /** The time of a write: the reading of the transaction in progress, or a new one outside it. */
+  wallTime(): number {
+    return this.commitTime ?? this.now();
   }
   assertWritable(): void {
     if (this.closed) fail('CLIENT_CLOSED', 'Store is closed');
@@ -471,7 +481,7 @@ export class Store {
       ON CONFLICT(table_name,id) DO UPDATE SET changed_at=excluded.changed_at,active=excluded.active,
       terminal_at=CASE WHEN excluded.terminal_at IS NULL THEN NULL ELSE COALESCE(retention_records.terminal_at,excluded.terminal_at) END`,
       )
-      .run(table, id, this.now(), terminal ? this.now() : null, active ? 1 : 0);
+      .run(table, id, this.wallTime(), terminal ? this.wallTime() : null, active ? 1 : 0);
     const refs = new Set<string>();
     const visit = (child: unknown, key = '') => {
       if (typeof child === 'string') {
@@ -815,7 +825,7 @@ export class Store {
         taskId: refs.taskId ?? null,
         sessionId: refs.sessionId ?? null,
         operationId: refs.operationId ?? null,
-        occurredAt: new Date(this.now()).toISOString(),
+        occurredAt: new Date(this.wallTime()).toISOString(),
         data,
       };
       const row = this.db

@@ -1552,6 +1552,42 @@ test('0014-H01 a model can request a handoff that grants nothing by itself', asy
   await off.f.close();
 });
 
+test('0030-B01 a handoff request records the time of its transaction', async () => {
+  // Advances at each reading, so that two readings never agree.
+  let last = 0;
+  const clock = {
+    wallNow: () => (last = Math.max(last + 1, Date.now())),
+    monotonicNow: () => performance.now(),
+    setTimer(callback: () => void, delay: number) {
+      const timer = setTimeout(callback, delay);
+      return () => clearTimeout(timer);
+    },
+  };
+  let receipt: { handoffId: string } | undefined;
+  const { f, a } = await agents(
+    async (tools, target) => {
+      receipt = (await tools.call('work_delegate', {
+        goal: 'please review',
+        contextPlan: reuse(target.sessionId),
+        idempotencyKey: 'timed',
+      })) as { handoffId: string };
+    },
+    { tools: { ...handoffTools, handoffTtlMs: 60000 }, clock },
+  );
+  try {
+    const handoff = (await f.engine.call('handoffs.get', {
+      handoffId: receipt!.handoffId,
+    })) as Handoff & { createdAt: string };
+    const requested = (await events(f.engine, a.id)).find(
+      (event) => event.type === 'handoff.requested',
+    )!;
+    assert.equal(handoff.createdAt, requested.occurredAt);
+    assert.equal(Date.parse(handoff.expiresAt) - Date.parse(handoff.createdAt), 60000);
+  } finally {
+    await f.close();
+  }
+});
+
 test('0014-H02/H03 hosts resolve handoffs and requesters can read their own', async () => {
   const ids: string[] = [];
   const { f, b } = await agents(async (tools, target) => {

@@ -2,6 +2,22 @@
 
 All notable changes to Orchvia are recorded here. Versions follow [Semantic Versioning](https://semver.org/); before 1.0, a minor version may change the API.
 
+## [Unreleased]
+
+What a host needs to price cache writes and to trust the times it shows.
+
+### Added
+
+- Usage records, `usage.recorded` and the totals of `usage.summary` and `usage.byTask` hold `cacheWrite5mInputTokens` and `cacheWrite1hInputTokens`, the cache writes that live five minutes and one hour, where a runtime splits them. The Claude adapter reports them from Claude's `cache_creation` when they add up to its cache writes. `cacheWriteInputTokens` minus both is the cache writes without a split, such as those recorded before this version (SPEC-0030 A).
+
+### Fixed
+
+- The engine reads its clock once for each transaction. A task's `deliveredAt` and `updatedAt` now equal the `occurredAt` of the event of the same change; before, they could differ by a millisecond. A task's `updatedAt` and a dispatch's `createdAt` no longer come from the process clock, so a clock passed in `EngineConfig` governs them too. A handoff request's `createdAt` equals the `occurredAt` of its `handoff.requested` event (SPEC-0030 B).
+
+### Documentation
+
+- The guide and the concepts say that an idempotency key names one request: sent again after a rule was retired or reactivated, it returns the first result and changes nothing, so reactivating or retiring a rule again takes a new key (SPEC-0030 C).
+
 ## [0.1.6] - 2026-09-26
 
 What a host's usage page and its restart need: token totals for many tasks in one call, the time each task delivered, rules that can be reactivated, and which paused tasks a close interrupted.
