@@ -26,6 +26,8 @@ A downstream host reported two problems.
 - **V03** The evidence is the artifact that the engine wrote for the latest verification of the same task. If it cannot be read, or it is not that task's failed verification, the prompt says the details are unavailable and names the artifacts as before.
 - **V04** The event `verification.completed` adds `rules`: for every rule that ran, `ruleId`, `passed`, `exitCode`, `signal`, `timedOut`, `error` (a string or `null`), `outputBytes` and `outputTruncated`. It carries no output text.
 
+  Superseded in part by [SPEC-0028](./0028-host-queries-and-lifecycle.md) E03: a failed rule now also carries the output tail that the retry prompt shows, so the event contains what a check printed, which may include workspace paths or secrets.
+
 ## Owner decisions (2026-09-23)
 
 - **D-rc15-1, interrupting close:** the engine waits for interrupted dispatches before it closes the adapters (option 1). The alternatives were documenting the close as a resource shutdown, and changing only the Claude adapter.

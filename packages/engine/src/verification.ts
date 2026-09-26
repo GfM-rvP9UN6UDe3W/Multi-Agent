@@ -99,19 +99,33 @@ export function ruleKey(id: string, version: string): string {
   return JSON.stringify([id, version]);
 }
 
+/** A registered rule that its owner retired (SPEC-0028 U01), as its row stores it. */
+export type RetiredVerificationRule = FrozenVerificationRule & { retiredAt: string };
+
 /**
  * Configured rules plus a store's registered rules (SPEC-0014 W03–W05). Identity comes from each
  * row's content, so rows written under rc.8's `id@version` keys load unchanged. A registered rule
- * whose identity is already effective with other content fails with VALIDATION_ERROR.
+ * whose identity is already effective with other content fails with VALIDATION_ERROR. A retired
+ * row is set aside before any check: it is not effective, so it neither conflicts nor keeps a host
+ * from starting (SPEC-0028 U04).
  */
 export function effectiveRules(
   workspace: string,
   configured: VerificationRule[] | undefined,
   stored: unknown[],
-): { rules: FrozenVerificationRule[]; runtime: Set<string> } {
+): {
+  rules: FrozenVerificationRule[];
+  runtime: Set<string>;
+  retired: RetiredVerificationRule[];
+} {
   const rules = normalizeRules(workspace, configured, { checkPaths: false });
   const runtime = new Set<string>();
+  const retired: RetiredVerificationRule[] = [];
   for (const row of stored) {
+    if (typeof (row as { retiredAt?: unknown }).retiredAt === 'string') {
+      retired.push(row as RetiredVerificationRule);
+      continue;
+    }
     const { digest: _digest, ...value } = row as FrozenVerificationRule;
     const [rule] = normalizeRules(workspace, [value], { checkPaths: false });
     const key = ruleKey(rule.id, rule.version);
@@ -124,7 +138,9 @@ export function effectiveRules(
     rules.push(rule);
     runtime.add(key);
   }
-  return { rules, runtime };
+  // In the order they were retired, as a running engine lists them.
+  retired.sort((a, b) => a.retiredAt.localeCompare(b.retiredAt));
+  return { rules, runtime, retired };
 }
 
 /** A bounded content baseline. Excludes Git internals; source/untracked files remain included. */

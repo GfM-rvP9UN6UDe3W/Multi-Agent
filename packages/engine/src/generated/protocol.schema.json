@@ -267,8 +267,45 @@
         },
         "dependencyResultsDelivered": {
           "type": "boolean"
+        },
+        "blockedBy": {
+          "$ref": "#/$defs/TaskBlocker"
         }
       }
+    },
+    "TaskBlocker": {
+      "type": "object",
+      "description": "Why a queued task, or one that waits for its dependencies, waits; computed when read (SPEC-0028 B01).",
+      "properties": {
+        "reason": {
+          "enum": [
+            "scheduler_failed",
+            "host_stopping",
+            "capacity",
+            "quarantine_capacity",
+            "resource_cleanup",
+            "execution_conflict",
+            "storage",
+            "session_busy",
+            "write_conflict",
+            "scheduling",
+            "dependency"
+          ]
+        },
+        "taskIds": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "sessionId": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": ["reason"],
+      "additionalProperties": false
     },
     "ApprovalRequest": {
       "type": "object",
@@ -379,7 +416,7 @@
     },
     "UsageRecordedData": {
       "type": "object",
-      "description": "Data in a durable usage.recorded event. Retrieve the exact immutable observation with usage.getRecord; storeId is on the event envelope.",
+      "description": "Data in a durable usage.recorded event. Events written from SPEC-0028 E02 on also hold the token counts, the model and the root task; raw stays in the record, which usage.getRecord returns. storeId, sessionId and occurredAt are on the event envelope.",
       "required": ["usageRecordId", "dispatchId", "provider"],
       "properties": {
         "usageRecordId": {
@@ -394,12 +431,40 @@
         "provider": {
           "type": "string",
           "minLength": 1
+        },
+        "inputTokens": {
+          "type": ["integer", "null"],
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "cachedInputTokens": {
+          "type": ["integer", "null"],
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "cacheWriteInputTokens": {
+          "type": ["integer", "null"],
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "outputTokens": {
+          "type": ["integer", "null"],
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "model": {
+          "type": "string",
+          "minLength": 1
+        },
+        "rootTaskId": {
+          "type": "string",
+          "minLength": 1
         }
       }
     },
     "UsageRecord": {
       "type": "object",
-      "description": "Reported integer token counts or null when unknown. Raw provider JSON retains its original keys and is not synthesized into zero usage or cost.",
+      "description": "Reported integer token counts or null when unknown. Raw provider JSON retains its original keys and is not synthesized into zero usage or cost. Records written from SPEC-0028 E01 on also hold sessionId, model, rootTaskId and recordedAt.",
       "required": [
         "id",
         "taskId",
@@ -444,8 +509,160 @@
           "minimum": 0,
           "maximum": 9007199254740991
         },
-        "raw": {}
+        "raw": {},
+        "sessionId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "model": {
+          "type": "string",
+          "minLength": 1
+        },
+        "rootTaskId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "recordedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
       }
+    },
+    "UsageSummaryParams": {
+      "type": "object",
+      "properties": {
+        "rootTaskId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        }
+      },
+      "required": ["rootTaskId"],
+      "additionalProperties": false
+    },
+    "UsageTotals": {
+      "type": "object",
+      "description": "Each count is the sum over the records that report it; unknownRecords lack an input or output count (SPEC-0028 P03).",
+      "properties": {
+        "records": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "inputTokens": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "cachedInputTokens": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "cacheWriteInputTokens": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "outputTokens": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "unknownRecords": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        }
+      },
+      "required": [
+        "records",
+        "inputTokens",
+        "cachedInputTokens",
+        "cacheWriteInputTokens",
+        "outputTokens",
+        "unknownRecords"
+      ],
+      "additionalProperties": false
+    },
+    "UsageModelTotals": {
+      "type": "object",
+      "description": "UsageTotals of one provider and model; model is null when neither the record nor its dispatch's session names it.",
+      "properties": {
+        "provider": {
+          "type": "string",
+          "minLength": 1
+        },
+        "model": {
+          "type": ["string", "null"]
+        },
+        "records": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "inputTokens": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "cachedInputTokens": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "cacheWriteInputTokens": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "outputTokens": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "unknownRecords": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        }
+      },
+      "required": [
+        "provider",
+        "model",
+        "records",
+        "inputTokens",
+        "cachedInputTokens",
+        "cacheWriteInputTokens",
+        "outputTokens",
+        "unknownRecords"
+      ],
+      "additionalProperties": false
+    },
+    "UsageSummary": {
+      "type": "object",
+      "description": "Token totals of a root task and every task whose rootTaskId names it (SPEC-0028 P03).",
+      "properties": {
+        "rootTaskId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "byModel": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/UsageModelTotals"
+          }
+        },
+        "totals": {
+          "$ref": "#/$defs/UsageTotals"
+        },
+        "completeness": {
+          "enum": ["reported", "unknown"]
+        }
+      },
+      "required": ["rootTaskId", "byModel", "totals", "completeness"],
+      "additionalProperties": false
     },
     "SessionStatus": {
       "enum": ["idle", "running", "pausing", "paused", "closed", "outcome_unknown"]
@@ -2631,6 +2848,42 @@
       "required": ["backupId", "expectedStoreId", "idempotencyKey"],
       "additionalProperties": false
     },
+    "HostShutdownParams": {
+      "type": "object",
+      "description": "Owner only: the parameters of host.shutdown and host.shutdown.continue. pause closes as interrupt does and pauses the turns it interrupted with owner_shutdown (SPEC-0028 S01).",
+      "properties": {
+        "mode": {
+          "enum": ["drain", "interrupt", "pause"]
+        },
+        "timeoutMs": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 3600000
+        },
+        "operationId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "expectedStoreId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "idempotencyKey": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "requestDigest": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        }
+      },
+      "required": ["expectedStoreId"],
+      "additionalProperties": false
+    },
     "ApprovalDecisionParams": {
       "type": "object",
       "properties": {
@@ -2718,6 +2971,19 @@
         "afterCursor": {
           "type": "string",
           "pattern": "^[0-9]{1,19}$"
+        },
+        "status": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/TaskStatus"
+          },
+          "minItems": 1,
+          "maxItems": 10,
+          "description": "1 to 10 distinct statuses; combinable with one of parentTaskId, sessionId and label (SPEC-0028 P01)."
+        },
+        "order": {
+          "enum": ["asc", "desc"],
+          "description": "desc starts with the newest task, and afterCursor continues with older ones (SPEC-0028 P01)."
         }
       },
       "allOf": [
@@ -2755,6 +3021,48 @@
         }
       },
       "required": ["tasks", "nextCursor"],
+      "additionalProperties": false
+    },
+    "TaskGetManyParams": {
+      "type": "object",
+      "description": "1 to 100 distinct task IDs (SPEC-0028 P02).",
+      "properties": {
+        "taskIds": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "minItems": 1,
+          "maxItems": 100
+        }
+      },
+      "required": ["taskIds"],
+      "additionalProperties": false
+    },
+    "TaskGetManyResult": {
+      "type": "object",
+      "description": "The tasks found and the IDs not found, each in the order requested (SPEC-0028 P02).",
+      "properties": {
+        "tasks": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/TaskSnapshot"
+          },
+          "maxItems": 100
+        },
+        "missing": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "maxItems": 100
+        }
+      },
+      "required": ["tasks", "missing"],
       "additionalProperties": false
     },
     "HandoffRequest": {
@@ -3016,6 +3324,39 @@
       "required": ["rule", "expectedStoreId", "idempotencyKey"],
       "additionalProperties": false
     },
+    "RuleRetireParams": {
+      "type": "object",
+      "description": "Owner only: retires a rule registered at runtime (SPEC-0028 U01).",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "version": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "expectedStoreId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "idempotencyKey": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "requestDigest": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        }
+      },
+      "required": ["id", "version", "expectedStoreId", "idempotencyKey"],
+      "additionalProperties": false
+    },
     "RegisteredVerificationRule": {
       "type": "object",
       "properties": {
@@ -3084,6 +3425,11 @@
         },
         "source": {
           "enum": ["config", "runtime"]
+        },
+        "retiredAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Set on a retired rule, which rules.list returns only with includeRetired (SPEC-0028 U04)."
         }
       },
       "required": [
@@ -3099,6 +3445,15 @@
       ],
       "additionalProperties": false
     },
+    "RuleListParams": {
+      "type": "object",
+      "properties": {
+        "includeRetired": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false
+    },
     "RuleListResult": {
       "type": "object",
       "properties": {
@@ -3106,12 +3461,12 @@
           "type": "array",
           "items": {
             "$ref": "#/$defs/RegisteredVerificationRule"
-          },
-          "maxItems": 1000
+          }
         }
       },
       "required": ["rules"],
-      "additionalProperties": false
+      "additionalProperties": false,
+      "description": "At most 1000 effective rules, followed by the retired ones when includeRetired was set (SPEC-0028 U04)."
     },
     "WorkflowCapability": {
       "type": "object",
@@ -3145,6 +3500,18 @@
           "const": true
         },
         "labels": {
+          "const": true
+        },
+        "taskQueries": {
+          "const": true
+        },
+        "queueReasons": {
+          "const": true
+        },
+        "pauseClose": {
+          "const": true
+        },
+        "ruleRetirement": {
           "const": true
         }
       },

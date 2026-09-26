@@ -27,7 +27,7 @@ import {
   MAX_QUEUE_WAIT_MS,
 } from './validation.ts';
 import { readRuntimeCapabilities } from './runtime.ts';
-import { usageRecord } from './usage.ts';
+import { reportedUsage, usageRecord } from './usage.ts';
 import {
   contains,
   checkRulePaths,
@@ -37,8 +37,8 @@ import {
   verifyRule,
   workspacePath,
 } from './verification.ts';
-import type { VerificationEvidence } from './verification.ts';
-import { ruleSummary, verificationFeedback } from './verification-feedback.ts';
+import type { RetiredVerificationRule, VerificationEvidence } from './verification.ts';
+import { completedRules, verificationFeedback } from './verification-feedback.ts';
 import { ORCHESTRATION_TOOLS, TOOL_NAMES } from './tools.ts';
 import { CostLedger } from './cost-ledger.ts';
 import { estimateContext, moneyUnits, moneyString } from './accounting.ts';
@@ -71,6 +71,7 @@ import type {
   ExecutionEvidence,
   ExecutionConflict,
   SchedulerSnapshot,
+  TaskBlocker,
   FrozenVerificationRule,
   HandoffRequest,
   VerificationRule,
@@ -161,6 +162,8 @@ interface Flight {
   controller: AbortController;
   promise: Promise<void>;
   intent: 'cancel' | 'pause' | 'stop' | 'shutdown' | null;
+  /** Set by a pausing close before it aborts the flight; its terminal then reads it (SPEC-0028 S02). */
+  pausedByClose?: true;
   controlIds: string[];
   expired: boolean;
   cancelTimers: (() => void)[];
@@ -197,6 +200,8 @@ class LocalEngine implements Engine {
   private verificationRules: FrozenVerificationRule[] = [];
   /** `ruleKey` of rules registered through `rules.register` (SPEC-0014 W03/W05). */
   private runtimeRuleKeys = new Set<string>();
+  /** Retired registered rules by `ruleKey`; none of them is effective (SPEC-0028 U01). */
+  private retiredRules = new Map<string, RetiredVerificationRule>();
   private queueTimers = new Map<string, { cancel: () => void; deadline: number }>();
   private handoffTimer?: () => void;
   private permissionWaits = new Map<
@@ -363,6 +368,23 @@ class LocalEngine implements Engine {
       this.config.onFatal?.({ ...failure });
     } catch (error) {
       process.emitWarning(`onFatal callback failed: ${String(error)}`);
+    }
+  }
+  /**
+   * The last step of createEngine: the emergency reserve, written without blocking the event loop
+   * (SPEC-0028 W01, W02). Recovery ran in the constructor, and no scheduler pass starts before a
+   * call. A failure closes what the constructor opened.
+   */
+  async writeReserve(): Promise<void> {
+    try {
+      await this.storage.reserve();
+    } catch (error) {
+      if (this.storageTimer) clearInterval(this.storageTimer);
+      this.handoffTimer?.();
+      this.store.close();
+      this.controlPlane?.close();
+      this.closed = true;
+      throw error;
     }
   }
   private ensureOpen(): void {
@@ -571,14 +593,96 @@ class LocalEngine implements Engine {
     }
     return writable ? [this.store.workspace] : [];
   }
-  private writeConflict(task: TaskSnapshot): boolean {
+  /**
+   * The tasks whose held lease or pending verification overlaps `task`'s write paths. The scheduler
+   * does not start `task` while there is one (SPEC-0028 B02 shares this with `blockedBy`).
+   */
+  private writeConflictHolders(
+    task: TaskSnapshot,
+    active = this.store.activeDispatches() as Dispatch[],
+  ): string[] {
     const paths = task.verificationRules?.length ? [this.store.workspace] : (task.writePaths ?? []);
-    if (!paths.length) return false;
-    return (this.store.activeDispatches() as Dispatch[]).some((d) => {
+    if (!paths.length) return [];
+    const holders = active.filter((d) => {
       if (d.executionLease?.status !== 'held' && !d.verificationPending) return false;
       const occupied = d.writePaths as string[] | undefined;
       return occupied?.some((a) => paths.some((b) => contains(a, b) || contains(b, a))) ?? false;
     });
+    return [...new Set(holders.map((d) => d.taskId))];
+  }
+  /** Storage keeps the scheduler from starting a task: backpressure, or an unsettled rollover. */
+  private storageBlocked(): boolean {
+    return !!this.controlPlane?.hasPendingRollover || this.storage.status().backpressured;
+  }
+  /**
+   * Adds `blockedBy` to each waiting task that a read returns (SPEC-0028 B01). It asks the
+   * predicates that the scheduler asks (B02), and reads the scheduler snapshot, the storage status
+   * and the active dispatches at most once per read.
+   */
+  private addBlockers(tasks: TaskSnapshot[]): void {
+    let scheduler: SchedulerSnapshot | undefined;
+    let storage: boolean | undefined;
+    let active: Dispatch[] | undefined;
+    for (const task of tasks) {
+      if (task.status === 'waiting_dependency')
+        task.blockedBy = {
+          reason: 'dependency',
+          taskIds: (task.spec.dependencyTaskIds ?? []).filter(
+            (id) => this.store.get<TaskSnapshot>('tasks', id)?.status !== 'completed',
+          ),
+        };
+      else if (task.status === 'queued')
+        task.blockedBy = this.queueBlocker(
+          task,
+          (scheduler ??= this.scheduler()),
+          () => (storage ??= this.storageBlocked()),
+          () => (active ??= this.store.activeDispatches() as Dispatch[]),
+        );
+    }
+  }
+  /** The first condition, in the order of SPEC-0028 B01, that keeps a queued task waiting. */
+  private queueBlocker(
+    task: TaskSnapshot,
+    scheduler: SchedulerSnapshot,
+    storageBlocked: () => boolean,
+    active: () => Dispatch[],
+  ): TaskBlocker {
+    const reasons = scheduler.reasons;
+    if (reasons.includes('SCHEDULER_FAILED')) return { reason: 'scheduler_failed' };
+    if (reasons.includes('HOST_STOPPING')) return { reason: 'host_stopping' };
+    if (reasons.includes('EXECUTION_CAPACITY_EXHAUSTED'))
+      return {
+        reason: 'capacity',
+        taskIds: [
+          ...new Set(
+            active()
+              .filter((d) => d.executionLease?.status === 'held')
+              .map((d) => d.taskId),
+          ),
+        ],
+      };
+    if (reasons.includes('QUARANTINE_CAPACITY_EXCEEDED')) return { reason: 'quarantine_capacity' };
+    if (reasons.includes('RESOURCE_CLEANUP_PENDING')) return { reason: 'resource_cleanup' };
+    if (reasons.includes('EXECUTION_EVIDENCE_CONFLICT')) return { reason: 'execution_conflict' };
+    if (storageBlocked()) return { reason: 'storage' };
+    const session = this.session(task.sessionId);
+    if (!this.sessionReady(task, session)) {
+      const holders = new Set(
+        (this.store.activeDispatches(session.id) as Dispatch[]).map((d) => d.taskId),
+      );
+      const flight = this.flights.get(session.id);
+      if (flight) holders.add(flight.taskId);
+      if (
+        session.taskId &&
+        session.taskId !== task.id &&
+        !terminalTasks.has(this.task(session.taskId).status)
+      )
+        holders.add(session.taskId);
+      return { reason: 'session_busy', sessionId: session.id, taskIds: [...holders] };
+    }
+    const writers = this.writeConflictHolders(task, active());
+    if (writers.length) return { reason: 'write_conflict', taskIds: writers };
+    return { reason: 'scheduling' };
   }
   private session(id: string): SessionSnapshot {
     return this.store.require('sessions', id);
@@ -1724,21 +1828,37 @@ class LocalEngine implements Engine {
           fail('INVALID_RUNTIME_CONTRACT', 'Usage observation has no matching durable dispatch');
         const existing = this.store.get<UsageRecord>('usage', value.id);
         if (existing) {
-          if (digest(existing) !== digest(value))
+          if (digest(reportedUsage(existing)) !== digest(value))
             fail(
               'IDEMPOTENCY_CONFLICT',
               'Usage identity was already recorded with different content',
             );
           return;
         }
-        this.store.put('usage', value.id, value);
-        this.accounting.record(value, dispatch, this.time());
+        // SPEC-0028 E01: the record says whose it is and when, so that a reader needs no join.
+        const task = this.task(flight.taskId);
+        const record: UsageRecord = {
+          ...value,
+          sessionId: flight.sessionId,
+          model: this.session(flight.sessionId).model,
+          rootTaskId: task.rootTaskId ?? task.id,
+          recordedAt: this.time(),
+        };
+        this.store.put('usage', record.id, record);
+        this.accounting.record(record, dispatch, this.time());
+        // E02: the counts and the model travel with the event; raw stays in the record.
         this.store.event(
           'usage.recorded',
           {
-            usageRecordId: value.id,
-            dispatchId: value.dispatchId,
+            usageRecordId: record.id,
+            dispatchId: record.dispatchId,
             provider,
+            inputTokens: record.inputTokens,
+            cachedInputTokens: record.cachedInputTokens,
+            cacheWriteInputTokens: record.cacheWriteInputTokens,
+            outputTokens: record.outputTokens,
+            model: record.model!,
+            rootTaskId: record.rootTaskId!,
           },
           { taskId: flight.taskId, sessionId: flight.sessionId },
         );
@@ -1867,6 +1987,9 @@ class LocalEngine implements Engine {
     );
     this.verificationRules = loaded.rules;
     this.runtimeRuleKeys = loaded.runtime;
+    this.retiredRules = new Map(
+      loaded.retired.map((rule) => [ruleKey(rule.id, rule.version), rule]),
+    );
   }
   private recover(): void {
     this.store.transaction(() => {
@@ -2268,6 +2391,7 @@ class LocalEngine implements Engine {
         this.storage = new StorageGovernance(this.store, policy);
         this.accounting = new CostLedger(this.store, this.config);
         this.loadRules();
+        await this.storage.reserve();
       }
       return record;
     }
@@ -2316,7 +2440,10 @@ class LocalEngine implements Engine {
     }
     // SPEC-0027 R03: the reads that a read-only view answers go through the same code.
     if (SHARED_READS.has(method))
-      return readCall(this.store, method, p, { expireHandoffs: () => this.tryExpireHandoffs() });
+      return readCall(this.store, method, p, {
+        expireHandoffs: () => this.tryExpireHandoffs(),
+        blockedBy: (tasks) => this.addBlockers(tasks),
+      });
     switch (method) {
       case 'storage.status':
         fields(p, []);
@@ -2355,7 +2482,11 @@ class LocalEngine implements Engine {
             }
           },
         );
-        if (method === 'storage.configure') this.storage.reload();
+        if (method === 'storage.configure') {
+          await this.storage.reload();
+          // A new policy can end backpressure, which may free a queued task (SPEC-0028 B02).
+          this.kick();
+        }
         return operation;
       }
       case 'storage.gc': {
@@ -2432,6 +2563,10 @@ class LocalEngine implements Engine {
               taskList: true,
               contextCheck: true,
               labels: true,
+              taskQueries: true,
+              queueReasons: true,
+              pauseClose: true,
+              ruleRetirement: true,
             },
             providers: [...this.adapters.keys()],
             lifecycle: { version: 1, reconcile: 'owner-attestation', durableDeadlines: true },
@@ -2495,6 +2630,11 @@ class LocalEngine implements Engine {
                     const rule = this.verificationRules.find(
                       (r) => r.id === ref.id && r.version === ref.version,
                     );
+                    if (!rule && this.retiredRules.has(ruleKey(ref.id, ref.version)))
+                      fail('RULE_RETIRED', 'Verification rule id/version was retired', {
+                        id: ref.id,
+                        version: ref.version,
+                      });
                     if (!rule)
                       fail(
                         'UNKNOWN_VERIFICATION_RULE',
@@ -2570,6 +2710,12 @@ class LocalEngine implements Engine {
             );
             if (existing && existing.digest !== rule.digest)
               fail('CONFLICT', 'This rule id/version is registered with different content');
+            // A version has one life: a changed rule takes a new version (SPEC-0028 U03).
+            if (!existing && this.retiredRules.has(key))
+              fail('RULE_RETIRED', 'This rule id/version was retired; register a new version', {
+                id: rule.id,
+                version: rule.version,
+              });
             if (existing) op.status = 'noop';
             else {
               if (this.verificationRules.length >= 1000)
@@ -2648,14 +2794,80 @@ class LocalEngine implements Engine {
           },
         );
       }
-      case 'rules.list':
-        fields(p, []);
+      case 'rules.retire': {
+        fields(p, ['id', 'version', 'idempotencyKey']);
+        if (!context.owner || context.runtimeActor)
+          fail('UNAUTHORIZED', 'Only the host owner can retire verification rules');
+        const id = string(p.id, 'id', 128);
+        const version = string(p.version, 'version', 128);
+        const key = ruleKey(id, version);
+        let retired: RetiredVerificationRule | undefined;
+        const op = this.operation(
+          method,
+          'local',
+          string(p.idempotencyKey, 'idempotencyKey'),
+          { id, version },
+          (op) => {
+            op.targetId = key;
+            const rule = this.verificationRules.find((r) => r.id === id && r.version === version);
+            if (rule && !this.runtimeRuleKeys.has(key))
+              fail(
+                'VALIDATION_ERROR',
+                'A rule of the configuration cannot be retired; remove it from the configuration',
+              );
+            if (!rule) {
+              const prior = this.retiredRules.get(key);
+              if (!prior)
+                fail('UNKNOWN_VERIFICATION_RULE', 'Verification rule id/version is not registered');
+              op.status = 'noop';
+              op.result = { id, version, retiredAt: prior.retiredAt };
+              return;
+            }
+            // Rows written by rc.8 have other keys; the row is found by its content (SPEC-0014 W05).
+            const row = this.store.db
+              .prepare(
+                "SELECT id FROM verification_rules WHERE json_extract(data,'$.id')=? AND json_extract(data,'$.version')=?",
+              )
+              .get(id, version) as { id: string };
+            retired = { ...rule, retiredAt: this.time() };
+            this.store.put('verification_rules', row.id, retired);
+            op.result = { id, version, retiredAt: retired.retiredAt };
+            this.store.event(
+              'rule.retired',
+              { id, version, retiredAt: retired.retiredAt },
+              { operationId: op.id },
+            );
+          },
+        );
+        // Admission stops seeing the rule once its retirement committed (SPEC-0028 U01).
+        if (retired) {
+          this.verificationRules = this.verificationRules.filter(
+            (r) => !(r.id === id && r.version === version),
+          );
+          this.runtimeRuleKeys.delete(key);
+          this.retiredRules.set(key, retired);
+        }
+        return op;
+      }
+      case 'rules.list': {
+        fields(p, ['includeRetired']);
+        if (p.includeRetired !== undefined && typeof p.includeRetired !== 'boolean')
+          fail('VALIDATION_ERROR', 'includeRetired must be a boolean');
         return {
-          rules: this.verificationRules.map((rule) => ({
-            ...rule,
-            source: this.runtimeRuleKeys.has(ruleKey(rule.id, rule.version)) ? 'runtime' : 'config',
-          })),
+          rules: [
+            ...this.verificationRules.map((rule) => ({
+              ...rule,
+              source: this.runtimeRuleKeys.has(ruleKey(rule.id, rule.version))
+                ? 'runtime'
+                : 'config',
+            })),
+            // SPEC-0028 U04: retired rules only on request, after the effective ones.
+            ...(p.includeRetired
+              ? [...this.retiredRules.values()].map((rule) => ({ ...rule, source: 'runtime' }))
+              : []),
+          ],
         };
+      }
       case 'sessions.inspect': {
         fields(p, ['sessionId', 'timeoutMs', 'limit']);
         const session = this.session(string(p.sessionId, 'sessionId', 128));
@@ -4002,7 +4214,9 @@ class LocalEngine implements Engine {
                 this.clock.monotonicNow(),
             );
             const ready =
-              canDispatch && this.sessionReady(task, session) && !this.writeConflict(task);
+              canDispatch &&
+              this.sessionReady(task, session) &&
+              !this.writeConflictHolders(task).length;
             if (remaining > 0 || (task.routing.maxQueueWaitMs === 0 && ready)) break;
             this.expireQueue(task);
             if (task.status === 'blocked') break;
@@ -4032,7 +4246,7 @@ class LocalEngine implements Engine {
   }
   private start(task: TaskSnapshot, session: SessionSnapshot): boolean {
     this.store.assertWritable();
-    if (this.controlPlane?.hasPendingRollover || this.storage.status().backpressured) return false;
+    if (this.storageBlocked()) return false;
     const dependencyStatus = this.dependencyState(task.spec);
     if (dependencyStatus !== 'queued') {
       this.store.transaction(() => {
@@ -4057,7 +4271,7 @@ class LocalEngine implements Engine {
       });
       return false;
     }
-    if (this.writeConflict(task)) return false;
+    if (this.writeConflictHolders(task).length) return false;
     const moneyPolicy = this.accounting.policy(task);
     if (moneyPolicy.reason) {
       this.store.transaction(() => {
@@ -4573,7 +4787,7 @@ class LocalEngine implements Engine {
             );
             this.store.event(
               'verification.completed',
-              { passed: !!passed, evidenceRef, rules: (verification ?? []).map(ruleSummary) },
+              { passed: !!passed, evidenceRef, rules: completedRules(verification ?? []) },
               { taskId: task.id, sessionId: current.id },
             );
             this.taskEvent(task);
@@ -4589,7 +4803,7 @@ class LocalEngine implements Engine {
           this.saveTask(
             task,
             flight.intent === 'cancel' ? 'cancelled' : 'paused',
-            'runtime_interrupted',
+            flight.pausedByClose ? 'owner_shutdown' : 'runtime_interrupted',
           );
           this.taskEvent(task);
         } else {
@@ -4704,7 +4918,8 @@ class LocalEngine implements Engine {
       return { status: 'closed', operationId: this.shutdownId };
     }
     const mode = options.mode ?? 'drain';
-    if (!['drain', 'interrupt'].includes(mode)) fail('VALIDATION_ERROR', 'Unknown close mode');
+    if (!['drain', 'interrupt', 'pause'].includes(mode))
+      fail('VALIDATION_ERROR', 'Unknown close mode');
     const timeout = integer(options.timeoutMs ?? 30000, 'timeoutMs', 0, 3600000);
     const interruptWait =
       options.interruptWaitMs === undefined
@@ -4748,7 +4963,7 @@ class LocalEngine implements Engine {
         kind: 'shutdown',
         expectedGeneration: null,
         expectedDispatchId: null,
-        mayHaveBeenSent: mode === 'interrupt',
+        mayHaveBeenSent: mode !== 'drain',
         lastEvidence: `waiting_${mode}`,
       };
       this.store.saveOperation(op);
@@ -4759,9 +4974,14 @@ class LocalEngine implements Engine {
       );
     });
     const deadline = performance.now() + timeout;
-    if (mode === 'interrupt') {
+    if (mode === 'interrupt' || mode === 'pause') {
       for (const flight of this.flights.values()) {
-        if (!flight.intent) flight.intent = 'shutdown';
+        if (!flight.intent) {
+          flight.intent = 'shutdown';
+          // Marked before the abort, so the terminal chooses its reason once (SPEC-0028 S02).
+          // A flight that another request already interrupts keeps that request's reason.
+          if (mode === 'pause') flight.pausedByClose = true;
+        }
         flight.controller.abort();
       }
       // Each runtime may still report its interrupted terminal and stop proof (SPEC-0022 C01, C02):
@@ -4798,6 +5018,8 @@ class LocalEngine implements Engine {
     } finally {
       if (timer) clearTimeout(timer);
     }
+    // A reserve that storage.configure or a store switch is writing finishes first (W02).
+    await this.storage.settled();
     if (!this.closed) {
       const op = this.store.operation(this.shutdownId);
       op.status = 'completed';
@@ -4839,6 +5061,7 @@ class LocalEngine implements Engine {
     this.queueTimers.clear();
     this.handoffTimer?.();
     if (this.storageTimer) clearInterval(this.storageTimer);
+    await this.storage.settled();
     this.store.close();
     this.controlPlane?.close();
     this.closed = true;
@@ -4892,5 +5115,7 @@ function frozenCopy(value: { [key: string]: Json } | undefined): { [key: string]
   return freeze(structuredClone(value)) as { [key: string]: Json };
 }
 export async function createEngine(config: EngineConfig): Promise<Engine> {
-  return new LocalEngine(config);
+  const engine = new LocalEngine(config);
+  await engine.writeReserve();
+  return engine;
 }

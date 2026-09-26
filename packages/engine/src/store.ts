@@ -23,6 +23,7 @@ import type {
   Json,
   OperationSnapshot,
   TaskSnapshot,
+  UsageRecord,
 } from './types.ts';
 
 const TABLES = [
@@ -290,6 +291,10 @@ export class Store {
         );
         this.db.exec(
           "CREATE INDEX IF NOT EXISTS tasks_label ON tasks(json_extract(data,'$.spec.label'))",
+        );
+        // A root task's tree and a task's usage records (SPEC-0028 P04).
+        this.db.exec(
+          "CREATE INDEX IF NOT EXISTS tasks_root ON tasks(json_extract(data,'$.rootTaskId')); CREATE INDEX IF NOT EXISTS usage_task ON usage(json_extract(data,'$.taskId'));",
         );
         this.db.exec(
           "CREATE INDEX IF NOT EXISTS dispatches_task ON dispatches(json_extract(data, '$.taskId'))",
@@ -580,31 +585,79 @@ export class Store {
     rows.sort((a, b) => a.ordinal - b.ordinal);
     return rows.map((row) => JSON.parse(row.data) as TaskSnapshot);
   }
-  /** One creation-ordered page; `next` is the last returned rowid when more rows follow. */
+  /**
+   * One page in creation order, or newest first with `desc`; `next` is the last returned rowid when
+   * more rows follow. Without `after`, a page starts at the oldest, or with `desc` the newest, task.
+   */
   listTasks(
-    filter: { parentTaskId?: string; sessionId?: string; label?: string },
-    after: number,
+    filter: { parentTaskId?: string; sessionId?: string; label?: string; status?: string[] },
+    after: number | undefined,
     limit: number,
+    order: 'asc' | 'desc' = 'asc',
   ): { tasks: TaskSnapshot[]; next: number | null } {
-    const [where, args] =
-      filter.parentTaskId !== undefined
-        ? ["json_extract(data,'$.spec.parentTaskId')=? AND ", [filter.parentTaskId]]
-        : filter.sessionId !== undefined
-          ? ["json_extract(data,'$.sessionId')=? AND ", [filter.sessionId]]
-          : filter.label !== undefined
-            ? // The expression of tasks_label (SPEC-0027 L03).
-              ["json_extract(data,'$.spec.label')=? AND ", [filter.label]]
-            : ['', []];
+    const clauses: string[] = [];
+    const args: (string | number)[] = [];
+    // Each expression is that of an index: tasks_parent, tasks_session, tasks_label (SPEC-0027 L03)
+    // and tasks_status (SPEC-0028 P04).
+    if (filter.parentTaskId !== undefined) {
+      clauses.push("json_extract(data,'$.spec.parentTaskId')=?");
+      args.push(filter.parentTaskId);
+    } else if (filter.sessionId !== undefined) {
+      clauses.push("json_extract(data,'$.sessionId')=?");
+      args.push(filter.sessionId);
+    } else if (filter.label !== undefined) {
+      clauses.push("json_extract(data,'$.spec.label')=?");
+      args.push(filter.label);
+    }
+    if (filter.status !== undefined) {
+      clauses.push(`json_extract(data, '$.status') IN (${filter.status.map(() => '?').join(',')})`);
+      args.push(...filter.status);
+    }
+    if (after !== undefined || order === 'asc') {
+      clauses.push(order === 'desc' ? 'rowid<?' : 'rowid>?');
+      args.push(after ?? 0);
+    }
     const rows = this.db
       .prepare(
-        `SELECT rowid AS ordinal,data FROM tasks WHERE ${where}rowid>? ORDER BY rowid LIMIT ?`,
+        `SELECT rowid AS ordinal,data FROM tasks ${clauses.length ? `WHERE ${clauses.join(' AND ')}` : ''} ORDER BY rowid ${order === 'desc' ? 'DESC' : 'ASC'} LIMIT ?`,
       )
-      .all(...args, after, limit + 1) as { ordinal: number; data: string }[];
+      .all(...args, limit + 1) as { ordinal: number; data: string }[];
     const page = rows.slice(0, limit);
     return {
       tasks: page.map((row) => JSON.parse(row.data) as TaskSnapshot),
       next: rows.length > limit ? page[page.length - 1].ordinal : null,
     };
+  }
+  /** The tasks among `ids` that exist, by ID (SPEC-0028 P02). */
+  tasksById(ids: string[]): Map<string, TaskSnapshot> {
+    const rows = this.db
+      .prepare(`SELECT id,data FROM tasks WHERE id IN (${ids.map(() => '?').join(',')})`)
+      .all(...ids) as { id: string; data: string }[];
+    return new Map(rows.map((row) => [row.id, JSON.parse(row.data) as TaskSnapshot]));
+  }
+  /** A task's usage records in recording order, through usage_task (SPEC-0028 P04). */
+  taskUsage(taskId: string): UsageRecord[] {
+    return (
+      this.db
+        .prepare("SELECT data FROM usage WHERE json_extract(data,'$.taskId')=? ORDER BY rowid")
+        .all(taskId) as { data: string }[]
+    ).map((row) => JSON.parse(row.data) as UsageRecord);
+  }
+  /**
+   * The usage records of the tasks whose rootTaskId is `rootTaskId`, through tasks_root and
+   * usage_task (SPEC-0028 P03, P04).
+   */
+  treeUsage(rootTaskId: string): UsageRecord[] {
+    return (
+      this.db
+        .prepare(
+          // CROSS JOIN keeps tasks as the outer loop, and +t.id drops the column's text affinity,
+          // which would otherwise keep usage_task from matching: without both, SQLite scans every
+          // usage record and looks up its task.
+          "SELECT u.data AS data FROM tasks t CROSS JOIN usage u ON json_extract(u.data,'$.taskId')=+t.id WHERE json_extract(t.data,'$.rootTaskId')=? ORDER BY u.rowid",
+        )
+        .all(rootTaskId) as { data: string }[]
+    ).map((row) => JSON.parse(row.data) as UsageRecord);
   }
   listHandoffs(
     filter: { status?: string; targetSessionId?: string },

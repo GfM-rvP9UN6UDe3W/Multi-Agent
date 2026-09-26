@@ -41,10 +41,13 @@ import type {
   SessionSnapshot,
   SessionOpenSpec,
   RegisteredVerificationRule,
+  TaskGetManyResult,
+  TaskListQuery,
   TaskListResult,
   TaskSnapshot,
   TaskSpec,
   UsageRecord,
+  UsageSummary,
   VerificationRule,
   WorkflowFeature,
   ContextPlan,
@@ -456,21 +459,21 @@ export class Orchestrator {
     },
     get: (taskId: string, options?: RequestOptions) =>
       this.call<TaskSnapshot>('tasks.get', { taskId }, options),
-    /** Creation-ordered page; set at most one of parentTaskId, sessionId and label. */
-    list: async (
-      query: {
-        parentTaskId?: string;
-        sessionId?: string;
-        /** SPEC-0027 L03: the tasks with this label. */
-        label?: string;
-        limit?: number;
-        afterCursor?: string;
-      } = {},
-      options?: RequestOptions,
-    ) => {
+    /**
+     * A page in creation order, or newest first with `order: 'desc'`; set at most one of
+     * parentTaskId, sessionId and label, and optionally `status` (SPEC-0028 P01).
+     */
+    list: async (query: TaskListQuery = {}, options?: RequestOptions) => {
       this.requireWorkflow('taskList');
       if (query.label !== undefined) this.requireWorkflow('labels');
+      if (query.status !== undefined || query.order !== undefined)
+        this.requireWorkflow('taskQueries');
       return this.call<TaskListResult>('tasks.list', query, options);
+    },
+    /** 1 to 100 tasks by ID, in the order requested, and the IDs not found (SPEC-0028 P02). */
+    getMany: async (taskIds: string[], options?: RequestOptions) => {
+      this.requireWorkflow('taskQueries');
+      return this.call<TaskGetManyResult>('tasks.getMany', { taskIds }, options);
     },
     resume: (taskId: string, options?: MutationOptions) =>
       this.operation('tasks.resume', taskId, { taskId }, options),
@@ -665,9 +668,29 @@ export class Orchestrator {
       this.requireWorkflow('runtimeRules');
       return this.operation('rules.register', 'local', { rule }, options);
     },
-    list: async (options?: RequestOptions) => {
+    /**
+     * Owner only; retires a rule registered at runtime, so that tasks admitted afterwards cannot
+     * name it and it no longer counts toward the effective rules (SPEC-0028 U01).
+     */
+    retire: async (rule: { id: string; version: string }, options?: MutationOptions) => {
+      this.requireWorkflow('ruleRetirement');
+      return this.operation(
+        'rules.retire',
+        'local',
+        { id: rule.id, version: rule.version },
+        options,
+      );
+    },
+    /** The effective rules; with `includeRetired`, the retired ones after them (SPEC-0028 U04). */
+    list: async (options: RequestOptions & { includeRetired?: boolean } = {}) => {
+      const { includeRetired, ...request } = options;
       this.requireWorkflow('runtimeRules');
-      return this.call<{ rules: RegisteredVerificationRule[] }>('rules.list', {}, options);
+      if (includeRetired !== undefined) this.requireWorkflow('ruleRetirement');
+      return this.call<{ rules: RegisteredVerificationRule[] }>(
+        'rules.list',
+        includeRetired === undefined ? {} : { includeRetired },
+        request,
+      );
     },
   };
   readonly usage = {
@@ -679,6 +702,11 @@ export class Orchestrator {
         typeof query === 'string' ? { taskId: query } : query,
         options,
       ),
+    /** Token totals of a root task and every task under it, by model (SPEC-0028 P03). */
+    summary: async (rootTaskId: string, options?: RequestOptions) => {
+      this.requireWorkflow('taskQueries');
+      return this.call<UsageSummary>('usage.summary', { rootTaskId }, options);
+    },
   };
   readonly stores = {
     rollover: (options?: MutationOptions) =>
@@ -781,6 +809,8 @@ export class Orchestrator {
       this.caller.disconnect();
       return;
     }
+    // Refused before sending, and the client stays open (SPEC-0028 S04).
+    if (options.mode === 'pause') this.requireWorkflow('pauseClose');
     try {
       const params = {
         expectedStoreId: this.info.storeId,
@@ -941,16 +971,10 @@ export class ReadOnlyOrchestrator {
   readonly tasks = {
     get: (taskId: string, options?: RequestOptions) =>
       this.call<TaskSnapshot>('tasks.get', { taskId }, options),
-    list: (
-      query: {
-        parentTaskId?: string;
-        sessionId?: string;
-        label?: string;
-        limit?: number;
-        afterCursor?: string;
-      } = {},
-      options?: RequestOptions,
-    ) => this.call<TaskListResult>('tasks.list', query, options),
+    list: (query: TaskListQuery = {}, options?: RequestOptions) =>
+      this.call<TaskListResult>('tasks.list', query, options),
+    getMany: (taskIds: string[], options?: RequestOptions) =>
+      this.call<TaskGetManyResult>('tasks.getMany', { taskIds }, options),
   };
   readonly sessions = {
     get: (sessionId: string, options?: RequestOptions) =>
@@ -965,6 +989,8 @@ export class ReadOnlyOrchestrator {
         typeof query === 'string' ? { taskId: query } : query,
         options,
       ),
+    summary: (rootTaskId: string, options?: RequestOptions) =>
+      this.call<UsageSummary>('usage.summary', { rootTaskId }, options),
   };
   readonly events = {
     read: (options: Omit<EventOptions, 'signal' | 'timeoutMs'> = {}, request?: RequestOptions) =>
@@ -1009,8 +1035,14 @@ export class ReadOnlyOrchestrator {
   };
   readonly rules = {
     /** Only the rules registered at runtime; a configuration's rules are unknown offline. */
-    list: (options?: RequestOptions) =>
-      this.call<{ rules: RegisteredVerificationRule[] }>('rules.list', {}, options),
+    list: (options: RequestOptions & { includeRetired?: boolean } = {}) => {
+      const { includeRetired, ...request } = options;
+      return this.call<{ rules: RegisteredVerificationRule[] }>(
+        'rules.list',
+        includeRetired === undefined ? {} : { includeRetired },
+        request,
+      );
+    },
   };
   async close(): Promise<void> {
     if (this.closed) return;

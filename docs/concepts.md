@@ -42,6 +42,12 @@ Task acceptance is either human review of the result or frozen verification comm
 
 A new dispatch starts only when `A < maxActiveSessions` (default 2) and `Q + R < maxQuarantinedDispatches` (default 32). Releasing A does not reduce Q; only reconciling the outcome does.
 
+## Queue reasons
+
+**Plainly:** why a task that is ready to go has not started yet.
+
+A queued task, or one that waits for its dependencies, carries `blockedBy` when it is read: the first condition that keeps the scheduler from dispatching it, such as `capacity` (every execution slot is held), `session_busy` (another task holds its session) or `write_conflict` (another task writes the same paths), with the tasks it waits for. The engine computes it from the scheduler's own checks at each read and stores nothing ([SPEC-0028](specs/0028-host-queries-and-lifecycle.md) B).
+
 ## Quarantine and `outcome_unknown`
 
 **Plainly:** when the engine cannot tell whether an attempt did its work, it sets that attempt aside instead of guessing.
@@ -112,4 +118,4 @@ The routing layer asks a judge you choose, a model or plain rules, and proposes 
 
 **Plainly:** a durable record of tokens each attempt used.
 
-Every usage observation from a runtime is stored with one `usage.recorded` event in the same transaction. Missing values stay unknown; cost estimates from registered prices are estimates, not bills.
+Every usage observation from a runtime is stored with one `usage.recorded` event in the same transaction. The record names its session, model and root task, and the event carries the token counts, so that `usage.summary` and a host's own totals need no other read. Missing values stay unknown; cost estimates from registered prices are estimates, not bills.

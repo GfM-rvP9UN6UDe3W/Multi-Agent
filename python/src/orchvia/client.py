@@ -83,15 +83,24 @@ class _Tasks:
         return await self._client._call("tasks.get", {"taskId": task_id})
 
     async def list(self, *, parent_task_id: str | None = None, session_id: str | None = None,
-                   label: str | None = None, limit: int | None = None,
-                   after_cursor: str | None = None) -> Snapshot:
-        """A creation-ordered page; set at most one of parent_task_id, session_id and label."""
+                   label: str | None = None, status: Sequence[str] | None = None, order: str | None = None,
+                   limit: int | None = None, after_cursor: str | None = None) -> Snapshot:
+        """A page in creation order, or newest first with order="desc"; set at most one of
+        parent_task_id, session_id and label, and optionally status (SPEC-0028 P01)."""
         await self._client._require_workflow("task_list")
         if label is not None:
             await self._client._require_workflow("labels")
+        if status is not None or order is not None:
+            await self._client._require_workflow("task_queries")
         params = {"parentTaskId": parent_task_id, "sessionId": session_id, "label": label,
+                  "status": None if status is None else list(status), "order": order,
                   "limit": limit, "afterCursor": after_cursor}
         return await self._client._call("tasks.list", {k: v for k, v in params.items() if v is not None})
+
+    async def get_many(self, task_ids: Sequence[str]) -> Snapshot:
+        """1 to 100 tasks by ID, in the order requested, and the IDs not found (SPEC-0028 P02)."""
+        await self._client._require_workflow("task_queries")
+        return await self._client._call("tasks.getMany", {"taskIds": list(task_ids)})
 
     async def resume(self, task_id: str, *, idempotency_key: str | None = None) -> OperationHandle:
         return OperationHandle(self._client, await self._client._mutate("tasks.resume", {"taskId": task_id}, idempotency_key))
@@ -282,9 +291,19 @@ class _Rules:
         return OperationHandle(self._client, await self._client._mutate(
             "rules.register", {"rule": to_wire(rule)}, idempotency_key))
 
-    async def list(self) -> Snapshot:
+    async def retire(self, rule_id: str, version: str, *, idempotency_key: str | None = None) -> OperationHandle:
+        """Owner only; retires a rule registered at runtime (SPEC-0028 U01)."""
+        await self._client._require_workflow("rule_retirement")
+        return OperationHandle(self._client, await self._client._mutate(
+            "rules.retire", {"id": rule_id, "version": version}, idempotency_key))
+
+    async def list(self, *, include_retired: bool | None = None) -> Snapshot:
+        """The effective rules; with include_retired, the retired ones after them (SPEC-0028 U04)."""
         await self._client._require_workflow("runtime_rules")
-        return await self._client._call("rules.list", {})
+        if include_retired is None:
+            return await self._client._call("rules.list", {})
+        await self._client._require_workflow("rule_retirement")
+        return await self._client._call("rules.list", {"includeRetired": include_retired})
 
 
 class _Usage:
@@ -296,6 +315,12 @@ class _Usage:
 
     async def get_record(self, usage_record_id: str) -> Snapshot:
         return await self._client._call("usage.getRecord", {"usageRecordId": usage_record_id})
+
+    async def summary(self, root_task_id: str) -> Snapshot:
+        """Token totals of a root task and every task under it, by model (SPEC-0028 P03)."""
+        await self._client._require_workflow("task_queries")
+        result = await self._client._call("usage.summary", {"rootTaskId": root_task_id})
+        return Snapshot({**result, "totals": snapshot(result["totals"])})
 
 
 class _Costs:
@@ -539,6 +564,9 @@ class Orchestrator:
     async def _require_workflow(self, feature: str) -> None:
         """Fails before sending when the host did not advertise a SPEC-0014 workflow feature."""
         await self.start()
+        self._check_workflow(feature)
+
+    def _check_workflow(self, feature: str) -> None:
         assert self.info is not None
         workflow = self.info.capabilities.get("workflow")
         if not isinstance(workflow, Mapping) or workflow.get("version") != 1 or workflow.get(feature) is not True:
@@ -711,8 +739,12 @@ class Orchestrator:
                 self._closed = True
                 return None
             mode = mode or "drain"
-            if mode not in {"drain", "interrupt"}:
-                raise OrchestrationError("VALIDATION_ERROR", "close mode must be drain or interrupt")
+            if mode not in {"drain", "interrupt", "pause"}:
+                raise OrchestrationError("VALIDATION_ERROR", "close mode must be drain, interrupt or pause")
+            if mode == "pause":
+                # Refused before sending, and the client stays open (SPEC-0028 S04). The lock this
+                # method holds is the one start() takes, so the started client's info is checked.
+                self._check_workflow("pause_close")
             duration = self._close_timeout if timeout is None else _duration(timeout, "timeout", zero=True)
             operation_id = operation_id or self._shutdown_operation_id
             params: dict[str, Any] = {"mode": mode, "timeoutMs": math.ceil(duration * 1000), "expectedStoreId": self.info.store_id}

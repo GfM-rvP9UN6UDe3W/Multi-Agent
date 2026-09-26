@@ -77,6 +77,7 @@ Each specification has a matching TDD record of observed failures before the cha
 | [SPEC-0025](specs/0025-operability-and-sdk-errors.md) | A crashed host's socket, in-process errors and a failed scheduler |
 | [SPEC-0026](specs/0026-claude-mcp-without-zod.md) | A Claude MCP server without Zod |
 | [SPEC-0027](specs/0027-read-only-access-and-host-corrections.md) | Read-only access, host labels and host-facing corrections (0.1.4) |
+| [SPEC-0028](specs/0028-host-queries-and-lifecycle.md) | Task queries, queue reasons, a pausing close, rule retirement and a non-blocking reserve |
 
 ## Claude and Codex baselines
 

@@ -48,6 +48,9 @@ class Fixture:
             capabilities = {"storeNamespaces": {"version": 1}, "fake": {"resume": True, "interrupt": True}}
             if self.mode == "fork-only":
                 capabilities["sessionLifecycle"] = {"version": 1, "fork": True}
+            if self.mode == "workflow-0.1.4":
+                # The workflow features of 0.1.4, before SPEC-0028.
+                capabilities["workflow"] = {"version": 1, "taskList": True, "runtimeRules": True, "labels": True}
             if self.mode.startswith("lifecycle"):
                 lifecycle = {"version": 1, "reconcile": "owner-attestation", "durableDeadlines": True}
                 overrides = {

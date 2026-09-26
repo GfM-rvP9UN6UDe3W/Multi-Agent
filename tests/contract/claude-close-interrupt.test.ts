@@ -230,11 +230,16 @@ async function withSlowDatabaseClose<T>(ms: number, run: () => Promise<T>): Prom
 }
 
 /**
- * Closes with mode interrupt while a turn ignores the interrupt. Returns the time of the whole close,
- * the time until the engine started to close the adapters, which ends the wait of SPEC-0022 C02,
- * and the task.
+ * Closes with mode interrupt, or `mode`, while a turn ignores the interrupt. Returns the time of the
+ * whole close, the time until the engine started to close the adapters, which ends the wait of
+ * SPEC-0022 C02, and the task.
  */
-async function closeUnanswered(timeoutMs: number, interruptMs?: number, slowDatabaseCloseMs = 0) {
+async function closeUnanswered(
+  timeoutMs: number,
+  interruptMs?: number,
+  slowDatabaseCloseMs = 0,
+  mode: 'interrupt' | 'pause' = 'interrupt',
+) {
   const { root, open } = await fixture();
   try {
     const claude = interruptibleClaude({ answers: false });
@@ -244,8 +249,13 @@ async function closeUnanswered(timeoutMs: number, interruptMs?: number, slowData
     });
     const task = await startTurn(orch, claude.state);
     const begin = performance.now();
-    const close = () => orch.close({ mode: 'interrupt', timeoutMs });
-    await (slowDatabaseCloseMs ? withSlowDatabaseClose(slowDatabaseCloseMs, close) : close());
+    const close = () => orch.close({ mode, timeoutMs });
+    try {
+      await (slowDatabaseCloseMs ? withSlowDatabaseClose(slowDatabaseCloseMs, close) : close());
+    } catch (error) {
+      await orch.close({ mode: 'interrupt', timeoutMs }).catch(() => {});
+      throw error;
+    }
     const elapsed = performance.now() - begin;
     assert.ok(adapterCloseAt !== undefined, 'the engine closed the adapter');
     const reopened = await open(interruptibleClaude().config);
@@ -287,4 +297,90 @@ test('0022-C02 a slow database close does not count against the half-budget wait
   assert.ok(elapsed >= 1_100, `the database close was not slowed: closed after ${elapsed} ms`);
   assert.ok(waited >= 490, `closed the adapters after ${waited} ms, before half of the budget`);
   assert.ok(waited < 1_000, `closed the adapters after ${waited} ms`);
+});
+
+// SPEC-0028 S: a pausing close interrupts as mode interrupt does, and pauses what it interrupted as
+// owner_shutdown.
+test('0028-S01 close({mode:"pause"}) pauses a running Claude turn as owner_shutdown with the host stop proof', async () => {
+  const { root, open } = await fixture();
+  try {
+    const claude = interruptibleClaude();
+    const orch = await open(claude.config);
+    const task = await startTurn(orch, claude.state);
+    try {
+      await orch.close({ mode: 'pause', timeoutMs: 10_000 });
+    } finally {
+      await orch.close({ mode: 'interrupt', timeoutMs: 10_000 }).catch(() => {});
+    }
+
+    const reopened = await open(interruptibleClaude().config);
+    try {
+      const after = await reopened.tasks.get(task.id);
+      const session = await reopened.sessions.get(after.sessionId!);
+      assert.equal(claude.state.interrupts, 1, 'the turn was interrupted once');
+      assert.deepEqual(
+        {
+          status: after.status,
+          reason: after.reason,
+          observed: claude.state.observed > 0,
+          session: session.status,
+          quarantined: session.execution?.quarantined ?? false,
+        },
+        {
+          status: 'paused',
+          reason: 'owner_shutdown',
+          observed: true,
+          session: 'paused',
+          quarantined: false,
+        },
+      );
+    } finally {
+      await reopened.close();
+    }
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('0028-S02 a turn that does not answer a pausing close keeps outcome_unknown', async () => {
+  const { interrupts, task } = await closeUnanswered(10_000, 300, 0, 'pause');
+  assert.equal(interrupts, 1);
+  assert.equal(task.status, 'blocked');
+  assert.match(task.reason ?? '', /^outcome_unknown/);
+});
+
+test('0028-S02 a turn that a session pause interrupted first keeps runtime_interrupted', async () => {
+  const { root, open } = await fixture();
+  try {
+    const claude = interruptibleClaude();
+    const orch = await open(claude.config);
+    const task = await startTurn(orch, claude.state);
+    const running = await orch.tasks.get(task.id);
+    const session = await orch.sessions.get(running.sessionId!);
+    const pause = await orch.sessions.control(
+      {
+        sessionId: session.id,
+        expectedGeneration: session.generation,
+        expectedRevision: session.revision,
+        expectedDispatchId: session.activeDispatchId,
+        expectedState: session.status,
+      },
+      { action: 'pause', mode: 'interrupt' },
+    );
+    await pause.wait({ timeoutMs: 10_000 });
+    try {
+      await orch.close({ mode: 'pause', timeoutMs: 10_000 });
+    } finally {
+      await orch.close({ mode: 'interrupt', timeoutMs: 10_000 }).catch(() => {});
+    }
+    const reopened = await open(interruptibleClaude().config);
+    try {
+      const after = await reopened.tasks.get(task.id);
+      assert.deepEqual([after.status, after.reason], ['paused', 'runtime_interrupted']);
+    } finally {
+      await reopened.close();
+    }
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
 });

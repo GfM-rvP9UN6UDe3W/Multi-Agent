@@ -147,6 +147,49 @@ export interface TaskSnapshot {
   revisionRequest?: { approvalId: string; comment: string };
   /** Set once a dispatch that carried the dependency results returned a result. */
   dependencyResultsDelivered?: boolean;
+  /**
+   * Why a queued task, or a task that waits for its dependencies, waits. Computed by the engine
+   * when the task is read; never stored, and absent from a read-only view (SPEC-0028 B).
+   */
+  blockedBy?: TaskBlocker;
+}
+/** The first condition that keeps the scheduler from dispatching a task (SPEC-0028 B01). */
+export type TaskBlockReason =
+  | 'scheduler_failed'
+  | 'host_stopping'
+  | 'capacity'
+  | 'quarantine_capacity'
+  | 'resource_cleanup'
+  | 'execution_conflict'
+  | 'storage'
+  | 'session_busy'
+  | 'write_conflict'
+  | 'scheduling'
+  | 'dependency';
+export interface TaskBlocker {
+  reason: TaskBlockReason;
+  /** The tasks that hold what this task waits for, or its unfinished dependencies. */
+  taskIds?: string[];
+  /** The session that `session_busy` waits for. */
+  sessionId?: string;
+}
+/** The query of `tasks.list`; set at most one of parentTaskId, sessionId and label. */
+export type TaskListQuery = {
+  parentTaskId?: string;
+  sessionId?: string;
+  /** SPEC-0027 L03: the tasks with this label. */
+  label?: string;
+  /** SPEC-0028 P01: 1 to 10 distinct statuses, alone or with one of the filters above. */
+  status?: TaskStatus[];
+  /** SPEC-0028 P01: `desc` starts with the newest task; the default is `asc`. */
+  order?: 'asc' | 'desc';
+  limit?: number;
+  afterCursor?: string;
+};
+/** The result of `tasks.getMany`, each list in the order requested (SPEC-0028 P02). */
+export interface TaskGetManyResult {
+  tasks: TaskSnapshot[];
+  missing: string[];
 }
 export interface TaskListResult {
   tasks: TaskSnapshot[];
@@ -158,6 +201,8 @@ export interface HandoffListResult {
 }
 export interface RegisteredVerificationRule extends FrozenVerificationRule {
   source: 'config' | 'runtime';
+  /** Set on a retired rule, which `rules.list` returns only with `includeRetired` (SPEC-0028 U). */
+  retiredAt?: string;
 }
 /** What `tasks.create` accepts; task snapshots hold the completed `TaskSpec` (SPEC-0027 T01). */
 export interface TaskSpecInput extends Omit<TaskSpec, 'contextPlan'> {
@@ -303,7 +348,15 @@ export type WorkflowFeature =
   /** SPEC-0020 `context.checkRefs`. */
   | 'contextCheck'
   /** SPEC-0027 L01 `label` and `metadata` on tasks and sessions. */
-  | 'labels';
+  | 'labels'
+  /** SPEC-0028 P: `tasks.list` status and order, `tasks.getMany` and `usage.summary`. */
+  | 'taskQueries'
+  /** SPEC-0028 B: `blockedBy` on waiting tasks. */
+  | 'queueReasons'
+  /** SPEC-0028 S: `close({ mode: 'pause' })`. */
+  | 'pauseClose'
+  /** SPEC-0028 U: `rules.retire` and `rules.list({ includeRetired })`. */
+  | 'ruleRetirement';
 /** A model's request that the host hand work to a session outside its subtree (SPEC-0014 H). */
 export interface HandoffRequest {
   handoffId: string;
@@ -564,6 +617,35 @@ export interface UsageRecord {
   cacheWriteInputTokens: number | null;
   outputTokens: number | null;
   raw: Json;
+  /** Written from SPEC-0028 E01 on; absent from earlier records. */
+  sessionId?: string;
+  /** The model of the dispatch's session (SPEC-0028 E01). */
+  model?: string;
+  rootTaskId?: string;
+  recordedAt?: string;
+}
+/** Token counts over a set of usage records (SPEC-0028 P03). */
+export interface UsageTotals {
+  records: number;
+  /** Each count is the sum over the records that report it. */
+  inputTokens: number;
+  cachedInputTokens: number;
+  cacheWriteInputTokens: number;
+  outputTokens: number;
+  /** Records whose input or output count is null. */
+  unknownRecords: number;
+}
+export interface UsageModelTotals extends UsageTotals {
+  provider: string;
+  /** Null when neither the record nor its dispatch's session names the model. */
+  model: string | null;
+}
+/** The result of `usage.summary`: a root task and every task under it (SPEC-0028 P03). */
+export interface UsageSummary {
+  rootTaskId: string;
+  byModel: UsageModelTotals[];
+  totals: UsageTotals;
+  completeness: 'reported' | 'unknown';
 }
 export type RuntimeBudgetCapabilities = {
   version: 2;
@@ -781,7 +863,11 @@ export interface SessionControlTarget {
   expectedState: SessionStatus;
 }
 export interface CloseOptions {
-  mode?: 'drain' | 'interrupt';
+  /**
+   * `pause` closes as `interrupt` does, and pauses the turns it interrupted with `owner_shutdown`
+   * (SPEC-0028 S01).
+   */
+  mode?: 'drain' | 'interrupt' | 'pause';
   timeoutMs?: number;
   operationId?: string;
 }
