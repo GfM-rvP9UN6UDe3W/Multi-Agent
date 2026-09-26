@@ -1,4 +1,4 @@
-// Generated from schemas/protocol.schema.json; SHA-256 6450d4a798f714b97a0d37c2ea174eece96088d7103732e3585aeaae8d866746. Do not edit.
+// Generated from schemas/protocol.schema.json; SHA-256 7ed691885c36c4278051fd3947051363a2d8822b9325f081b15b820c29b2de5f. Do not edit.
 // Structural types; validateWire enforces numeric and conditional constraints.
 export type RuntimeSpec = { provider: string; model: string };
 export type TaskSpec = {
@@ -53,6 +53,8 @@ export type TaskSnapshot = {
   revisionRequest?: { approvalId: string; comment: string };
   dependencyResultsDelivered?: boolean;
   blockedBy?: TaskBlocker;
+  deliveredAt?: string;
+  pausedByClose?: { operationId: string; wasRunning: boolean };
   [key: string]: unknown;
 };
 export type TaskBlocker = {
@@ -151,6 +153,14 @@ export type UsageSummary = {
   totals: UsageTotals;
   completeness: 'reported' | 'unknown';
 };
+export type UsageByTaskParams = { taskIds: Array<string> };
+export type UsageTaskTotals = {
+  taskId: string;
+  byModel: Array<UsageModelTotals>;
+  totals: UsageTotals;
+  completeness: 'reported' | 'unknown';
+};
+export type UsageByTaskResult = { tasks: Array<UsageTaskTotals>; missing: Array<string> };
 export type SessionStatus =
   | 'idle'
   | 'running'
@@ -755,5 +765,6 @@ export type WorkflowCapability = {
   queueReasons?: true;
   pauseClose?: true;
   ruleRetirement?: true;
+  usageByTask?: true;
   [key: string]: unknown;
 };

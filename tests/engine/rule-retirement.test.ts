@@ -193,14 +193,14 @@ test('0028-U02 a task admitted before its rule was retired verifies and retries 
   }
 });
 
-test('0028-U03 configured rules cannot be retired, and a retired version cannot be registered again', async () => {
+// SPEC-0029 C01 supersedes the half of U03 that refused the same content: it reactivates the rule.
+test('0028-U03 0029-C01 configured rules cannot be retired, and a retired version cannot be registered again with other content', async () => {
   const { root, config } = await setup('orch-rule-refuse-');
   const engine = await createEngine(config);
   try {
     await assert.rejects(retire(engine, '1'), { code: 'VALIDATION_ERROR' });
     await register(engine, rule('2'));
     await retire(engine, '2');
-    await assert.rejects(register(engine, rule('2')), { code: 'RULE_RETIRED' });
     await assert.rejects(register(engine, rule('2', { timeoutMs: 2000 })), {
       code: 'RULE_RETIRED',
     });

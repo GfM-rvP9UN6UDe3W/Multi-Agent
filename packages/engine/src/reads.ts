@@ -19,6 +19,7 @@ import type {
   TaskListResult,
   TaskSnapshot,
   TaskStatus,
+  UsageByTaskResult,
   UsageModelTotals,
   UsageRecord,
   UsageSummary,
@@ -117,20 +118,12 @@ function totals(records: UsageRecord[]): UsageTotals {
   };
 }
 /**
- * Token totals of a root task and of every task whose rootTaskId names it, per provider and model
- * (SPEC-0028 P03). A record written before E01 has no model and takes its dispatch's session's.
+ * The model of each record: its own, or for a record written before SPEC-0028 E01, the model of
+ * its dispatch's session, or null once either was collected. One resolver serves one read.
  */
-function usageSummary(store: Store, rootTaskId: string): UsageSummary {
-  const root = store.require<TaskSnapshot>('tasks', rootTaskId);
-  if (root.spec.parentTaskId !== undefined)
-    fail('VALIDATION_ERROR', 'usage.summary needs a root task; this task has a parent', {
-      rootTaskId: root.rootTaskId ?? null,
-    });
-  const records = store.treeUsage(rootTaskId);
-  // A root task written without rootTaskId still counts its own records.
-  if (root.rootTaskId === undefined) records.push(...store.taskUsage(rootTaskId));
+function modelResolver(store: Store): (record: UsageRecord) => string | null {
   const sessions = new Map<string, string | null>();
-  const modelOf = (record: UsageRecord): string | null => {
+  return (record) => {
     if (typeof record.model === 'string') return record.model;
     if (!sessions.has(record.dispatchId)) {
       const dispatch = store.get<{ sessionId?: string }>('dispatches', record.dispatchId);
@@ -141,6 +134,9 @@ function usageSummary(store: Store, rootTaskId: string): UsageSummary {
     }
     return sessions.get(record.dispatchId)!;
   };
+}
+/** Records per provider and model, ordered by provider and then model with null last (P03). */
+function modelTotals(records: UsageRecord[], modelOf: (record: UsageRecord) => string | null) {
   const groups = new Map<
     string,
     { provider: string; model: string | null; records: UsageRecord[] }
@@ -159,7 +155,37 @@ function usageSummary(store: Store, rootTaskId: string): UsageSummary {
         (a.model ?? '').localeCompare(b.model ?? ''),
     )
     .map((group) => ({ provider: group.provider, model: group.model, ...totals(group.records) }));
-  return { rootTaskId, byModel, totals: totals(records), completeness: completeness(records) };
+  return { byModel, totals: totals(records), completeness: completeness(records) };
+}
+/**
+ * Token totals of a root task and of every task whose rootTaskId names it, per provider and model
+ * (SPEC-0028 P03). A record written before E01 has no model and takes its dispatch's session's.
+ */
+function usageSummary(store: Store, rootTaskId: string): UsageSummary {
+  const root = store.require<TaskSnapshot>('tasks', rootTaskId);
+  if (root.spec.parentTaskId !== undefined)
+    fail('VALIDATION_ERROR', 'usage.summary needs a root task; this task has a parent', {
+      rootTaskId: root.rootTaskId ?? null,
+    });
+  const records = store.treeUsage(rootTaskId);
+  // A root task written without rootTaskId still counts its own records.
+  if (root.rootTaskId === undefined) records.push(...store.taskUsage(rootTaskId));
+  return { rootTaskId, ...modelTotals(records, modelResolver(store)) };
+}
+/**
+ * Each task's own totals, as `usage.summary` computes a tree's (SPEC-0029 A01): the records of all
+ * the tasks come from one statement (A02).
+ */
+function usageByTask(store: Store, ids: string[]): UsageByTaskResult {
+  const found = store.existingTaskIds(ids);
+  const present = ids.filter((id) => found.has(id));
+  const records = new Map<string, UsageRecord[]>(present.map((id) => [id, []]));
+  for (const record of store.usageOfTasks(present)) records.get(record.taskId)?.push(record);
+  const modelOf = modelResolver(store);
+  return {
+    tasks: present.map((taskId) => ({ taskId, ...modelTotals(records.get(taskId)!, modelOf) })),
+    missing: ids.filter((id) => !found.has(id)),
+  };
 }
 
 export const SHARED_READS = new Set([
@@ -170,6 +196,7 @@ export const SHARED_READS = new Set([
   'usage.get',
   'usage.getRecord',
   'usage.summary',
+  'usage.byTask',
   'events.read',
   'operations.get',
   'operations.lookup',
@@ -257,6 +284,9 @@ export function readCall(
     case 'usage.summary':
       fields(p, ['rootTaskId']);
       return usageSummary(store, string(p.rootTaskId, 'rootTaskId', 128));
+    case 'usage.byTask':
+      fields(p, ['taskIds']);
+      return usageByTask(store, distinct(p.taskIds, 'taskIds', 100));
     case 'events.read':
       fields(p, ['afterCursor', 'storeId', 'taskId', 'limit']);
       return store.events(

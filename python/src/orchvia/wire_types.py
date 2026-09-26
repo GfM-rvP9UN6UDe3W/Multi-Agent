@@ -1,4 +1,4 @@
-"""Generated from schemas/protocol.schema.json; SHA-256 6450d4a798f714b97a0d37c2ea174eece96088d7103732e3585aeaae8d866746. Do not edit.
+"""Generated from schemas/protocol.schema.json; SHA-256 7ed691885c36c4278051fd3947051363a2d8822b9325f081b15b820c29b2de5f. Do not edit.
 Wire dictionaries use camelCase. Use the SDK dataclasses for snake_case requests.
 """
 from __future__ import annotations
@@ -42,6 +42,10 @@ class TaskSnapshotRevisionRequest(TypedDict):
     approvalId: str
     comment: str
 
+class TaskSnapshotPausedByClose(TypedDict):
+    operationId: str
+    wasRunning: bool
+
 class TaskSnapshot(TypedDict):
     id: str
     status: TaskStatus
@@ -65,6 +69,8 @@ class TaskSnapshot(TypedDict):
     revisionRequest: NotRequired[TaskSnapshotRevisionRequest]
     dependencyResultsDelivered: NotRequired[bool]
     blockedBy: NotRequired[TaskBlocker]
+    deliveredAt: NotRequired[str]
+    pausedByClose: NotRequired[TaskSnapshotPausedByClose]
 
 class TaskBlocker(TypedDict):
     reason: Literal["scheduler_failed", "host_stopping", "capacity", "quarantine_capacity", "resource_cleanup", "execution_conflict", "storage", "session_busy", "write_conflict", "scheduling", "dependency"]
@@ -149,6 +155,19 @@ class UsageSummary(TypedDict):
     byModel: list[UsageModelTotals]
     totals: UsageTotals
     completeness: Literal["reported", "unknown"]
+
+class UsageByTaskParams(TypedDict):
+    taskIds: list[str]
+
+class UsageTaskTotals(TypedDict):
+    taskId: str
+    byModel: list[UsageModelTotals]
+    totals: UsageTotals
+    completeness: Literal["reported", "unknown"]
+
+class UsageByTaskResult(TypedDict):
+    tasks: list[UsageTaskTotals]
+    missing: list[str]
 
 class SessionSnapshotForkSource(TypedDict):
     sessionId: str
@@ -779,6 +798,7 @@ class WorkflowCapability(TypedDict):
     queueReasons: NotRequired[Literal[True]]
     pauseClose: NotRequired[Literal[True]]
     ruleRetirement: NotRequired[Literal[True]]
+    usageByTask: NotRequired[Literal[True]]
 
 TaskStatus: TypeAlias = Literal["queued", "running", "waiting_approval", "paused", "blocked", "completed", "failed", "cancelled", "waiting_dependency", "verifying"]
 SessionStatus: TypeAlias = Literal["idle", "running", "pausing", "paused", "closed", "outcome_unknown"]

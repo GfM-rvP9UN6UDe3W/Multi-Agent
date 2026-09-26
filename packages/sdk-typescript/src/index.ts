@@ -46,6 +46,7 @@ import type {
   TaskListResult,
   TaskSnapshot,
   TaskSpec,
+  UsageByTaskResult,
   UsageRecord,
   UsageSummary,
   VerificationRule,
@@ -707,6 +708,11 @@ export class Orchestrator {
       this.requireWorkflow('taskQueries');
       return this.call<UsageSummary>('usage.summary', { rootTaskId }, options);
     },
+    /** Each of 1 to 100 tasks' own token totals by model, in order, and the missing IDs (SPEC-0029 A). */
+    byTask: async (taskIds: string[], options?: RequestOptions) => {
+      this.requireWorkflow('usageByTask');
+      return this.call<UsageByTaskResult>('usage.byTask', { taskIds }, options);
+    },
   };
   readonly stores = {
     rollover: (options?: MutationOptions) =>
@@ -991,6 +997,8 @@ export class ReadOnlyOrchestrator {
       ),
     summary: (rootTaskId: string, options?: RequestOptions) =>
       this.call<UsageSummary>('usage.summary', { rootTaskId }, options),
+    byTask: (taskIds: string[], options?: RequestOptions) =>
+      this.call<UsageByTaskResult>('usage.byTask', { taskIds }, options),
   };
   readonly events = {
     read: (options: Omit<EventOptions, 'signal' | 'timeoutMs'> = {}, request?: RequestOptions) =>

@@ -67,6 +67,7 @@ class ReadOnlyView implements ReadOnlyEngine {
               // The reads of SPEC-0028 P and U; a view has no scheduler, so no queue reasons (B03).
               taskQueries: true,
               ruleRetirement: true,
+              usageByTask: true,
             },
           },
         };

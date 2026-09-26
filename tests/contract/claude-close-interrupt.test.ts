@@ -301,7 +301,7 @@ test('0022-C02 a slow database close does not count against the half-budget wait
 
 // SPEC-0028 S: a pausing close interrupts as mode interrupt does, and pauses what it interrupted as
 // owner_shutdown.
-test('0028-S01 close({mode:"pause"}) pauses a running Claude turn as owner_shutdown with the host stop proof', async () => {
+test('0028-S01 0029-D01 close({mode:"pause"}) pauses a running Claude turn as owner_shutdown with the host stop proof', async () => {
   const { root, open } = await fixture();
   try {
     const claude = interruptibleClaude();
@@ -333,6 +333,11 @@ test('0028-S01 close({mode:"pause"}) pauses a running Claude turn as owner_shutd
           session: 'paused',
           quarantined: false,
         },
+      );
+      // SPEC-0029 D01: the task says that the close paused its running turn.
+      assert.equal(
+        (after as { pausedByClose?: { wasRunning: boolean } }).pausedByClose?.wasRunning,
+        true,
       );
     } finally {
       await reopened.close();

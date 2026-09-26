@@ -322,6 +322,14 @@ class _Usage:
         result = await self._client._call("usage.summary", {"rootTaskId": root_task_id})
         return Snapshot({**result, "totals": snapshot(result["totals"])})
 
+    async def by_task(self, task_ids: Sequence[str]) -> Snapshot:
+        """Each of 1 to 100 tasks' own token totals by model, in order, and the missing IDs
+        (SPEC-0029 A)."""
+        await self._client._require_workflow("usage_by_task")
+        result = await self._client._call("usage.byTask", {"taskIds": list(task_ids)})
+        return Snapshot({**result, "tasks": [Snapshot({**entry, "totals": snapshot(entry["totals"])})
+                                             for entry in result["tasks"]]})
+
 
 class _Costs:
     def __init__(self, client: "Orchestrator"):

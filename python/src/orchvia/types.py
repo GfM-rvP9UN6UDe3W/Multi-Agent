@@ -84,7 +84,8 @@ _WIRE_TO_PYTHON = {
     "contextCheck": "context_check", "taskQueries": "task_queries", "queueReasons": "queue_reasons",
     "pauseClose": "pause_close", "ruleRetirement": "rule_retirement",
     "blockedBy": "blocked_by", "byModel": "by_model", "recordedAt": "recorded_at", "retiredAt": "retired_at",
-    "includeRetired": "include_retired",
+    "includeRetired": "include_retired", "usageByTask": "usage_by_task", "deliveredAt": "delivered_at",
+    "pausedByClose": "paused_by_close", "wasRunning": "was_running",
     "handoffId": "handoff_id", "targetSessionId": "target_session_id", "fromTaskId": "from_task_id",
     "fromSessionId": "from_session_id", "fromDispatchId": "from_dispatch_id",
     "fromGeneration": "from_generation", "resolvedAt": "resolved_at", "nextCursor": "next_cursor",
@@ -146,7 +147,7 @@ _PYTHON_TO_WIRE = {value: key for key, value in _WIRE_TO_PYTHON.items()}
 _OBJECT_FIELDS = {"spec", "runtime", "acceptance", "target", "data", "error", "capabilities",
                   "lifecycle", "resolution", "evidence", "timeouts", "executionIsolation",
                   "execution", "lease", "budget", "routing", "contextPlan", "sessionLifecycle", "retryIdentity", "storeNamespaces",
-                  "workflow", "revisionRequest", "blockedBy"}
+                  "workflow", "revisionRequest", "blockedBy", "pausedByClose"}
 _OBJECT_LIST_FIELDS = {"records", "events", "occupants", "conflicts", "tasks", "handoffs", "rules", "byModel"}
 
 
