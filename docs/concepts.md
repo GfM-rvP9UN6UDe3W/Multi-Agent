@@ -76,7 +76,7 @@ A dispatch gets one total budget, 1,800 seconds by default, from the smaller of 
 
 **Plainly:** sending the same request twice does the work once.
 
-Each change carries an idempotency key. The engine stores `(storeId, method, scope, key, digest)`, so a retry returns the first result, and a different request with the same key is refused. `operations.lookup` finds the result later. A request the engine rejects is not stored, so its key can carry a corrected request.
+Each change carries an idempotency key. The engine stores `(storeId, method, scope, key, digest)`, so a retry returns the first result, and a different request with the same key is refused. `operations.lookup` finds the result later. A request the engine rejects is not stored, so its key can carry a corrected request. A key names one request, not a wanted state: sent again after the state changed, it still returns the first result and changes nothing. A new change, such as reactivating a rule that was retired, takes a new key.
 
 ## Labels and metadata
 
@@ -118,4 +118,4 @@ The routing layer asks a judge you choose, a model or plain rules, and proposes 
 
 **Plainly:** a durable record of tokens each attempt used.
 
-Every usage observation from a runtime is stored with one `usage.recorded` event in the same transaction. The record names its session, model and root task, and the event carries the token counts, so that `usage.summary`, `usage.byTask` and a host's own totals need no other read. Missing values stay unknown; cost estimates from registered prices are estimates, not bills.
+Every usage observation from a runtime is stored with one `usage.recorded` event in the same transaction. The record names its session, model and root task, and the event carries the token counts, so that `usage.summary`, `usage.byTask` and a host's own totals need no other read. A runtime that splits its cache writes into those that live five minutes and an hour reports both counts, and the totals sum them. Missing values stay unknown; cost estimates from registered prices are estimates, not bills.

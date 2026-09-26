@@ -25,6 +25,8 @@ type Totals = {
   inputTokens: number;
   cachedInputTokens: number;
   cacheWriteInputTokens: number;
+  cacheWrite5mInputTokens: number;
+  cacheWrite1hInputTokens: number;
   outputTokens: number;
   unknownRecords: number;
 };
@@ -136,6 +138,8 @@ const totals = (size: number): Totals => ({
   inputTokens: size * 10,
   cachedInputTokens: size,
   cacheWriteInputTokens: 0,
+  cacheWrite5mInputTokens: 0,
+  cacheWrite1hInputTokens: 0,
   outputTokens: size * 2,
   unknownRecords: 0,
 });

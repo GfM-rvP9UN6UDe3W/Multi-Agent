@@ -1,4 +1,4 @@
-// Generated from schemas/protocol.schema.json; SHA-256 7ed691885c36c4278051fd3947051363a2d8822b9325f081b15b820c29b2de5f. Do not edit.
+// Generated from schemas/protocol.schema.json; SHA-256 33cc883970a3efc11a6b128c0e3700daaac3c36c6e9ddf414b53b7ebd1756423. Do not edit.
 export const protocolSchema = {
   $schema: 'https://json-schema.org/draft/2020-12/schema',
   $id: 'urn:agent-orch:protocol:2.0',
@@ -444,7 +444,7 @@ export const protocolSchema = {
     UsageRecordedData: {
       type: 'object',
       description:
-        'Data in a durable usage.recorded event. Events written from SPEC-0028 E02 on also hold the token counts, the model and the root task; raw stays in the record, which usage.getRecord returns. storeId, sessionId and occurredAt are on the event envelope.',
+        'Data in a durable usage.recorded event. Events written from SPEC-0028 E02 on also hold the token counts, the model and the root task; raw stays in the record, which usage.getRecord returns. storeId, sessionId and occurredAt are on the event envelope. From SPEC-0030 A03 on, the event also carries cacheWrite5mInputTokens and cacheWrite1hInputTokens when the record has them.',
       required: ['usageRecordId', 'dispatchId', 'provider'],
       properties: {
         usageRecordId: {
@@ -475,6 +475,16 @@ export const protocolSchema = {
           minimum: 0,
           maximum: 9007199254740991,
         },
+        cacheWrite5mInputTokens: {
+          type: 'integer',
+          minimum: 0,
+          maximum: 9007199254740991,
+        },
+        cacheWrite1hInputTokens: {
+          type: 'integer',
+          minimum: 0,
+          maximum: 9007199254740991,
+        },
         outputTokens: {
           type: ['integer', 'null'],
           minimum: 0,
@@ -493,7 +503,7 @@ export const protocolSchema = {
     UsageRecord: {
       type: 'object',
       description:
-        'Reported integer token counts or null when unknown. Raw provider JSON retains its original keys and is not synthesized into zero usage or cost. Records written from SPEC-0028 E01 on also hold sessionId, model, rootTaskId and recordedAt.',
+        'Reported integer token counts or null when unknown. Raw provider JSON retains its original keys and is not synthesized into zero usage or cost. Records written from SPEC-0028 E01 on also hold sessionId, model, rootTaskId and recordedAt. A runtime that splits its cache writes by how long they live also reports cacheWrite5mInputTokens and cacheWrite1hInputTokens, which together are cacheWriteInputTokens (SPEC-0030 A03).',
       required: [
         'id',
         'taskId',
@@ -530,6 +540,16 @@ export const protocolSchema = {
         },
         cacheWriteInputTokens: {
           type: ['integer', 'null'],
+          minimum: 0,
+          maximum: 9007199254740991,
+        },
+        cacheWrite5mInputTokens: {
+          type: 'integer',
+          minimum: 0,
+          maximum: 9007199254740991,
+        },
+        cacheWrite1hInputTokens: {
+          type: 'integer',
           minimum: 0,
           maximum: 9007199254740991,
         },
@@ -572,7 +592,7 @@ export const protocolSchema = {
     UsageTotals: {
       type: 'object',
       description:
-        'Each count is the sum over the records that report it; unknownRecords lack an input or output count (SPEC-0028 P03).',
+        'Each count is the sum over the records that report it; unknownRecords lack an input or output count (SPEC-0028 P03). cacheWrite5mInputTokens and cacheWrite1hInputTokens sum the records that split their cache writes by duration; cacheWriteInputTokens minus both is the cache writes of the records without a split (SPEC-0030 A04).',
       properties: {
         records: {
           type: 'integer',
@@ -594,6 +614,16 @@ export const protocolSchema = {
           minimum: 0,
           maximum: 9007199254740991,
         },
+        cacheWrite5mInputTokens: {
+          type: 'integer',
+          minimum: 0,
+          maximum: 9007199254740991,
+        },
+        cacheWrite1hInputTokens: {
+          type: 'integer',
+          minimum: 0,
+          maximum: 9007199254740991,
+        },
         outputTokens: {
           type: 'integer',
           minimum: 0,
@@ -610,6 +640,8 @@ export const protocolSchema = {
         'inputTokens',
         'cachedInputTokens',
         'cacheWriteInputTokens',
+        'cacheWrite5mInputTokens',
+        'cacheWrite1hInputTokens',
         'outputTokens',
         'unknownRecords',
       ],
@@ -618,7 +650,7 @@ export const protocolSchema = {
     UsageModelTotals: {
       type: 'object',
       description:
-        "UsageTotals of one provider and model; model is null when neither the record nor its dispatch's session names it.",
+        "UsageTotals of one provider and model; model is null when neither the record nor its dispatch's session names it. The split of cache writes by duration is counted as in UsageTotals (SPEC-0030 A04).",
       properties: {
         provider: {
           type: 'string',
@@ -647,6 +679,16 @@ export const protocolSchema = {
           minimum: 0,
           maximum: 9007199254740991,
         },
+        cacheWrite5mInputTokens: {
+          type: 'integer',
+          minimum: 0,
+          maximum: 9007199254740991,
+        },
+        cacheWrite1hInputTokens: {
+          type: 'integer',
+          minimum: 0,
+          maximum: 9007199254740991,
+        },
         outputTokens: {
           type: 'integer',
           minimum: 0,
@@ -665,6 +707,8 @@ export const protocolSchema = {
         'inputTokens',
         'cachedInputTokens',
         'cacheWriteInputTokens',
+        'cacheWrite5mInputTokens',
+        'cacheWrite1hInputTokens',
         'outputTokens',
         'unknownRecords',
       ],

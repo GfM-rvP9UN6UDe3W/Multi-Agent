@@ -239,6 +239,8 @@ type Totals = {
   inputTokens: number;
   cachedInputTokens: number;
   cacheWriteInputTokens: number;
+  cacheWrite5mInputTokens: number;
+  cacheWrite1hInputTokens: number;
   outputTokens: number;
   unknownRecords: number;
 };
@@ -274,6 +276,8 @@ test('0028-P03 usage.summary totals a root task and its children by model', asyn
         inputTokens: 20,
         cachedInputTokens: 2,
         cacheWriteInputTokens: 0,
+        cacheWrite5mInputTokens: 0,
+        cacheWrite1hInputTokens: 0,
         outputTokens: 4,
         unknownRecords: 0,
       },
@@ -284,6 +288,8 @@ test('0028-P03 usage.summary totals a root task and its children by model', asyn
         inputTokens: 50,
         cachedInputTokens: 5,
         cacheWriteInputTokens: 0,
+        cacheWrite5mInputTokens: 0,
+        cacheWrite1hInputTokens: 0,
         outputTokens: 10,
         unknownRecords: 0,
       },
@@ -293,6 +299,8 @@ test('0028-P03 usage.summary totals a root task and its children by model', asyn
       inputTokens: 70,
       cachedInputTokens: 7,
       cacheWriteInputTokens: 0,
+      cacheWrite5mInputTokens: 0,
+      cacheWrite1hInputTokens: 0,
       outputTokens: 14,
       unknownRecords: 0,
     });
@@ -361,6 +369,8 @@ test('0028-P03 a root task without records is unknown, with zero totals', async 
         inputTokens: 0,
         cachedInputTokens: 0,
         cacheWriteInputTokens: 0,
+        cacheWrite5mInputTokens: 0,
+        cacheWrite1hInputTokens: 0,
         outputTokens: 0,
         unknownRecords: 0,
       },

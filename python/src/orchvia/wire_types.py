@@ -1,4 +1,4 @@
-"""Generated from schemas/protocol.schema.json; SHA-256 7ed691885c36c4278051fd3947051363a2d8822b9325f081b15b820c29b2de5f. Do not edit.
+"""Generated from schemas/protocol.schema.json; SHA-256 33cc883970a3efc11a6b128c0e3700daaac3c36c6e9ddf414b53b7ebd1756423. Do not edit.
 Wire dictionaries use camelCase. Use the SDK dataclasses for snake_case requests.
 """
 from __future__ import annotations
@@ -110,6 +110,8 @@ class UsageRecordedData(TypedDict):
     inputTokens: NotRequired[int | None]
     cachedInputTokens: NotRequired[int | None]
     cacheWriteInputTokens: NotRequired[int | None]
+    cacheWrite5mInputTokens: NotRequired[int]
+    cacheWrite1hInputTokens: NotRequired[int]
     outputTokens: NotRequired[int | None]
     model: NotRequired[str]
     rootTaskId: NotRequired[str]
@@ -122,6 +124,8 @@ class UsageRecord(TypedDict):
     inputTokens: int | None
     cachedInputTokens: int | None
     cacheWriteInputTokens: int | None
+    cacheWrite5mInputTokens: NotRequired[int]
+    cacheWrite1hInputTokens: NotRequired[int]
     outputTokens: int | None
     raw: Any
     sessionId: NotRequired[str]
@@ -137,6 +141,8 @@ class UsageTotals(TypedDict):
     inputTokens: int
     cachedInputTokens: int
     cacheWriteInputTokens: int
+    cacheWrite5mInputTokens: int
+    cacheWrite1hInputTokens: int
     outputTokens: int
     unknownRecords: int
 
@@ -147,6 +153,8 @@ class UsageModelTotals(TypedDict):
     inputTokens: int
     cachedInputTokens: int
     cacheWriteInputTokens: int
+    cacheWrite5mInputTokens: int
+    cacheWrite1hInputTokens: int
     outputTokens: int
     unknownRecords: int
 

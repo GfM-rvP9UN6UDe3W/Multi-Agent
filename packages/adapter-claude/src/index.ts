@@ -628,13 +628,24 @@ export function createClaudeAdapter<Extra extends object = object>(
       const captureUsage = (message: RecordValue): void => {
         if (receivedUsage) return;
         const source = record(message.usage);
+        const cacheWrite = nonnegativeInt(source?.cache_creation_input_tokens);
+        const durations = record(source?.cache_creation);
+        const fiveMinutes = nonnegativeInt(durations?.ephemeral_5m_input_tokens);
+        const oneHour = nonnegativeInt(durations?.ephemeral_1h_input_tokens);
         receivedUsage = {
           type: 'usage',
           usageId: `${input.dispatchId}:result`,
           usage: {
             inputTokens: nonnegativeInt(source?.input_tokens),
             cachedInputTokens: nonnegativeInt(source?.cache_read_input_tokens),
-            cacheWriteInputTokens: nonnegativeInt(source?.cache_creation_input_tokens),
+            cacheWriteInputTokens: cacheWrite,
+            // SPEC-0030 A01: the cache writes by duration, only when they add up to the total.
+            ...(cacheWrite !== null &&
+            fiveMinutes !== null &&
+            oneHour !== null &&
+            fiveMinutes + oneHour === cacheWrite
+              ? { cacheWrite5mInputTokens: fiveMinutes, cacheWrite1hInputTokens: oneHour }
+              : {}),
             outputTokens: nonnegativeInt(source?.output_tokens),
             raw: source ? (source as Json) : null,
           },
