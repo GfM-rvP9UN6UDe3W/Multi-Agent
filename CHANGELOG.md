@@ -2,7 +2,9 @@
 
 All notable changes to Orchvia are recorded here. Versions follow [Semantic Versioning](https://semver.org/); before 1.0, a minor version may change the API.
 
-## [Unreleased]
+## [0.1.8] - 2026-09-27
+
+The usage and cost of what Claude Code runs outside a dispatch's main loop, such as a compaction.
 
 ### Fixed
 
