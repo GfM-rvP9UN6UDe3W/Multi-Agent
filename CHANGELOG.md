@@ -2,6 +2,12 @@
 
 All notable changes to Orchvia are recorded here. Versions follow [Semantic Versioning](https://semver.org/); before 1.0, a minor version may change the API.
 
+## [Unreleased]
+
+### Documentation
+
+- The documents no longer name the latest release; GitHub Releases does. Each release pull request records the release before it in `docs/status.md` and TDD-0021, so a release needs no pull request of its own afterwards (SPEC-0021 P10, D-rel-3).
+
 ## [0.1.7] - 2026-09-26
 
 What a host needs to price cache writes and to trust the times it shows.

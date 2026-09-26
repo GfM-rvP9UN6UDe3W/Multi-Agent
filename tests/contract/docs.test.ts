@@ -262,3 +262,17 @@ test('0021-R09 no repository file names a downstream product', () => {
   }
   assert.deepEqual(found, []);
 });
+
+test('0021-P10 no document states which version is the latest release', () => {
+  // GitHub Releases names the latest release (D-rel-3); a sentence that does goes stale with the next.
+  const claims = [
+    /\bversion \d+\.\d+\.\d+\S* is published\b/i,
+    /\b\d+\.\d+\.\d+\S* is published on\b/i,
+    /\bthe latest (?:released )?version is \d+\.\d+\.\d+/i,
+  ];
+  const found: string[] = [];
+  for (const file of repositoryFiles('*.md', '.claude/*.md'))
+    for (const claim of claims)
+      if (claim.test(readFileSync(join(root, file), 'utf8'))) found.push(`${file}: ${claim}`);
+  assert.deepEqual(found, []);
+});
