@@ -28,8 +28,14 @@ export function usageRecord(
     'outputTokens',
   ] as const;
   const durations = ['cacheWrite5mInputTokens', 'cacheWrite1hInputTokens'] as const;
-  if (Object.keys(event.usage).some((key) => ![...keys, ...durations, 'raw'].includes(key)))
+  if (
+    Object.keys(event.usage).some((key) => ![...keys, ...durations, 'model', 'raw'].includes(key))
+  )
     invalid();
+  // SPEC-0031 B01: the model that served the calls, when the runtime names it.
+  const model = event.usage.model;
+  if (model !== undefined && (typeof model !== 'string' || !model || model.length > 256))
+    fail('INVALID_RUNTIME_CONTRACT', 'A usage observation names its model in 1 to 256 characters');
   for (const key of keys) {
     const value = event.usage[key];
     if (value !== null && (!Number.isSafeInteger(value) || value < 0)) invalid();
@@ -95,6 +101,7 @@ export function usageRecord(
         }
       : {}),
     outputTokens: event.usage.outputTokens,
+    ...(model !== undefined ? { model } : {}),
     raw,
   };
 }

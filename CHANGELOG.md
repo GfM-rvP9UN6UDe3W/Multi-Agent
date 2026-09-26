@@ -4,6 +4,14 @@ All notable changes to Orchvia are recorded here. Versions follow [Semantic Vers
 
 ## [Unreleased]
 
+### Fixed
+
+- The Claude adapter recorded only a dispatch's main loop, so the calls outside it, such as the compaction that Claude Code runs by itself when a context fills, a `sessions.compact` dispatch, or a Task subagent, were missing from the usage records, the totals and the cost ledger. It now also reports, from the result's `modelUsage`, each model's calls outside the main loop as a further record: the main model's under the dispatch's model, another model's under its canonical name. The record of the main loop is unchanged (SPEC-0031 A).
+
+### Added
+
+- A usage observation may name its `model`; the record holds it instead of the session's model, and a repeated observation must resolve to the same model. The cost ledger prices a record of another model at that model's registered price in the dispatch's currency, or leaves its cost unknown (SPEC-0031 B).
+
 ### Documentation
 
 - The documents no longer name the latest release; GitHub Releases does. Each release pull request records the release before it in `docs/status.md` and TDD-0021, so a release needs no pull request of its own afterwards (SPEC-0021 P10, D-rel-3).

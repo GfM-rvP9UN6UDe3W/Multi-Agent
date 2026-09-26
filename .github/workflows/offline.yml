@@ -91,6 +91,9 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends bubblewrap socat lsof
       - name: Real Claude binary with a scripted loopback gateway (no paid models)
         run: node scripts/native-gateway-smoke.mjs claude dist/verification/native-claude.json
+      - name: Usage outside the main loop with the real Claude binary and a scripted loopback gateway (no paid models)
+        if: ${{ !cancelled() }}
+        run: node scripts/native-usage-smoke.mjs dist/verification/native-usage.json
       - name: README quickstart with the real Claude binary and a scripted loopback gateway (no paid models)
         if: ${{ !cancelled() }}
         run: node scripts/quickstart-claude-smoke.mjs

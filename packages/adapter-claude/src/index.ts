@@ -8,7 +8,7 @@ import type {
   RuntimeUsageEvent,
 } from '../../engine/src/types.ts';
 import { performance } from 'node:perf_hooks';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { observeRuntimeStop, requireStopProof } from '../../engine/src/stop-observation.ts';
 import { adapterProviderName } from '../../engine/src/runtime.ts';
@@ -54,6 +54,95 @@ function record(value: unknown): RecordValue | null {
 }
 function nonnegativeInt(value: unknown): number | null {
   return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 ? value : null;
+}
+/**
+ * The calls of a result's query outside its main loop, one observation per model (SPEC-0031 A02 to
+ * A04): the result's `modelUsage` minus the main loop's `usage` of the same result. A dispatch runs
+ * one query with one user message, so both cover this dispatch alone.
+ */
+function outsideUsage(
+  dispatchId: string,
+  model: string,
+  main: RecordValue | null,
+  models: RecordValue | null,
+): RuntimeUsageEvent[] {
+  const keys = models ? Object.keys(models) : [];
+  if (!models || !keys.length) return [];
+  const id = (key: string) =>
+    `${dispatchId}:outside:${
+      key.length <= 128
+        ? key
+        : `sha256-${createHash('sha256').update(key).digest('hex').slice(0, 32)}`
+    }`;
+  const unknown = (usageId: string, raw: unknown, name?: string): RuntimeUsageEvent => ({
+    type: 'usage',
+    usageId,
+    usage: {
+      inputTokens: null,
+      cachedInputTokens: null,
+      cacheWriteInputTokens: null,
+      outputTokens: null,
+      ...(name ? { model: name } : {}),
+      raw: raw as Json,
+    },
+  });
+  const canonical = (key: string) => {
+    const value = record(models[key])?.canonicalModel;
+    return typeof value === 'string' && value ? value : undefined;
+  };
+  const byCanonical = keys.filter((key) => canonical(key) === model);
+  const mainKey = keys.includes(model)
+    ? model
+    : byCanonical.length === 1
+      ? byCanonical[0]
+      : keys.length === 1
+        ? keys[0]
+        : undefined;
+  if (mainKey === undefined) return [unknown(`${dispatchId}:outside:unknown`, models)];
+  const events: RuntimeUsageEvent[] = [];
+  for (const key of keys) {
+    const entry = record(models[key]);
+    // The main model's calls keep the dispatch's model, as its main loop's do (A03).
+    const name = key === mainKey ? undefined : (canonical(key) ?? key);
+    const counts = [
+      entry?.inputTokens,
+      entry?.cacheReadInputTokens,
+      entry?.cacheCreationInputTokens,
+      entry?.outputTokens,
+    ].map(nonnegativeInt);
+    const loop =
+      key === mainKey
+        ? [
+            main?.input_tokens,
+            main?.cache_read_input_tokens,
+            main?.cache_creation_input_tokens,
+            main?.output_tokens,
+          ].map(nonnegativeInt)
+        : [0, 0, 0, 0];
+    if (
+      counts.some((count) => count === null) ||
+      loop.some((count) => count === null) ||
+      counts.some((count, index) => count! < loop[index]!)
+    ) {
+      events.push(unknown(id(key), models[key], name));
+      continue;
+    }
+    const rest = counts.map((count, index) => count! - loop[index]!);
+    if (rest.every((count) => count === 0)) continue;
+    events.push({
+      type: 'usage',
+      usageId: id(key),
+      usage: {
+        inputTokens: rest[0],
+        cachedInputTokens: rest[1],
+        cacheWriteInputTokens: rest[2],
+        outputTokens: rest[3],
+        ...(name ? { model: name } : {}),
+        raw: models[key] as Json,
+      },
+    });
+  }
+  return events;
 }
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
@@ -625,6 +714,7 @@ export function createClaudeAdapter<Extra extends object = object>(
         );
       };
       let receivedUsage: RuntimeUsageEvent | undefined;
+      let outsideUsageEvents: RuntimeUsageEvent[] = [];
       const captureUsage = (message: RecordValue): void => {
         if (receivedUsage) return;
         const source = record(message.usage);
@@ -651,6 +741,13 @@ export function createClaudeAdapter<Extra extends object = object>(
           },
         };
         input.reportUsage?.(receivedUsage);
+        outsideUsageEvents = outsideUsage(
+          input.dispatchId,
+          input.model,
+          source,
+          record(message.modelUsage),
+        );
+        for (const event of outsideUsageEvents) input.reportUsage?.(event);
       };
       const observeLateStep = (step: IteratorResult<unknown>): void => {
         if (step.done || matchedTerminal) return;
@@ -964,6 +1061,7 @@ export function createClaudeAdapter<Extra extends object = object>(
       }
       // Usage is an observation, independent of business success and resource-stop certainty.
       if (receivedUsage) yield receivedUsage;
+      yield* outsideUsageEvents;
       if (!cleanupConfirmed) {
         const reason = pending.find((event) => event.type === 'error');
         yield {

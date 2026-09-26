@@ -1832,8 +1832,14 @@ class LocalEngine implements Engine {
         )
           fail('INVALID_RUNTIME_CONTRACT', 'Usage observation has no matching durable dispatch');
         const existing = this.store.get<UsageRecord>('usage', value.id);
+        // SPEC-0031 B01, B02: the model the runtime names, else the session's.
+        const model = value.model ?? this.session(flight.sessionId).model;
         if (existing) {
-          if (digest(reportedUsage(existing)) !== digest(value))
+          const { model: _named, ...reported } = value;
+          if (
+            digest(reportedUsage(existing)) !== digest(reported) ||
+            (existing.model !== undefined && existing.model !== model)
+          )
             fail(
               'IDEMPOTENCY_CONFLICT',
               'Usage identity was already recorded with different content',
@@ -1845,7 +1851,7 @@ class LocalEngine implements Engine {
         const record: UsageRecord = {
           ...value,
           sessionId: flight.sessionId,
-          model: this.session(flight.sessionId).model,
+          model,
           rootTaskId: task.rootTaskId ?? task.id,
           recordedAt: this.time(),
         };

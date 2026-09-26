@@ -147,7 +147,18 @@ export class CostLedger {
     };
   }
   record(usage: UsageRecord, dispatch: Record<string, unknown>, createdAt: string): void {
-    const pricing = dispatch.pricing as Pricing | undefined;
+    const dispatchPricing = dispatch.pricing as Pricing | undefined;
+    // SPEC-0031 B03: a record of another model takes that model's registered price, in the
+    // dispatch's currency; without one its cost is unknown.
+    const pricing =
+      !dispatchPricing || usage.model === undefined || usage.model === dispatchPricing.model
+        ? dispatchPricing
+        : this.pricing.find(
+            (p) =>
+              p.provider === usage.provider &&
+              p.model === usage.model &&
+              p.currency === dispatchPricing.currency,
+          );
     const priced = pricing
       ? priceUsage(usage, pricing)
       : {
