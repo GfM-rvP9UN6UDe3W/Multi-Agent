@@ -367,3 +367,12 @@ The owner pushed the tag `v0.1.3` on the merge commit `2eaf9a2` of pull request 
 - The owner approved the `npm` and `pypi` deployments. The npm job published the five packages with provenance, in dependency order; the PyPI job published the wheel and the sdist. The GitHub release "Orchvia 0.1.3" followed, with the five npm archives, the wheel, the sdist, both manifests and `SHA256SUMS`; its notes are the changelog's 0.1.3 section.
 - P04 passed on both runners. The macOS runner's log shows that the registry answered 404, for `@orchvia/engine@0.1.3` and then `@orchvia/adapter-codex@0.1.3`, until about a minute and a half after the npm job ended, and that the check waited. Both runners printed `{"version":"0.1.3","pythonVersion":"0.1.3","results":[{"mode":"npm-registry","status":"completed","reused":true},{"mode":"pypi-registry","status":"completed"}]}`.
 - The npm registry lists 0.1.3 as the `latest` version of all five packages, and `@orchvia/adapter-claude@0.1.3` declares only the optional Claude SDK peer. PyPI lists `orchvia` 0.1.3 with its wheel and sdist. In an empty project, `npm install zod@4.6.5 @orchvia/adapter-claude@0.1.3 @orchvia/engine@0.1.3 @anthropic-ai/claude-agent-sdk` installed without an error, with SDK 0.3.282, and the installed server listed the four tools ([SPEC-0026](../specs/0026-claude-mcp-without-zod.md) Z08).
+
+## The third release, 0.1.4
+
+Pull request #29 set the version to 0.1.4 on top of SPEC-0027 (#28). A local Claude Code session pushed the tag `v0.1.4` on its merge commit `093b5bd`, on the owner's authorization, which started the release workflow ([36230462734](https://github.com/masonlee39/orchvia/actions/runs/36230462734)) on 2026-09-26.
+
+- The offline matrix and the build passed at the first attempt; the build's package check found no `internal/` module in the SDK's declarations (SPEC-0027 T03).
+- The owner approved the `npm` and `pypi` deployments. Both jobs passed, and the GitHub release "Orchvia 0.1.4" followed with the five npm archives, the wheel, the sdist, both manifests and `SHA256SUMS`; its notes are the changelog's 0.1.4 section.
+- P04 passed on the Ubuntu and macOS runners, and the whole run passed at its first attempt.
+- The npm registry lists 0.1.4 as the `latest` version of all five packages, with provenance attestations, and `@orchvia/adapter-claude@0.1.4` declares only the optional Claude SDK peer. PyPI lists `orchvia` 0.1.4 with its wheel and sdist.

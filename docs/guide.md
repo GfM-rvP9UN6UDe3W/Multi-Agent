@@ -1,6 +1,6 @@
 # Multi-agent orchestration SDK usage and detailed wiring
 
-Updated 2026-09-25. This guide describes implemented interfaces. Version 0.1.3 is published: the five npm packages on npm and the Python package `orchvia` on PyPI. The five npm packages are **ESM-only**; direct require is not exported. A Claude consumer installs SDK + engine + adapter-claude. See [the local RC and CJS/ESM bundled-host contract](acceptance/bundled-host.md). Offline process/transport/storage acceptance is recorded separately from real-model, sandbox, external-host and release acceptance in the [completion matrix](specs/0009-complete-design.md#completion-matrix).
+Updated 2026-09-26. This guide describes implemented interfaces. Version 0.1.4 is published: the five npm packages on npm and the Python package `orchvia` on PyPI. The five npm packages are **ESM-only**; direct require is not exported. A Claude consumer installs SDK + engine + adapter-claude. See [the local RC and CJS/ESM bundled-host contract](acceptance/bundled-host.md). Offline process/transport/storage acceptance is recorded separately from real-model, sandbox, external-host and release acceptance in the [completion matrix](specs/0009-complete-design.md#completion-matrix).
 
 ## 1. Choose an integration mode
 
