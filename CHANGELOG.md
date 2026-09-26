@@ -2,7 +2,7 @@
 
 All notable changes to Orchvia are recorded here. Versions follow [Semantic Versioning](https://semver.org/); before 1.0, a minor version may change the API.
 
-## [Unreleased]
+## [0.1.6] - 2026-09-26
 
 What a host's usage page and its restart need: token totals for many tasks in one call, the time each task delivered, rules that can be reactivated, and which paused tasks a close interrupted.
 
