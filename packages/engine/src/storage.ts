@@ -4,14 +4,11 @@ import {
   readFileSync,
   renameSync,
   unlinkSync,
-  openSync,
-  closeSync,
-  writeSync,
-  fsyncSync,
   statfsSync,
   statSync,
   readdirSync,
 } from 'node:fs';
+import { open, rename, rm } from 'node:fs/promises';
 import { join, relative } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { performance } from 'node:perf_hooks';
@@ -28,6 +25,8 @@ import type {
 export type { StoragePolicy } from './types.ts';
 
 const DAY = 86400000;
+/** The largest write of the emergency reserve; the event loop runs between writes (W01). */
+const RESERVE_CHUNK_BYTES = 1024 * 1024;
 const defaults: StoragePolicy = {
   quotaBytes: 10 * 1024 ** 3,
   minFreeBytes: 1024 ** 3,
@@ -84,6 +83,7 @@ export class StorageGovernance {
   policy: StoragePolicy;
   private snapshotDeadlines = new Map<string, number>();
   private monotonicNow: () => number;
+  private reserving?: Promise<void>;
   constructor(
     store: Store,
     options: Partial<StoragePolicy> = {},
@@ -102,25 +102,55 @@ export class StorageGovernance {
       this.snapshotDeadlines.set(lease.id, monotonicNow() + remaining);
     }
     // Only recovery of already-recorded file actions happens at startup. Old data is not collected.
+    // The owner of this object writes the emergency reserve with reserve() (SPEC-0028 W01).
     this.recoverGarbage();
-    this.reserveEmergency();
   }
-  private reserveEmergency(): void {
+  /**
+   * Writes a missing emergency reserve without blocking the event loop (SPEC-0028 W01, W02). Calls
+   * during a write share it. The reserve is written to emergency.reserve.partial, synced, renamed
+   * and its directory synced, so a file named emergency.reserve is always complete and admission's
+   * check of it keeps its meaning.
+   */
+  reserve(): Promise<void> {
+    this.reserving ??= this.writeReserve().finally(() => {
+      this.reserving = undefined;
+    });
+    return this.reserving;
+  }
+  /** Resolves once no reserve write is in progress, whether or not it succeeded. */
+  async settled(): Promise<void> {
+    await this.reserving?.catch(() => {});
+  }
+  private async writeReserve(): Promise<void> {
     const path = join(this.store.stateDir, 'emergency.reserve');
-    if (existsSync(path) || this.policy.emergencyBytes === 0) return;
+    const partial = `${path}.partial`;
+    const bytes = this.policy.emergencyBytes;
+    // What an interrupted earlier write left is never renamed; start again.
+    await rm(partial, { force: true });
+    if (existsSync(path) || bytes === 0) return;
     const free = statfsSync(this.store.stateDir);
-    const available = free.bavail * free.bsize;
-    if (available < this.policy.emergencyBytes + this.policy.minFreeBytes) return;
-    const fd = openSync(path, 'wx', 0o600),
-      chunk = Buffer.alloc(Math.min(1024 * 1024, this.policy.emergencyBytes));
+    if (free.bavail * free.bsize < bytes + this.policy.minFreeBytes) return;
     try {
-      for (let offset = 0; offset < this.policy.emergencyBytes; offset += chunk.length)
-        writeSync(fd, chunk, 0, Math.min(chunk.length, this.policy.emergencyBytes - offset));
-      fsyncSync(fd);
-    } finally {
-      closeSync(fd);
+      const handle = await open(partial, 'wx', 0o600);
+      try {
+        const chunk = Buffer.alloc(Math.min(RESERVE_CHUNK_BYTES, bytes));
+        for (let offset = 0; offset < bytes; offset += chunk.length)
+          await handle.write(chunk, 0, Math.min(chunk.length, bytes - offset));
+        await handle.datasync();
+      } finally {
+        await handle.close();
+      }
+      await rename(partial, path);
+    } catch (error) {
+      await rm(partial, { force: true }).catch(() => {});
+      throw error;
     }
-    syncDirectory(this.store.stateDir);
+    const directory = await open(this.store.stateDir, 'r');
+    try {
+      await directory.sync();
+    } finally {
+      await directory.close();
+    }
   }
   status(): StorageStatus {
     const directoryBytes = (path: string): number =>
@@ -212,17 +242,17 @@ export class StorageGovernance {
     const previous = this.policy;
     this.policy = next;
     try {
-      if (!this.store.db.isTransaction) this.reserveEmergency();
       return this.status();
     } finally {
       if (this.store.db.isTransaction) this.policy = previous;
     }
   }
-  reload(): void {
+  /** Takes the committed policy, and writes the reserve it asks for when missing (W02). */
+  async reload(): Promise<void> {
     this.policy = policy(
       JSON.parse(this.store.metadata('storagePolicy') ?? JSON.stringify(this.policy)),
     );
-    this.reserveEmergency();
+    await this.reserve();
   }
   pin(ref: string, reason: string): void {
     string(ref, 'ref', 512);

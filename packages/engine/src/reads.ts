@@ -15,9 +15,14 @@ import type {
   HandoffRequest,
   MessageSnapshot,
   SessionSnapshot,
+  TaskGetManyResult,
   TaskListResult,
   TaskSnapshot,
+  TaskStatus,
+  UsageModelTotals,
   UsageRecord,
+  UsageSummary,
+  UsageTotals,
 } from './types.ts';
 
 // Reads that a running engine and a read-only view answer through the same code (SPEC-0027 R03).
@@ -71,12 +76,100 @@ function pageCursor(value: unknown): number {
   return after;
 }
 
+const TASK_STATUSES = new Set<TaskStatus>([
+  'queued',
+  'waiting_dependency',
+  'running',
+  'verifying',
+  'waiting_approval',
+  'paused',
+  'blocked',
+  'completed',
+  'failed',
+  'cancelled',
+]);
+/** 1 to `max` distinct nonempty strings. */
+function distinct(value: unknown, name: string, max: number, maxLength = 128): string[] {
+  if (!Array.isArray(value) || value.length < 1 || value.length > max)
+    fail('VALIDATION_ERROR', `${name} must list 1 to ${max} items`);
+  const items = value.map((item) => string(item, name, maxLength));
+  if (new Set(items).size !== items.length)
+    fail('VALIDATION_ERROR', `${name} must not repeat an item`);
+  return items;
+}
+/** Completeness as `usage.get` reports it: every record reports its input and output counts. */
+function completeness(records: UsageRecord[]): 'reported' | 'unknown' {
+  return records.length && records.every((r) => r.inputTokens !== null && r.outputTokens !== null)
+    ? 'reported'
+    : 'unknown';
+}
+function totals(records: UsageRecord[]): UsageTotals {
+  const sum = (
+    key: 'inputTokens' | 'cachedInputTokens' | 'cacheWriteInputTokens' | 'outputTokens',
+  ) => records.reduce((total, record) => total + (record[key] ?? 0), 0);
+  return {
+    records: records.length,
+    inputTokens: sum('inputTokens'),
+    cachedInputTokens: sum('cachedInputTokens'),
+    cacheWriteInputTokens: sum('cacheWriteInputTokens'),
+    outputTokens: sum('outputTokens'),
+    unknownRecords: records.filter((r) => r.inputTokens === null || r.outputTokens === null).length,
+  };
+}
+/**
+ * Token totals of a root task and of every task whose rootTaskId names it, per provider and model
+ * (SPEC-0028 P03). A record written before E01 has no model and takes its dispatch's session's.
+ */
+function usageSummary(store: Store, rootTaskId: string): UsageSummary {
+  const root = store.require<TaskSnapshot>('tasks', rootTaskId);
+  if (root.spec.parentTaskId !== undefined)
+    fail('VALIDATION_ERROR', 'usage.summary needs a root task; this task has a parent', {
+      rootTaskId: root.rootTaskId ?? null,
+    });
+  const records = store.treeUsage(rootTaskId);
+  // A root task written without rootTaskId still counts its own records.
+  if (root.rootTaskId === undefined) records.push(...store.taskUsage(rootTaskId));
+  const sessions = new Map<string, string | null>();
+  const modelOf = (record: UsageRecord): string | null => {
+    if (typeof record.model === 'string') return record.model;
+    if (!sessions.has(record.dispatchId)) {
+      const dispatch = store.get<{ sessionId?: string }>('dispatches', record.dispatchId);
+      const session = dispatch?.sessionId
+        ? store.get<{ model?: string }>('sessions', dispatch.sessionId)
+        : undefined;
+      sessions.set(record.dispatchId, session?.model ?? null);
+    }
+    return sessions.get(record.dispatchId)!;
+  };
+  const groups = new Map<
+    string,
+    { provider: string; model: string | null; records: UsageRecord[] }
+  >();
+  for (const record of records) {
+    const model = modelOf(record);
+    const key = JSON.stringify([record.provider, model]);
+    if (!groups.has(key)) groups.set(key, { provider: record.provider, model, records: [] });
+    groups.get(key)!.records.push(record);
+  }
+  const byModel: UsageModelTotals[] = [...groups.values()]
+    .sort(
+      (a, b) =>
+        a.provider.localeCompare(b.provider) ||
+        (a.model === null ? 1 : 0) - (b.model === null ? 1 : 0) ||
+        (a.model ?? '').localeCompare(b.model ?? ''),
+    )
+    .map((group) => ({ provider: group.provider, model: group.model, ...totals(group.records) }));
+  return { rootTaskId, byModel, totals: totals(records), completeness: completeness(records) };
+}
+
 export const SHARED_READS = new Set([
   'tasks.get',
+  'tasks.getMany',
   'tasks.list',
   'sessions.get',
   'usage.get',
   'usage.getRecord',
+  'usage.summary',
   'events.read',
   'operations.get',
   'operations.lookup',
@@ -90,34 +183,58 @@ export const SHARED_READS = new Set([
 
 /**
  * Answers one of SHARED_READS from `store`. A running engine passes `expireHandoffs`, which runs
- * where handoff reads have always expired due handoffs; a read-only view expires nothing.
+ * where handoff reads have always expired due handoffs, and `blockedBy`, which adds why each waiting
+ * task of a result waits (SPEC-0028 B01). A read-only view passes neither.
  */
 export function readCall(
   store: Store,
   method: string,
   p: Record<string, unknown>,
-  hooks: { expireHandoffs?: () => void } = {},
+  hooks: { expireHandoffs?: () => void; blockedBy?: (tasks: TaskSnapshot[]) => void } = {},
 ): unknown {
   switch (method) {
-    case 'tasks.get':
+    case 'tasks.get': {
       fields(p, ['taskId']);
-      return store.require<TaskSnapshot>('tasks', string(p.taskId, 'taskId', 128));
+      const task = store.require<TaskSnapshot>('tasks', string(p.taskId, 'taskId', 128));
+      hooks.blockedBy?.([task]);
+      return task;
+    }
+    case 'tasks.getMany': {
+      fields(p, ['taskIds']);
+      const ids = distinct(p.taskIds, 'taskIds', 100);
+      const found = store.tasksById(ids);
+      const tasks = ids.flatMap((id) => (found.has(id) ? [found.get(id)!] : []));
+      hooks.blockedBy?.(tasks);
+      return {
+        tasks,
+        missing: ids.filter((id) => !found.has(id)),
+      } satisfies TaskGetManyResult;
+    }
     case 'tasks.list': {
-      fields(p, ['parentTaskId', 'sessionId', 'label', 'limit', 'afterCursor']);
+      fields(p, ['parentTaskId', 'sessionId', 'label', 'status', 'order', 'limit', 'afterCursor']);
       if ([p.parentTaskId, p.sessionId, p.label].filter((v) => v !== undefined).length > 1)
         fail('VALIDATION_ERROR', 'Use at most one of parentTaskId, sessionId and label');
-      const after = pageCursor(p.afterCursor);
+      const status = p.status === undefined ? undefined : distinct(p.status, 'status', 10);
+      if (status?.some((item) => !TASK_STATUSES.has(item as TaskStatus)))
+        fail('VALIDATION_ERROR', 'Unknown task status');
+      if (p.order !== undefined && p.order !== 'asc' && p.order !== 'desc')
+        fail('VALIDATION_ERROR', 'order must be asc or desc');
       const page = store.listTasks(
-        p.parentTaskId !== undefined
-          ? { parentTaskId: string(p.parentTaskId, 'parentTaskId', 128) }
-          : p.sessionId !== undefined
-            ? { sessionId: string(p.sessionId, 'sessionId', 128) }
-            : p.label !== undefined
-              ? { label: label(p.label) }
-              : {},
-        after,
+        {
+          ...(p.parentTaskId !== undefined
+            ? { parentTaskId: string(p.parentTaskId, 'parentTaskId', 128) }
+            : p.sessionId !== undefined
+              ? { sessionId: string(p.sessionId, 'sessionId', 128) }
+              : p.label !== undefined
+                ? { label: label(p.label) }
+                : {}),
+          ...(status ? { status } : {}),
+        },
+        p.afterCursor === undefined ? undefined : pageCursor(p.afterCursor),
         p.limit === undefined ? 50 : integer(p.limit, 'limit', 1, 100),
+        (p.order as 'asc' | 'desc' | undefined) ?? 'asc',
       );
+      hooks.blockedBy?.(page.tasks);
       return {
         tasks: page.tasks,
         nextCursor: page.next === null ? null : String(page.next),
@@ -130,18 +247,16 @@ export function readCall(
       fields(p, ['taskId']);
       const id = string(p.taskId, 'taskId', 128);
       store.require('tasks', id);
-      const records = store.all<UsageRecord>('usage').filter((r) => r.taskId === id);
-      return {
-        records,
-        completeness:
-          records.length && records.every((r) => r.inputTokens !== null && r.outputTokens !== null)
-            ? 'reported'
-            : 'unknown',
-      };
+      // Through usage_task, not the whole table (SPEC-0028 P04).
+      const records = store.taskUsage(id);
+      return { records, completeness: completeness(records) };
     }
     case 'usage.getRecord':
       fields(p, ['usageRecordId']);
       return store.require<UsageRecord>('usage', string(p.usageRecordId, 'usageRecordId', 512));
+    case 'usage.summary':
+      fields(p, ['rootTaskId']);
+      return usageSummary(store, string(p.rootTaskId, 'rootTaskId', 128));
     case 'events.read':
       fields(p, ['afterCursor', 'storeId', 'taskId', 'limit']);
       return store.events(

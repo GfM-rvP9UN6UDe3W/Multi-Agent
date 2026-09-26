@@ -131,6 +131,10 @@ test('0014-X02 workflow methods round-trip over a Unix host with schema-valid pa
       taskList: true,
       contextCheck: true,
       labels: true,
+      taskQueries: true,
+      queueReasons: true,
+      pauseClose: true,
+      ruleRetirement: true,
     });
     const agent = await client.tasks.create(spec('agent b'));
     let pending = await waitFor(agent.id, 'waiting_approval');

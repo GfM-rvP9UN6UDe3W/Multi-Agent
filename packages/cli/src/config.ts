@@ -25,7 +25,7 @@ export interface HostConfig {
   pricing?: EngineConfig['pricing'];
   budget?: EngineConfig['budget'];
   contextLimits?: EngineConfig['contextLimits'];
-  shutdown?: { mode?: 'drain' | 'interrupt'; timeoutMs?: number };
+  shutdown?: { mode?: 'drain' | 'interrupt' | 'pause'; timeoutMs?: number };
   verificationRules?: EngineConfig['verificationRules'];
   writeScopes?: EngineConfig['writeScopes'];
   allowCrossRootReuse?: boolean;
@@ -389,7 +389,7 @@ export async function loadConfig(configPath: string): Promise<HostConfig> {
     fields(parsed.shutdown, ['mode', 'timeoutMs'], 'shutdown');
     if (
       parsed.shutdown.mode !== undefined &&
-      !['drain', 'interrupt'].includes(parsed.shutdown.mode as string)
+      !['drain', 'interrupt', 'pause'].includes(parsed.shutdown.mode as string)
     )
       invalid('Invalid shutdown.mode');
     if (

@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test, type TestContext } from 'node:test';
 import { createEngine } from './index.ts';
+import { reportedUsage } from './usage.ts';
 import type {
   ApprovalRequest,
   Engine,
@@ -197,13 +198,14 @@ export function registerRuntimeAdapterContract(
         records: UsageRecord[];
       };
       assert.equal(usage.records.length, 1);
+      // The fields that the runtime reported; the engine adds the rest (SPEC-0028 E01).
       const {
         id: _id,
         taskId: _task,
         dispatchId: _dispatch,
         provider: _provider,
         ...reported
-      } = usage.records[0];
+      } = reportedUsage(usage.records[0]);
       assert.deepEqual(reported, f.fixture.usage);
       await approve(f.engine, f.created.id);
       assert.equal(f.fixture.submissions().length, 1);

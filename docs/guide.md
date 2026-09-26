@@ -250,6 +250,70 @@ What the host creates carries what the host passed. What the engine creates inhe
 
 Each dispatch's `RuntimeInput` carries `parentTaskId` (null for a root task), `rootTaskId`, `label`, `metadata`, `sessionLabel` and `sessionMetadata`, each null when absent, so that a Claude adapter's `extendOptions` can choose a system prompt or tools without calling the engine. The metadata values are deep-frozen copies.
 
+### 5.5 Task queries, token totals and why a task waits
+
+Where `initialize` lists `workflow.taskQueries`, a host reads what it shows without listing every task ([SPEC-0028](./specs/0028-host-queries-and-lifecycle.md) P):
+
+```ts
+// Is any task active? Answered from the status index, however many tasks have finished.
+const active = await orch.tasks.list({
+  status: ['queued', 'waiting_dependency', 'running', 'verifying'],
+  limit: 1,
+});
+// A conversation's tasks, newest first; nextCursor continues with older ones.
+const recent = await orch.tasks.list({ label: 'conversation:42', order: 'desc', limit: 20 });
+// Up to 100 tasks in one call, in the order asked; unknown IDs are listed in `missing`.
+const { tasks, missing } = await orch.tasks.getMany(timelineIds);
+// Token counts of a root task and every task under it, per provider and model.
+const summary = await orch.usage.summary(rootTaskId);
+```
+
+- `status` takes 1 to 10 distinct statuses and combines with one of `parentTaskId`, `sessionId` and `label`. Python: `tasks.list(status=[...], order="desc")`, `tasks.get_many(ids)` and `usage.summary(root_task_id)`.
+- `usage.summary` sums each token count over the records that report it; `unknownRecords` counts the records without an input or output count, and `completeness` is `reported` only when there is none, as for `usage.get`. A record written by an earlier version has no `model` and takes its dispatch's session's; `model` is null when that dispatch or session was collected. A task that has a parent is refused: pass its `rootTaskId`.
+- These reads, and `usage.get`, search indexes. The first start of this version creates two: `tasks_root` and `usage_task`.
+
+Where `initialize` lists `workflow.queueReasons`, a queued task, and a task that waits for its dependencies, carries `blockedBy`: the first condition that keeps the scheduler from dispatching it (SPEC-0028 B). The engine computes it from the scheduler's own checks when the task is read; it is not stored, no event announces it, and a read-only view returns none.
+
+| `reason` | The task waits for | Also given |
+| --- | --- | --- |
+| `scheduler_failed` | a restart: an internal failure stopped the engine (section 11.6) | |
+| `host_stopping` | nothing: the host is closing | |
+| `capacity` | a free execution slot, `limits.maxActiveSessions` | `taskIds`: the tasks that hold the slots |
+| `quarantine_capacity` | owner reconciliation of quarantined results (section 11.5) | |
+| `resource_cleanup` | an owner's resource cleanup to finish | |
+| `execution_conflict` | the owner to resolve an execution evidence conflict | |
+| `storage` | storage to leave backpressure, or a rollover to settle | |
+| `session_busy` | its session, which another task holds | `sessionId`, and `taskIds`: the tasks that hold it |
+| `write_conflict` | a task whose write paths overlap its own | `taskIds`: those tasks |
+| `scheduling` | nothing: the next scheduler pass takes it | |
+| `dependency` | its dependencies to complete | `taskIds`: the ones not completed |
+
+A task whose budget does not allow a dispatch is paused, not queued, and says so in its `reason`.
+
+### 5.6 Desktop hosts
+
+A host that embeds the engine in a desktop application, such as an Electron main process, shares the user's disk and the thread that draws its window. `createEngine` and `createOrchestrator` write the emergency reserve through `fs.promises` in chunks of 1 MiB, so the event loop keeps running while they start, and they resolve only when the reserve is complete and synced ([SPEC-0028](./specs/0028-host-queries-and-lifecycle.md) W). These settings suit such a host:
+
+```ts
+const orch = await createOrchestrator({
+  workspace,
+  stateDir,
+  adapters: [createClaudeAdapter({ cleanupTimeoutMs: 5000 /* ... */ })],
+  storage: {
+    quotaBytes: 2 * 1024 ** 3, // 2 GiB
+    minFreeBytes: 512 * 1024 ** 2, // 512 MiB
+    emergencyBytes: 32 * 1024 ** 2, // 32 MiB
+  },
+  limits: { defaultMaxQueueWaitMs: 7 * 24 * 3600 * 1000 }, // seven days
+});
+```
+
+- **`storage.quotaBytes` 2 GiB, `minFreeBytes` 512 MiB.** The defaults, 10 GiB and 1 GiB, suit a server. On a laptop, backpressure should start before the application fills the user's disk, and a free-space floor of 512 MiB still leaves the system room to work.
+- **`storage.emergencyBytes` 32 MiB.** The reserve is released to finish settlement after a full disk. The default, 256 MiB, is sized for a server's write load; 32 MiB covers the records a desktop session settles, and writes in a fraction of the time.
+- **`limits.defaultMaxQueueWaitMs` seven days.** The default of 30 seconds suits a service whose queue drains quickly. On a desktop, tasks wait while the user is away or the machine sleeps, and a task that expired in the queue must be created again (section 8.2).
+- **`cleanupTimeoutMs` 5000 for the Claude adapter.** When a turn ends, the adapter closes the Claude process, signals what is left of its process group after half of this window and kills it at the end. The default of 1 second is short for a loaded laptop, or one waking from sleep: a process that is still finishing is signalled after half a second and killed after one. Five seconds lets it exit on its own and still bounds a close.
+- **Closing when the user quits.** `close({ mode: 'pause' })` interrupts running turns and pauses them with reason `owner_shutdown`, as it pauses queued tasks, so the next start can tell the tasks this close paused from ones that a runtime interrupted (section 11.2).
+
 ## 6. Local Python wiring
 
 Run `PYTHONPATH=python/src python3 examples/python/fake_roundtrip.py` from the checkout for a complete owned-host example, including known-fixture review and shutdown. Installed Python still needs the Node CLI and selected adapter in a stable tool directory.
@@ -329,7 +393,7 @@ branch = await orch.sessions.fork(target, snapshot_ref, model="claude-haiku-4-5"
 
 Checks use owner-registered verificationRules with ID/version/argv/canonical cwd/time/output/profile/success criteria. The task freezes their digest at admission. Checks run after runtime stop, capture baseline hashes and output, and require all checks and dependencies to pass. Failed checks consume a finite repair/turn budget. Unconfirmed verifier cleanup retains execution/write ownership until explicit owner evidence. Registered commands run as the local user; baseline checks detect mutation afterward and are not an OS sandbox. Startup, store switches and configuration loading check only a rule's shape, including that its paths do not leave the workspace by name. Paths are resolved when a rule is registered and when a task that uses it is admitted: a path that cannot be resolved refuses the task with `INVALID_WORKSPACE_SCOPE`, and the message names the rule, the path and the system error code. A path removed after admission makes that check fail ([SPEC-0017](./specs/0017-audit-corrections.md) A01).
 
-Rules run in order, and a verification stops at its first failed rule. When a task is dispatched again after a failed verification, its prompt lists the failed rule as one line of JSON: `ruleId`, `argv`, `exitCode`, `signal`, `timedOut`, `error`, `outputBytes`, `outputTruncated`, and `outputTail`, the end of the captured output within 4 KiB after JSON encoding. The output is labeled untrusted, and the prompt still names the evidence artifacts. **The check's output reaches the model on retry: a rule must not print secrets.** The event `verification.completed` carries `rules`, a summary of every rule that ran with the same fields except `argv` and the output, so a host can show why a check failed. The evidence artifacts themselves have no read method on the current store ([SPEC-0022](./specs/0022-close-interrupt-and-verification-feedback.md) V01 to V04).
+Rules run in order, and a verification stops at its first failed rule. When a task is dispatched again after a failed verification, its prompt lists the failed rule as one line of JSON: `ruleId`, `argv`, `exitCode`, `signal`, `timedOut`, `error`, `outputBytes`, `outputTruncated`, and `outputTail`, the end of the captured output within 4 KiB after JSON encoding. The output is labeled untrusted, and the prompt still names the evidence artifacts. **The check's output reaches the model on retry: a rule must not print secrets.** The event `verification.completed` carries `rules`, a summary of every rule that ran with the same fields except `argv`, so a host can show why a check failed. A failed rule also holds `outputTail`, the tail that the retry prompt shows, or `outputOmitted: 'limit'` when the 16 KiB for the event's failed rules ran out; **the event therefore holds what a check printed** ([SPEC-0028](./specs/0028-host-queries-and-lifecycle.md) E03, which supersedes V04). The evidence artifacts themselves have no read method on the current store ([SPEC-0022](./specs/0022-close-interrupt-and-verification-feedback.md) V01 to V03).
 
 Task acceptance mode human uses purpose task_acceptance. `runtimeApprovals.enabled` routes native permission requests as purpose runtime_permission with exact dispatch/tool digest and expiry. The consumer must distinguish them; no consumer, cancellation, expiry or stale target grants permission. The four owner-enabled orchestration tools are preapproved by native MCP and remain subject to engine authorization and limits. Native permission-hook coverage still requires real-runtime acceptance.
 
@@ -354,6 +418,8 @@ Task acceptance mode human uses purpose task_acceptance. `runtimeApprovals.enabl
 **Narrowed write paths.** A task or `sessions.open` spec may add `writePath`, an existing workspace path inside its `writeScope`; the task's or session's write paths become that one path. Write conflicts, session compatibility and the Claude write sandbox use it, so agents with disjoint paths under one registered scope write concurrently. `work_delegate` accepts `writePath` within the parent's write paths, and a child inherits a narrowed parent path. Tasks with verification rules still lock the whole workspace. Clients still cannot register a new write root.
 
 **Runtime rules.** The owner (in-process or stdio host) can call `rules.register({rule})` to append a verification rule version in the configured rule format; an existing `id@version` with the same content is a no-op and different content fails with `CONFLICT`. `rules.list()` shows effective rules with `source: "config" | "runtime"`. Registered rules persist in the active store; if a configured rule later conflicts with a registered one, startup fails with `VALIDATION_ERROR`. A rule whose directory was removed or renamed no longer blocks startup; tasks that use it are refused until the path exists again. `stores.rollover` carries registered rules into the new store. `stores.import` restores the backup's rules, so rules registered after the backup must be registered again; an import whose backup conflicts with a configured rule fails with `VALIDATION_ERROR` before switching. A rule `id` or `version` may contain `@`. Tasks still freeze their rules at admission. At most 1,000 rules may be effective. Limits, tool limits and message limits still change only on restart.
+
+**Retiring rules.** Where `initialize` lists `workflow.ruleRetirement`, the owner calls `rules.retire({ id, version })` (Python `rules.retire(id, version)`) to retire a rule registered at runtime ([SPEC-0028](./specs/0028-host-queries-and-lifecycle.md) U). It leaves the effective rules at once: it no longer counts toward the 1,000, and a task admitted afterwards that names it fails with `RULE_RETIRED`. A task admitted before keeps its frozen copy for its verification and its repair retries. Retirement commits the event `rule.retired` and lasts across restarts, rollovers and imports; a retired rule never keeps a host from starting, even when the configuration now defines the same `id` and `version` differently. A retired version cannot be registered again (`RULE_RETIRED`): a changed rule takes a new version. A rule of the configuration cannot be retired (`VALIDATION_ERROR`); remove it from the configuration instead. `rules.list({ includeRetired: true })` lists the retired rules after the effective ones, each with `retiredAt`.
 
 **Listing tasks.** `task.created` data includes `parentTaskId` and `rootTaskId`. `tasks.list({parentTaskId? | sessionId?, limit?, afterCursor?})` returns creation-ordered pages (default 50, at most 100) with `nextCursor`.
 
@@ -481,6 +547,8 @@ Any other judge only has to return the documented answer shapes; malformed answe
 
 Usage belongs to the original dispatch/task/root even when a native session is reused. Callback/yield replay deduplicates observations by dispatch and source ID. Late records remain on the original owner. Missing fields and ambiguous cumulative scope remain unknown; overlapping total/cached token buckets are not billed twice.
 
+A usage record written from 0.1.5 on also holds `sessionId`, `model`, `rootTaskId` and `recordedAt`, and the event `usage.recorded` carries the four token counts, `model` and `rootTaskId` besides the record's ID, so a host can update its totals from the event alone; `usage.getRecord` still returns `raw`, which the event leaves out. A repeated report of an observation is compared on the fields that earlier versions stored, so a late repeat is accepted ([SPEC-0028](./specs/0028-host-queries-and-lifecycle.md) E01, E02). `usage.summary({ rootTaskId })` totals a root task's tree per model (section 5.5).
+
 Owner pricing identifies provider, model, currency, version and decimal per-million-token rates. Costs use exact decimal arithmetic; costs.get supports direct/tree/host_overhead, and owner-only recordOverhead deduplicates a supplied billingId. Reservations are committed before dispatch and include concurrent held reservations. Confirmed complete usage settles unused reserve; missing usage retains reserve. These are scheduling estimates, not upstream invoices or hard provider-side spend caps.
 
 context.estimate reports per-request keep/compact scenarios for continued cache hits, TTL rebuilds, partial retained prefixes and history growth. Compaction is counted once; unknown intervals/metrics yield explicit ranges or unknown. No automatic economic routing or compaction optimization is enabled without measured native capability/benefit evidence.
@@ -514,8 +582,9 @@ Use `orch.close({mode:'drain',timeoutMs:30000})` for an embedded owner or `await
 What close leaves behind ([SPEC-0016](./specs/0016-session-after-task-end.md) S02):
 
 - `close({mode:'interrupt'})` asks every running turn to interrupt, then waits for the turns to end before it closes the adapters: at most `timeouts.interruptMs` (default 30 seconds) and at most half of `timeoutMs`. A turn whose runtime reports the interruption in that time is paused with reason `runtime_interrupted`, after the host's stop proof when the adapter needs one, and its session is paused without a `pauseOrigin`. A turn that does not answer in time is ended by closing the adapters and stays `outcome_unknown`, blocked after the next start ([SPEC-0022](./specs/0022-close-interrupt-and-verification-feedback.md) C01 to C03). It pauses queued tasks with reason `owner_shutdown`.
+- `close({mode:'pause'})` closes as `interrupt` does, and a turn that it interrupted and that reports the interruption in time is paused with reason `owner_shutdown`, as queued tasks are, instead of `runtime_interrupted`. A turn that another request had already interrupted keeps `runtime_interrupted`, and one that does not answer in time stays `outcome_unknown` ([SPEC-0028](./specs/0028-host-queries-and-lifecycle.md) S). `host.shutdown`, `host.shutdown.continue` and the command-line configuration's `shutdown.mode` accept `pause` where `initialize` lists `workflow.pauseClose`.
 - When the owner of a stdio host disconnects, the host closes the adapters at once, so running turns stay `outcome_unknown` (C05).
-- To pause every running turn before a shutdown whatever the runtime takes, pause each running session with `sessions.control` `{action:'pause', mode:'interrupt'}`, wait for the operation, then close with `mode: 'drain'`.
+- Pausing each running session with `sessions.control` `{action:'pause', mode:'interrupt'}` and then closing with `mode: 'drain'` does not stop all work. As soon as a paused turn frees its execution slot or its write paths, the scheduler can start a queued task, and the drain then waits for that task. `close({mode:'interrupt'})` and `close({mode:'pause'})` stop dispatch and pause every queued task before they interrupt any turn. For a runtime that needs longer to answer an interrupt, raise `timeouts.interruptMs` and the close's `timeoutMs`: the close waits for the smaller of `interruptMs` and half of `timeoutMs`.
 - After the next start, `tasks.resume` continues these tasks, and each resumed queued task gets its full queue wait again (SPEC-0015).
 - A client's own pause records `pauseOrigin: "client"` on the session, and the task reason is also `runtime_interrupted` if the pause interrupted a turn. A host that resumes interrupted work automatically must skip sessions whose `pauseOrigin` is `client`, or it overrides the user's pause.
 
@@ -691,7 +760,7 @@ A failure the engine cannot persist around, such as a result it cannot write, st
 
 ### 11.7 Reading a store while its engine is stopped
 
-`openOrchestratorReadOnly({ stateDir })` reads a store without an engine: it takes no lock, runs no recovery, starts no scheduler or adapter, writes no reserve and migrates nothing ([SPEC-0027](./specs/0027-read-only-access-and-host-corrections.md) R). It answers `tasks.get`, `tasks.list`, `sessions.get`, `usage.get`, `usage.getRecord`, `events.read`, `operations.get`, `operations.lookup`, `approvals.get`, `messages.get`, `handoffs.get`, `handoffs.list`, `costs.get`, `context.checkRefs` and `rules.list` through the same code as an engine; everything else fails with `READ_ONLY`.
+`openOrchestratorReadOnly({ stateDir })` reads a store without an engine: it takes no lock, runs no recovery, starts no scheduler or adapter, writes no reserve and migrates nothing ([SPEC-0027](./specs/0027-read-only-access-and-host-corrections.md) R). It answers `tasks.get`, `tasks.getMany`, `tasks.list`, `sessions.get`, `usage.get`, `usage.getRecord`, `usage.summary`, `events.read`, `operations.get`, `operations.lookup`, `approvals.get`, `messages.get`, `handoffs.get`, `handoffs.list`, `costs.get`, `context.checkRefs` and `rules.list` through the same code as an engine; everything else fails with `READ_ONLY`. It has no scheduler, so its tasks carry no `blockedBy` ([SPEC-0028](./specs/0028-host-queries-and-lifecycle.md) B03).
 
 ```ts
 import { openOrchestratorReadOnly } from '@orchvia/sdk';

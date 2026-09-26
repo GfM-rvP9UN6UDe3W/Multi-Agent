@@ -2,6 +2,30 @@
 
 All notable changes to Orchvia are recorded here. Versions follow [Semantic Versioning](https://semver.org/); before 1.0, a minor version may change the API.
 
+## [Unreleased]
+
+For hosts that show many tasks at once or run on a desktop: queries that answer from indexes, events that carry what a host shows, why a task waits, a close that marks what it paused, rules that can be retired, and an engine start that does not block its thread.
+
+### Added
+
+- `tasks.list` takes `status`, 1 to 10 task statuses, alone or with one of `parentTaskId`, `sessionId` and `label`, and `order: 'desc'`, which starts with the newest task. `tasks.getMany({ taskIds })` reads up to 100 tasks in one call, in the order asked, and names the IDs it did not find. `usage.summary({ rootTaskId })` totals the token counts of a root task and every task under it, per provider and model. `initialize` lists `workflow.taskQueries`, and both SDKs have the methods (SPEC-0028 P).
+- `tasks.get`, `tasks.list` and `tasks.getMany` return `blockedBy` on a queued task and on a task that waits for its dependencies: the first condition that keeps the scheduler from dispatching it, such as `capacity`, `session_busy`, `write_conflict` or `storage`, and the tasks or session it waits for. It is computed from the scheduler's own checks when the task is read, and never stored. `initialize` lists `workflow.queueReasons` (SPEC-0028 B).
+- `close({ mode: 'pause' })` in both SDKs, `host.shutdown` with `mode: 'pause'`, and `"shutdown": {"mode": "pause"}` in the command-line configuration close as `interrupt` does, and pause the turns they interrupted with `owner_shutdown` instead of `runtime_interrupted`, as they pause queued tasks. `initialize` lists `workflow.pauseClose` (SPEC-0028 S).
+- `rules.retire({ id, version })`, for the owner, retires a rule registered at runtime: a task admitted afterwards that names it fails with `RULE_RETIRED`, and it no longer counts toward the 1000 effective rules. Tasks admitted before keep their copy of the rule, for verification and repair retries. A retired version cannot be registered again, and a rule of the configuration cannot be retired. `rules.list({ includeRetired: true })` lists the retired rules too, with `retiredAt`. `initialize` lists `workflow.ruleRetirement` (SPEC-0028 U).
+- A usage record written from this version on holds its `sessionId`, `model`, `rootTaskId` and `recordedAt`, and the event `usage.recorded` carries the four token counts, `model` and `rootTaskId`, but not `raw` (SPEC-0028 E01, E02).
+- The guide's section on desktop hosts recommends storage limits, a queue wait and the Claude adapter's cleanup timeout for a host that runs on a user's machine (SPEC-0028 W04).
+
+### Changed
+
+- `verification.completed` carries each failed rule's `outputTail`, the end of its output that the retry prompt shows, at most 4 KiB for a rule and 16 KiB for the event; a rule that does not fit has `outputOmitted: 'limit'`. The event therefore contains what a check printed, which can include paths or secrets from the workspace (SPEC-0028 E03, superseding SPEC-0022 V04).
+- `createEngine` writes the emergency reserve through `fs.promises` in chunks of 1 MiB, so the event loop keeps running while it writes, and it still resolves only once the reserve is complete and synced. The reserve is written as `emergency.reserve.partial` and renamed when complete, so `emergency.reserve` is never partial; `storage.configure` and store switches write a missing reserve the same way before they return (SPEC-0028 W01, W02).
+- `usage.get` reads a task's records through the new index `usage_task` instead of reading the whole usage table. The first start of this version creates the indexes `usage_task` and `tasks_root` (SPEC-0028 P04).
+- `storage.configure` starts a scheduler pass, so a task that waited for storage runs when a new policy ends the backpressure (SPEC-0028 B02).
+
+### Fixed
+
+- The guide no longer recommends pausing each running session and then closing with `drain` to stop all work before a shutdown. A queued task could start as soon as a paused turn freed its execution slot or write paths, and the drain then waited for that task. `close({ mode: 'interrupt' })` and `close({ mode: 'pause' })` stop dispatch before they interrupt a turn, and the guide now recommends them.
+
 ## [0.1.4] - 2026-09-26
 
 For hosts that embed the engine: reading a store while its engine is stopped, the host's own labels on tasks and sessions, and an immediate notice when an internal failure stops the engine.

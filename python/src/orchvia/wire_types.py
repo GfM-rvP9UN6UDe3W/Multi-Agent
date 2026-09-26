@@ -1,4 +1,4 @@
-"""Generated from schemas/protocol.schema.json; SHA-256 e4f3b665b6370efbf49e7575a5f65c349096b7ee50a9e231f1baaee3c04ff058. Do not edit.
+"""Generated from schemas/protocol.schema.json; SHA-256 6450d4a798f714b97a0d37c2ea174eece96088d7103732e3585aeaae8d866746. Do not edit.
 Wire dictionaries use camelCase. Use the SDK dataclasses for snake_case requests.
 """
 from __future__ import annotations
@@ -64,6 +64,12 @@ class TaskSnapshot(TypedDict):
     maintenanceOperationId: NotRequired[str]
     revisionRequest: NotRequired[TaskSnapshotRevisionRequest]
     dependencyResultsDelivered: NotRequired[bool]
+    blockedBy: NotRequired[TaskBlocker]
+
+class TaskBlocker(TypedDict):
+    reason: Literal["scheduler_failed", "host_stopping", "capacity", "quarantine_capacity", "resource_cleanup", "execution_conflict", "storage", "session_busy", "write_conflict", "scheduling", "dependency"]
+    taskIds: NotRequired[list[str]]
+    sessionId: NotRequired[str]
 
 class ApprovalRequestTarget(TypedDict):
     taskId: str
@@ -95,6 +101,12 @@ class UsageRecordedData(TypedDict):
     usageRecordId: str
     dispatchId: str
     provider: str
+    inputTokens: NotRequired[int | None]
+    cachedInputTokens: NotRequired[int | None]
+    cacheWriteInputTokens: NotRequired[int | None]
+    outputTokens: NotRequired[int | None]
+    model: NotRequired[str]
+    rootTaskId: NotRequired[str]
 
 class UsageRecord(TypedDict):
     id: str
@@ -106,6 +118,37 @@ class UsageRecord(TypedDict):
     cacheWriteInputTokens: int | None
     outputTokens: int | None
     raw: Any
+    sessionId: NotRequired[str]
+    model: NotRequired[str]
+    rootTaskId: NotRequired[str]
+    recordedAt: NotRequired[str]
+
+class UsageSummaryParams(TypedDict):
+    rootTaskId: str
+
+class UsageTotals(TypedDict):
+    records: int
+    inputTokens: int
+    cachedInputTokens: int
+    cacheWriteInputTokens: int
+    outputTokens: int
+    unknownRecords: int
+
+class UsageModelTotals(TypedDict):
+    provider: str
+    model: str | None
+    records: int
+    inputTokens: int
+    cachedInputTokens: int
+    cacheWriteInputTokens: int
+    outputTokens: int
+    unknownRecords: int
+
+class UsageSummary(TypedDict):
+    rootTaskId: str
+    byModel: list[UsageModelTotals]
+    totals: UsageTotals
+    completeness: Literal["reported", "unknown"]
 
 class SessionSnapshotForkSource(TypedDict):
     sessionId: str
@@ -600,6 +643,14 @@ class StoreImportParams(TypedDict):
     idempotencyKey: str
     requestDigest: NotRequired[str]
 
+class HostShutdownParams(TypedDict):
+    mode: NotRequired[Literal["drain", "interrupt", "pause"]]
+    timeoutMs: NotRequired[int]
+    operationId: NotRequired[str]
+    expectedStoreId: str
+    idempotencyKey: NotRequired[str]
+    requestDigest: NotRequired[str]
+
 class ApprovalDecisionParamsDecision(TypedDict):
     choice: Literal["approve", "deny", "revise"]
     expectedRevision: int
@@ -618,10 +669,19 @@ class TaskListParams(TypedDict):
     label: NotRequired[str]
     limit: NotRequired[int]
     afterCursor: NotRequired[str]
+    status: NotRequired[list[TaskStatus]]
+    order: NotRequired[Literal["asc", "desc"]]
 
 class TaskListResult(TypedDict):
     tasks: list[TaskSnapshot]
     nextCursor: str | None
+
+class TaskGetManyParams(TypedDict):
+    taskIds: list[str]
+
+class TaskGetManyResult(TypedDict):
+    tasks: list[TaskSnapshot]
+    missing: list[str]
 
 class HandoffRequestContextRefsItem(TypedDict):
     artifactRef: str
@@ -674,6 +734,13 @@ class RuleRegisterParams(TypedDict):
     idempotencyKey: str
     requestDigest: NotRequired[str]
 
+class RuleRetireParams(TypedDict):
+    id: str
+    version: str
+    expectedStoreId: str
+    idempotencyKey: str
+    requestDigest: NotRequired[str]
+
 class RegisteredVerificationRuleSuccess(TypedDict):
     exitCode: int
 
@@ -689,6 +756,10 @@ class RegisteredVerificationRule(TypedDict):
     baselinePaths: NotRequired[list[str]]
     digest: str
     source: Literal["config", "runtime"]
+    retiredAt: NotRequired[str]
+
+class RuleListParams(TypedDict):
+    includeRetired: NotRequired[bool]
 
 class RuleListResult(TypedDict):
     rules: list[RegisteredVerificationRule]
@@ -704,6 +775,10 @@ class WorkflowCapability(TypedDict):
     taskList: NotRequired[Literal[True]]
     contextCheck: NotRequired[Literal[True]]
     labels: NotRequired[Literal[True]]
+    taskQueries: NotRequired[Literal[True]]
+    queueReasons: NotRequired[Literal[True]]
+    pauseClose: NotRequired[Literal[True]]
+    ruleRetirement: NotRequired[Literal[True]]
 
 TaskStatus: TypeAlias = Literal["queued", "running", "waiting_approval", "paused", "blocked", "completed", "failed", "cancelled", "waiting_dependency", "verifying"]
 SessionStatus: TypeAlias = Literal["idle", "running", "pausing", "paused", "closed", "outcome_unknown"]

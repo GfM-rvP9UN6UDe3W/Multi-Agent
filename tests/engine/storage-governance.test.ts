@@ -153,9 +153,11 @@ test('B03 fixed snapshot pages and continuous cursor floor reject stale recovery
     f.close();
   }
 });
-test('B05 exact capacity blocks business while bounded settlement and same-key lookup remain available', () => {
+test('B05 exact capacity blocks business while bounded settlement and same-key lookup remain available', async () => {
   const f = fixture();
   try {
+    // The owner of the policy writes the reserve (SPEC-0028 W01); settlement must leave it in place.
+    await f.policy.reserve();
     f.policy.configure({ maxRecords: 8, settlementReserveRecords: 4 });
     terminal(f.store, 'a');
     terminal(f.store, 'b');

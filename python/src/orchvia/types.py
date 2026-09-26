@@ -81,7 +81,10 @@ _WIRE_TO_PYTHON = {
     "writePath": "write_path", "revisionRequest": "revision_request",
     "dependencyResultsDelivered": "dependency_results_delivered", "dependencyResults": "dependency_results",
     "delegationApproval": "delegation_approval", "runtimeRules": "runtime_rules", "taskList": "task_list",
-    "contextCheck": "context_check",
+    "contextCheck": "context_check", "taskQueries": "task_queries", "queueReasons": "queue_reasons",
+    "pauseClose": "pause_close", "ruleRetirement": "rule_retirement",
+    "blockedBy": "blocked_by", "byModel": "by_model", "recordedAt": "recorded_at", "retiredAt": "retired_at",
+    "includeRetired": "include_retired",
     "handoffId": "handoff_id", "targetSessionId": "target_session_id", "fromTaskId": "from_task_id",
     "fromSessionId": "from_session_id", "fromDispatchId": "from_dispatch_id",
     "fromGeneration": "from_generation", "resolvedAt": "resolved_at", "nextCursor": "next_cursor",
@@ -143,8 +146,8 @@ _PYTHON_TO_WIRE = {value: key for key, value in _WIRE_TO_PYTHON.items()}
 _OBJECT_FIELDS = {"spec", "runtime", "acceptance", "target", "data", "error", "capabilities",
                   "lifecycle", "resolution", "evidence", "timeouts", "executionIsolation",
                   "execution", "lease", "budget", "routing", "contextPlan", "sessionLifecycle", "retryIdentity", "storeNamespaces",
-                  "workflow", "revisionRequest"}
-_OBJECT_LIST_FIELDS = {"records", "events", "occupants", "conflicts", "tasks", "handoffs", "rules"}
+                  "workflow", "revisionRequest", "blockedBy"}
+_OBJECT_LIST_FIELDS = {"records", "events", "occupants", "conflicts", "tasks", "handoffs", "rules", "byModel"}
 
 
 class Snapshot(Mapping[str, Any]):

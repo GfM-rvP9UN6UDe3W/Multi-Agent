@@ -24,6 +24,7 @@ export const MUTATIONS = new Set([
   'stores.rollover',
   'stores.import',
   'rules.register',
+  'rules.retire',
   'handoffs.resolve',
 ]);
 export interface RetryIdentity {

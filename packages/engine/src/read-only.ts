@@ -64,6 +64,9 @@ class ReadOnlyView implements ReadOnlyEngine {
               taskList: true,
               contextCheck: true,
               labels: true,
+              // The reads of SPEC-0028 P and U; a view has no scheduler, so no queue reasons (B03).
+              taskQueries: true,
+              ruleRetirement: true,
             },
           },
         };
@@ -89,15 +92,17 @@ class ReadOnlyView implements ReadOnlyEngine {
         );
       case 'rules.list':
         // Offline, only the rules registered at runtime are known; a configuration's are not.
-        fields(p, []);
+        fields(p, ['includeRetired']);
+        if (p.includeRetired !== undefined && typeof p.includeRetired !== 'boolean')
+          fail('VALIDATION_ERROR', 'includeRetired must be a boolean');
         return this.read(() => {
-          const { rules } = effectiveRules(
+          const { rules, retired } = effectiveRules(
             this.store.workspace,
             undefined,
             this.store.all('verification_rules'),
           );
           return {
-            rules: rules.map(
+            rules: [...rules, ...(p.includeRetired ? retired : [])].map(
               (rule): RegisteredVerificationRule => ({ ...rule, source: 'runtime' }),
             ),
           };

@@ -1,4 +1,4 @@
-// Generated from schemas/protocol.schema.json; SHA-256 e4f3b665b6370efbf49e7575a5f65c349096b7ee50a9e231f1baaee3c04ff058. Do not edit.
+// Generated from schemas/protocol.schema.json; SHA-256 6450d4a798f714b97a0d37c2ea174eece96088d7103732e3585aeaae8d866746. Do not edit.
 // Structural types; validateWire enforces numeric and conditional constraints.
 export type RuntimeSpec = { provider: string; model: string };
 export type TaskSpec = {
@@ -52,7 +52,24 @@ export type TaskSnapshot = {
   maintenanceOperationId?: string;
   revisionRequest?: { approvalId: string; comment: string };
   dependencyResultsDelivered?: boolean;
+  blockedBy?: TaskBlocker;
   [key: string]: unknown;
+};
+export type TaskBlocker = {
+  reason:
+    | 'scheduler_failed'
+    | 'host_stopping'
+    | 'capacity'
+    | 'quarantine_capacity'
+    | 'resource_cleanup'
+    | 'execution_conflict'
+    | 'storage'
+    | 'session_busy'
+    | 'write_conflict'
+    | 'scheduling'
+    | 'dependency';
+  taskIds?: Array<string>;
+  sessionId?: string;
 };
 export type ApprovalRequest = {
   approvalId: string;
@@ -85,6 +102,12 @@ export type UsageRecordedData = {
   usageRecordId: string;
   dispatchId: string;
   provider: string;
+  inputTokens?: number | null;
+  cachedInputTokens?: number | null;
+  cacheWriteInputTokens?: number | null;
+  outputTokens?: number | null;
+  model?: string;
+  rootTaskId?: string;
   [key: string]: unknown;
 };
 export type UsageRecord = {
@@ -97,7 +120,36 @@ export type UsageRecord = {
   cacheWriteInputTokens: number | null;
   outputTokens: number | null;
   raw: unknown;
+  sessionId?: string;
+  model?: string;
+  rootTaskId?: string;
+  recordedAt?: string;
   [key: string]: unknown;
+};
+export type UsageSummaryParams = { rootTaskId: string };
+export type UsageTotals = {
+  records: number;
+  inputTokens: number;
+  cachedInputTokens: number;
+  cacheWriteInputTokens: number;
+  outputTokens: number;
+  unknownRecords: number;
+};
+export type UsageModelTotals = {
+  provider: string;
+  model: string | null;
+  records: number;
+  inputTokens: number;
+  cachedInputTokens: number;
+  cacheWriteInputTokens: number;
+  outputTokens: number;
+  unknownRecords: number;
+};
+export type UsageSummary = {
+  rootTaskId: string;
+  byModel: Array<UsageModelTotals>;
+  totals: UsageTotals;
+  completeness: 'reported' | 'unknown';
 };
 export type SessionStatus =
   | 'idle'
@@ -589,6 +641,14 @@ export type StoreImportParams = {
   idempotencyKey: string;
   requestDigest?: string;
 };
+export type HostShutdownParams = {
+  mode?: 'drain' | 'interrupt' | 'pause';
+  timeoutMs?: number;
+  operationId?: string;
+  expectedStoreId: string;
+  idempotencyKey?: string;
+  requestDigest?: string;
+};
 export type ApprovalDecisionParams = {
   approvalId: string;
   decision: unknown & {
@@ -608,8 +668,12 @@ export type TaskListParams = unknown &
     label?: string;
     limit?: number;
     afterCursor?: string;
+    status?: Array<TaskStatus>;
+    order?: 'asc' | 'desc';
   };
 export type TaskListResult = { tasks: Array<TaskSnapshot>; nextCursor: string | null };
+export type TaskGetManyParams = { taskIds: Array<string> };
+export type TaskGetManyResult = { tasks: Array<TaskSnapshot>; missing: Array<string> };
 export type HandoffRequest = {
   handoffId: string;
   status: 'pending' | 'accepted' | 'rejected' | 'expired' | 'invalidated';
@@ -653,6 +717,13 @@ export type RuleRegisterParams = {
   idempotencyKey: string;
   requestDigest?: string;
 };
+export type RuleRetireParams = {
+  id: string;
+  version: string;
+  expectedStoreId: string;
+  idempotencyKey: string;
+  requestDigest?: string;
+};
 export type RegisteredVerificationRule = {
   id: string;
   version: string;
@@ -665,7 +736,9 @@ export type RegisteredVerificationRule = {
   baselinePaths?: Array<string>;
   digest: string;
   source: 'config' | 'runtime';
+  retiredAt?: string;
 };
+export type RuleListParams = { includeRetired?: boolean };
 export type RuleListResult = { rules: Array<RegisteredVerificationRule> };
 export type WorkflowCapability = {
   version: 1;
@@ -678,5 +751,9 @@ export type WorkflowCapability = {
   taskList?: true;
   contextCheck?: true;
   labels?: true;
+  taskQueries?: true;
+  queueReasons?: true;
+  pauseClose?: true;
+  ruleRetirement?: true;
   [key: string]: unknown;
 };

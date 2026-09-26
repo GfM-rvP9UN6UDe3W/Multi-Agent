@@ -202,7 +202,8 @@ test('0022-V03 without readable failed evidence of the same task, the details ar
   }
 });
 
-test('0022-V04 verification.completed reports every rule that ran, without its output', async () => {
+// SPEC-0028 E03 supersedes V04: a failed rule now carries its output tail.
+test('0022-V04 0028-E03 verification.completed reports every rule that ran, and the output tail of a failed one', async () => {
   const f = await fixture([
     rule('lint', 'process.stdout.write("clean")'),
     rule('unit', 'process.stdout.write("boom"); process.exit(1)'),
@@ -233,6 +234,7 @@ test('0022-V04 verification.completed reports every rule that ran, without its o
         error: null,
         outputBytes: 4,
         outputTruncated: false,
+        outputTail: 'boom',
       },
     ]);
     assert.equal(completed.data.passed, false);

@@ -77,3 +77,18 @@ export function usageRecord(
     raw,
   };
 }
+
+/**
+ * The fields that records held before SPEC-0028 E01: identity, token counts and raw. A repeated
+ * report of an observation is compared on these, so its later time does not make it a conflict.
+ */
+export function reportedUsage(record: UsageRecord): UsageRecord {
+  const {
+    sessionId: _session,
+    model: _model,
+    rootTaskId: _root,
+    recordedAt: _at,
+    ...reported
+  } = record;
+  return reported;
+}
