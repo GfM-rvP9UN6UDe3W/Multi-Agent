@@ -376,3 +376,12 @@ Pull request #29 set the version to 0.1.4 on top of SPEC-0027 (#28). A local Cla
 - The owner approved the `npm` and `pypi` deployments. Both jobs passed, and the GitHub release "Orchvia 0.1.4" followed with the five npm archives, the wheel, the sdist, both manifests and `SHA256SUMS`; its notes are the changelog's 0.1.4 section.
 - P04 passed on the Ubuntu and macOS runners, and the whole run passed at its first attempt.
 - The npm registry lists 0.1.4 as the `latest` version of all five packages, with provenance attestations, and `@orchvia/adapter-claude@0.1.4` declares only the optional Claude SDK peer. PyPI lists `orchvia` 0.1.4 with its wheel and sdist.
+
+## The fourth release, 0.1.5
+
+Pull request #32 set the version to 0.1.5 on top of SPEC-0028 (#31). A local Claude Code session pushed the tag `v0.1.5` on its merge commit `b22a16c`, on the owner's authorization, which started the release workflow ([36239429067](https://github.com/masonlee39/orchvia/actions/runs/36239429067)) on 2026-09-26.
+
+- The offline matrix and the build passed at the first attempt.
+- The owner approved the `npm` and `pypi` deployments. Both jobs passed, and the GitHub release "Orchvia 0.1.5" followed with the five npm archives, the wheel, the sdist, both manifests and `SHA256SUMS`; its notes are the changelog's 0.1.5 section.
+- P04 passed on the Ubuntu and macOS runners, and the whole run passed at its first attempt.
+- The npm registry lists 0.1.5 as the `latest` version of all five packages, with provenance attestations, and `@orchvia/adapter-claude@0.1.5` declares only the optional Claude SDK peer. PyPI lists `orchvia` 0.1.5 with its wheel and sdist. For a few minutes after publication, PyPI's JSON API and simple index still answered 0.1.4 from their caches; a request that bypassed the cache answered 0.1.5.
