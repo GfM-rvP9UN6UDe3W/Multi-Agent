@@ -80,6 +80,7 @@ Each specification has a matching TDD record of observed failures before the cha
 | [SPEC-0028](specs/0028-host-queries-and-lifecycle.md) | Task queries, queue reasons, a pausing close, rule retirement and a non-blocking reserve (0.1.5) |
 | [SPEC-0029](specs/0029-usage-by-task-and-close-markers.md) | Usage by task, the time a task delivered, reactivating rules and tasks that a close paused (0.1.6) |
 | [SPEC-0030](specs/0030-cache-write-durations-and-commit-time.md) | Cache writes by duration, one time per commit, and keys for rule changes (0.1.7) |
+| [SPEC-0031](specs/0031-usage-outside-the-main-loop.md) | Usage outside the main loop |
 
 ## Claude and Codex baselines
 

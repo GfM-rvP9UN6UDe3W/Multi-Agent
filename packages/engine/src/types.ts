@@ -634,7 +634,10 @@ export interface UsageRecord {
   raw: Json;
   /** Written from SPEC-0028 E01 on; absent from earlier records. */
   sessionId?: string;
-  /** The model of the dispatch's session (SPEC-0028 E01). */
+  /**
+   * The model that served the calls: the one the runtime named for the observation, else the
+   * dispatch's session's (SPEC-0028 E01, SPEC-0031 B01).
+   */
   model?: string;
   rootTaskId?: string;
   recordedAt?: string;

@@ -1,4 +1,4 @@
-// Generated from schemas/protocol.schema.json; SHA-256 33cc883970a3efc11a6b128c0e3700daaac3c36c6e9ddf414b53b7ebd1756423. Do not edit.
+// Generated from schemas/protocol.schema.json; SHA-256 706a4d4990d898e1738f1f5cd0c9ecd12fc30667885fef9e8fd9ab13283cf907. Do not edit.
 export const protocolSchema = {
   $schema: 'https://json-schema.org/draft/2020-12/schema',
   $id: 'urn:agent-orch:protocol:2.0',
@@ -444,7 +444,7 @@ export const protocolSchema = {
     UsageRecordedData: {
       type: 'object',
       description:
-        'Data in a durable usage.recorded event. Events written from SPEC-0028 E02 on also hold the token counts, the model and the root task; raw stays in the record, which usage.getRecord returns. storeId, sessionId and occurredAt are on the event envelope. From SPEC-0030 A03 on, the event also carries cacheWrite5mInputTokens and cacheWrite1hInputTokens when the record has them.',
+        "Data in a durable usage.recorded event. Events written from SPEC-0028 E02 on also hold the token counts, the model and the root task; raw stays in the record, which usage.getRecord returns. storeId, sessionId and occurredAt are on the event envelope. From SPEC-0030 A03 on, the event also carries cacheWrite5mInputTokens and cacheWrite1hInputTokens when the record has them. model is the record's own model (SPEC-0031 B04).",
       required: ['usageRecordId', 'dispatchId', 'provider'],
       properties: {
         usageRecordId: {
@@ -503,7 +503,7 @@ export const protocolSchema = {
     UsageRecord: {
       type: 'object',
       description:
-        'Reported integer token counts or null when unknown. Raw provider JSON retains its original keys and is not synthesized into zero usage or cost. Records written from SPEC-0028 E01 on also hold sessionId, model, rootTaskId and recordedAt. A runtime that splits its cache writes by how long they live also reports cacheWrite5mInputTokens and cacheWrite1hInputTokens, which together are cacheWriteInputTokens (SPEC-0030 A03).',
+        "Reported integer token counts or null when unknown. Raw provider JSON retains its original keys and is not synthesized into zero usage or cost. Records written from SPEC-0028 E01 on also hold sessionId, model, rootTaskId and recordedAt. A runtime that splits its cache writes by how long they live also reports cacheWrite5mInputTokens and cacheWrite1hInputTokens, which together are cacheWriteInputTokens (SPEC-0030 A03). model is the one the runtime named for the observation, else the dispatch session's; the Claude adapter reports the calls outside a dispatch's main loop, such as a compaction, as further records of their own models (SPEC-0031).",
       required: [
         'id',
         'taskId',
