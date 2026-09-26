@@ -1,4 +1,4 @@
-// Generated from schemas/protocol.schema.json; SHA-256 6450d4a798f714b97a0d37c2ea174eece96088d7103732e3585aeaae8d866746. Do not edit.
+// Generated from schemas/protocol.schema.json; SHA-256 7ed691885c36c4278051fd3947051363a2d8822b9325f081b15b820c29b2de5f. Do not edit.
 export const protocolSchema = {
   $schema: 'https://json-schema.org/draft/2020-12/schema',
   $id: 'urn:agent-orch:protocol:2.0',
@@ -273,6 +273,29 @@ export const protocolSchema = {
         },
         blockedBy: {
           $ref: '#/$defs/TaskBlocker',
+        },
+        deliveredAt: {
+          type: 'string',
+          format: 'date-time',
+          description:
+            'The time the task last delivered a result: its latest review for human acceptance, or its completion when its checks passed (SPEC-0029 B01).',
+        },
+        pausedByClose: {
+          type: 'object',
+          description:
+            'Present while the task stays paused by a close; wasRunning says whether the close interrupted its turn (SPEC-0029 D01).',
+          properties: {
+            operationId: {
+              type: 'string',
+              minLength: 1,
+              maxLength: 128,
+            },
+            wasRunning: {
+              type: 'boolean',
+            },
+          },
+          required: ['operationId', 'wasRunning'],
+          additionalProperties: false,
         },
       },
     },
@@ -671,6 +694,75 @@ export const protocolSchema = {
         },
       },
       required: ['rootTaskId', 'byModel', 'totals', 'completeness'],
+      additionalProperties: false,
+    },
+    UsageByTaskParams: {
+      type: 'object',
+      description: '1 to 100 distinct task IDs (SPEC-0029 A01).',
+      properties: {
+        taskIds: {
+          type: 'array',
+          items: {
+            type: 'string',
+            minLength: 1,
+            maxLength: 128,
+          },
+          minItems: 1,
+          maxItems: 100,
+        },
+      },
+      required: ['taskIds'],
+      additionalProperties: false,
+    },
+    UsageTaskTotals: {
+      type: 'object',
+      description:
+        "One task's own usage records per provider and model, as usage.summary counts them (SPEC-0029 A01).",
+      properties: {
+        taskId: {
+          type: 'string',
+          minLength: 1,
+          maxLength: 128,
+        },
+        byModel: {
+          type: 'array',
+          items: {
+            $ref: '#/$defs/UsageModelTotals',
+          },
+        },
+        totals: {
+          $ref: '#/$defs/UsageTotals',
+        },
+        completeness: {
+          enum: ['reported', 'unknown'],
+        },
+      },
+      required: ['taskId', 'byModel', 'totals', 'completeness'],
+      additionalProperties: false,
+    },
+    UsageByTaskResult: {
+      type: 'object',
+      description:
+        'The tasks found and the IDs not found, each in the order requested (SPEC-0029 A01).',
+      properties: {
+        tasks: {
+          type: 'array',
+          items: {
+            $ref: '#/$defs/UsageTaskTotals',
+          },
+          maxItems: 100,
+        },
+        missing: {
+          type: 'array',
+          items: {
+            type: 'string',
+            minLength: 1,
+            maxLength: 128,
+          },
+          maxItems: 100,
+        },
+      },
+      required: ['tasks', 'missing'],
       additionalProperties: false,
     },
     SessionStatus: {
@@ -3528,6 +3620,9 @@ export const protocolSchema = {
           const: true,
         },
         ruleRetirement: {
+          const: true,
+        },
+        usageByTask: {
           const: true,
         },
       },

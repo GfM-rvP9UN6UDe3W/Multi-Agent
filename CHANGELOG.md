@@ -2,6 +2,20 @@
 
 All notable changes to Orchvia are recorded here. Versions follow [Semantic Versioning](https://semver.org/); before 1.0, a minor version may change the API.
 
+## [Unreleased]
+
+What a host's usage page and its restart need: token totals for many tasks in one call, the time each task delivered, rules that can be reactivated, and which paused tasks a close interrupted.
+
+### Added
+
+- `usage.byTask({ taskIds })` returns the token totals of 1 to 100 tasks per provider and model, each task's own records counted as `usage.summary` counts a tree, in the order asked, with the IDs that name no task in `missing`. It reads the records of all the tasks in one indexed statement, and a read-only view answers it too. `initialize` lists `workflow.usageByTask` (SPEC-0029 A).
+- Task snapshots hold `deliveredAt`, the time the task last delivered a result: each review of its result for human acceptance, or its completion when its checks passed. A runtime permission's review does not change it (SPEC-0029 B).
+- A task that a close paused holds `pausedByClose: { operationId, wasRunning }` until it leaves `paused`, so a host can resume the turns that were running before the tasks that were queued (SPEC-0029 D).
+
+### Changed
+
+- `rules.register` of a retired rule version with the same content reactivates it, with the event `rule.reactivated`; other content still fails with `RULE_RETIRED`. Before, the same content was refused too, so a host whose versions are hashes of their content could not retire rules (SPEC-0029 C, superseding part of SPEC-0028 U03).
+
 ## [0.1.5] - 2026-09-26
 
 For hosts that show many tasks at once or run on a desktop: queries that answer from indexes, events that carry what a host shows, why a task waits, a close that marks what it paused, rules that can be retired, and an engine start that does not block its thread.

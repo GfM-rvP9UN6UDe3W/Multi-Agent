@@ -152,6 +152,13 @@ export interface TaskSnapshot {
    * when the task is read; never stored, and absent from a read-only view (SPEC-0028 B).
    */
   blockedBy?: TaskBlocker;
+  /**
+   * The time the task last delivered a result: its latest review for human acceptance, or its
+   * completion when its checks passed (SPEC-0029 B01). Stored with the task.
+   */
+  deliveredAt?: string;
+  /** Set while the task stays paused by a close, and whether its turn was running (SPEC-0029 D). */
+  pausedByClose?: { operationId: string; wasRunning: boolean };
 }
 /** The first condition that keeps the scheduler from dispatching a task (SPEC-0028 B01). */
 export type TaskBlockReason =
@@ -356,7 +363,9 @@ export type WorkflowFeature =
   /** SPEC-0028 S: `close({ mode: 'pause' })`. */
   | 'pauseClose'
   /** SPEC-0028 U: `rules.retire` and `rules.list({ includeRetired })`. */
-  | 'ruleRetirement';
+  | 'ruleRetirement'
+  /** SPEC-0029 A: `usage.byTask`. */
+  | 'usageByTask';
 /** A model's request that the host hand work to a session outside its subtree (SPEC-0014 H). */
 export interface HandoffRequest {
   handoffId: string;
@@ -639,6 +648,18 @@ export interface UsageModelTotals extends UsageTotals {
   provider: string;
   /** Null when neither the record nor its dispatch's session names the model. */
   model: string | null;
+}
+/** One task's own usage, as `usage.byTask` reports it (SPEC-0029 A01). */
+export interface UsageTaskTotals {
+  taskId: string;
+  byModel: UsageModelTotals[];
+  totals: UsageTotals;
+  completeness: 'reported' | 'unknown';
+}
+/** The result of `usage.byTask`, each list in the order requested (SPEC-0029 A01). */
+export interface UsageByTaskResult {
+  tasks: UsageTaskTotals[];
+  missing: string[];
 }
 /** The result of `usage.summary`: a root task and every task under it (SPEC-0028 P03). */
 export interface UsageSummary {

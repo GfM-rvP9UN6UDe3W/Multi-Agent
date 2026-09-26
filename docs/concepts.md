@@ -118,4 +118,4 @@ The routing layer asks a judge you choose, a model or plain rules, and proposes 
 
 **Plainly:** a durable record of tokens each attempt used.
 
-Every usage observation from a runtime is stored with one `usage.recorded` event in the same transaction. The record names its session, model and root task, and the event carries the token counts, so that `usage.summary` and a host's own totals need no other read. Missing values stay unknown; cost estimates from registered prices are estimates, not bills.
+Every usage observation from a runtime is stored with one `usage.recorded` event in the same transaction. The record names its session, model and root task, and the event carries the token counts, so that `usage.summary`, `usage.byTask` and a host's own totals need no other read. Missing values stay unknown; cost estimates from registered prices are estimates, not bills.

@@ -1872,10 +1872,12 @@ class LocalEngine implements Engine {
     }
   }
 
+  /** `delivered` records the change as the task's latest delivery of a result (SPEC-0029 B01). */
   private saveTask(
     task: TaskSnapshot,
     status?: TaskSnapshot['status'],
     reason?: string | null,
+    delivered = false,
   ): void {
     // SPEC-0015 Q01: only time spent queued counts, so each new stay in the queue restarts the wait.
     if (
@@ -1893,8 +1895,11 @@ class LocalEngine implements Engine {
     }
     if (status) task.status = status;
     if (reason !== undefined) task.reason = reason;
+    // A close's mark lasts while the pause it describes lasts (SPEC-0029 D03).
+    if (status && status !== 'paused') delete task.pausedByClose;
     task.revision++;
     task.updatedAt = now();
+    if (delivered) task.deliveredAt = task.updatedAt;
     this.store.put('tasks', task.id, task);
   }
   private saveSession(session: SessionSnapshot, status?: SessionSnapshot['status']): void {
@@ -2261,7 +2266,8 @@ class LocalEngine implements Engine {
     this.invalidateApproval(task);
     const id = randomUUID();
     task.approvalId = id;
-    this.saveTask(task, 'waiting_approval', null);
+    // The review of a result is its delivery; a runtime permission's review is not (SPEC-0029 B01).
+    this.saveTask(task, 'waiting_approval', null, true);
     const approval: ApprovalRequest = {
       approvalId: id,
       taskId: task.id,
@@ -2567,6 +2573,7 @@ class LocalEngine implements Engine {
               queueReasons: true,
               pauseClose: true,
               ruleRetirement: true,
+              usageByTask: true,
             },
             providers: [...this.adapters.keys()],
             lifecycle: { version: 1, reconcile: 'owner-attestation', durableDeadlines: true },
@@ -2699,6 +2706,7 @@ class LocalEngine implements Engine {
         const [rule] = normalizeRules(this.store.workspace, [p.rule as VerificationRule]);
         const key = ruleKey(rule.id, rule.version);
         let registered: FrozenVerificationRule | undefined;
+        let reactivated = false;
         const op = this.operation(
           method,
           'local',
@@ -2710,8 +2718,10 @@ class LocalEngine implements Engine {
             );
             if (existing && existing.digest !== rule.digest)
               fail('CONFLICT', 'This rule id/version is registered with different content');
-            // A version has one life: a changed rule takes a new version (SPEC-0028 U03).
-            if (!existing && this.retiredRules.has(key))
+            // A retired version keeps its content: the same content reactivates it, other content
+            // takes a new version (SPEC-0028 U03, SPEC-0029 C01).
+            const retired = existing ? undefined : this.retiredRules.get(key);
+            if (retired && retired.digest !== rule.digest)
               fail('RULE_RETIRED', 'This rule id/version was retired; register a new version', {
                 id: rule.id,
                 version: rule.version,
@@ -2720,17 +2730,37 @@ class LocalEngine implements Engine {
             else {
               if (this.verificationRules.length >= 1000)
                 fail('VALIDATION_ERROR', 'At most 1000 verification rules may be effective');
-              this.store.put('verification_rules', key, rule);
+              if (retired) {
+                // Rows written by rc.8 have other keys; the row is found by its content.
+                const row = this.store.db
+                  .prepare(
+                    "SELECT id FROM verification_rules WHERE json_extract(data,'$.id')=? AND json_extract(data,'$.version')=?",
+                  )
+                  .get(rule.id, rule.version) as { id: string };
+                this.store.put('verification_rules', row.id, rule);
+                this.store.event(
+                  'rule.reactivated',
+                  { id: rule.id, version: rule.version },
+                  { operationId: op.id },
+                );
+                reactivated = true;
+              } else this.store.put('verification_rules', key, rule);
               registered = rule;
             }
             op.targetId = key;
-            op.result = { id: rule.id, version: rule.version, digest: rule.digest };
+            op.result = {
+              id: rule.id,
+              version: rule.version,
+              digest: rule.digest,
+              ...(reactivated ? { reactivated: true } : {}),
+            };
           },
         );
         // Admission sees the rule only after its registration committed.
         if (registered) {
           this.verificationRules.push(registered);
           this.runtimeRuleKeys.add(key);
+          this.retiredRules.delete(key);
         }
         return op;
       }
@@ -4784,6 +4814,7 @@ class LocalEngine implements Engine {
               task,
               passed ? 'completed' : repair ? 'queued' : 'blocked',
               passed ? null : 'verification_failed',
+              !!passed,
             );
             this.store.event(
               'verification.completed',
@@ -4800,6 +4831,9 @@ class LocalEngine implements Engine {
             current,
             flight.intent === 'stop' ? 'closed' : flight.intent === 'cancel' ? 'idle' : 'paused',
           );
+          // Only a turn whose intent the close set is the close's (SPEC-0029 D01, D02).
+          if (flight.intent === 'shutdown' && this.shutdownId)
+            task.pausedByClose = { operationId: this.shutdownId, wasRunning: true };
           this.saveTask(
             task,
             flight.intent === 'cancel' ? 'cancelled' : 'paused',
@@ -4946,6 +4980,7 @@ class LocalEngine implements Engine {
         this.store.saveOperation(op, digest({ instanceId: this.instanceId }));
         for (const task of this.store.all<TaskSnapshot>('tasks'))
           if (task.status === 'queued') {
+            task.pausedByClose = { operationId: this.shutdownId!, wasRunning: false };
             this.saveTask(task, 'paused', 'owner_shutdown');
             const session = this.session(task.sessionId);
             if (session.taskId === task.id) this.saveSession(session, 'paused');

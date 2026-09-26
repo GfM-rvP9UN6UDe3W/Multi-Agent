@@ -78,6 +78,7 @@ Each specification has a matching TDD record of observed failures before the cha
 | [SPEC-0026](specs/0026-claude-mcp-without-zod.md) | A Claude MCP server without Zod |
 | [SPEC-0027](specs/0027-read-only-access-and-host-corrections.md) | Read-only access, host labels and host-facing corrections (0.1.4) |
 | [SPEC-0028](specs/0028-host-queries-and-lifecycle.md) | Task queries, queue reasons, a pausing close, rule retirement and a non-blocking reserve (0.1.5) |
+| [SPEC-0029](specs/0029-usage-by-task-and-close-markers.md) | Usage by task, the time a task delivered, reactivating rules and tasks that a close paused |
 
 ## Claude and Codex baselines
 

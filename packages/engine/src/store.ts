@@ -635,6 +635,24 @@ export class Store {
       .all(...ids) as { id: string; data: string }[];
     return new Map(rows.map((row) => [row.id, JSON.parse(row.data) as TaskSnapshot]));
   }
+  /** Which of `ids` name a task (SPEC-0029 A01). */
+  existingTaskIds(ids: string[]): Set<string> {
+    const rows = this.db
+      .prepare(`SELECT id FROM tasks WHERE id IN (${ids.map(() => '?').join(',')})`)
+      .all(...ids) as { id: string }[];
+    return new Set(rows.map((row) => row.id));
+  }
+  /** The usage records of the tasks `ids`, in one statement through usage_task (SPEC-0029 A02). */
+  usageOfTasks(ids: string[]): UsageRecord[] {
+    if (!ids.length) return [];
+    return (
+      this.db
+        .prepare(
+          `SELECT data FROM usage WHERE json_extract(data,'$.taskId') IN (${ids.map(() => '?').join(',')}) ORDER BY rowid`,
+        )
+        .all(...ids) as { data: string }[]
+    ).map((row) => JSON.parse(row.data) as UsageRecord);
+  }
   /** A task's usage records in recording order, through usage_task (SPEC-0028 P04). */
   taskUsage(taskId: string): UsageRecord[] {
     return (
