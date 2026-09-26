@@ -403,3 +403,14 @@ Pull request #38 set the version to 0.1.7 on top of SPEC-0030 (#37). A local Cla
 - The owner approved the `npm` and `pypi` deployments. Both jobs passed, and the GitHub release "Orchvia 0.1.7" followed with the five npm archives, the wheel, the sdist, both manifests and `SHA256SUMS`; its notes are the changelog's 0.1.7 section.
 - P04 passed on the Ubuntu and macOS runners, and the whole run passed at its first attempt.
 - The npm registry lists 0.1.7 as the `latest` version of all five packages, with provenance attestations, and `@orchvia/adapter-claude@0.1.7` declares only the optional Claude SDK peer. PyPI lists `orchvia` 0.1.7 with its wheel and sdist; this time its JSON API and simple index already answered 0.1.7 when they were first checked.
+
+## P10: no document names the latest release (D-rel-3)
+
+On 2026-09-27 the owner chose D-rel-3: a release is recorded by the next release pull request, and no document names the latest release.
+
+- RED: `0021-P10` failed on `main` (`ed0716e`): `.claude/CLAUDE.md` and `docs/guide.md` each stated which version was published.
+- Changes:
+  - The guide and `.claude/CLAUDE.md` point at GitHub Releases instead.
+  - The readiness ledger, SPEC-0021's status and the release guide's step 2 describe the releases in words that do not change with each one.
+  - Step 1 of the release guide adds the record of the release before it: the Published line and the specification's row in `docs/status.md`, and a section here.
+- GREEN: `tests/contract/docs.test.ts` and `tests/contract/version.test.ts`, 15 of 15.
